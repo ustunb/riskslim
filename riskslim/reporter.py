@@ -39,14 +39,26 @@ class RiskScoreReporter:
         self.variable_names = dataset.variable_names
         self.outcome_name = dataset.outcome_name
 
-        self.coefs = np.insert(self.estimator.coef_.copy(), 0, 1)
-        self._variable_types = estimator._variable_types
+        if hasattr(estimator, "rho"):
+            self.rho = estimator.rho
+        else:
+            # For scikit-learn estimators
+            self.rho = np.insert(np.squeeze(self.estimator.coef_), 0, self.estimator.intercept_)
+            self.variable_names.insert(0, "(Intercept)")
 
+        if hasattr(estimator, "_variable_types"):
+            self._variable_types = estimator._variable_types
+        else:
+            # For scikit-learn estimators
+            self._variable_types = np.zeros(self.X.shape[1], dtype="str")
+            self._variable_types[:] = "C"
+            self._variable_types[np.all(self.X == np.require(self.X, dtype=np.int_), axis=0)] = "I"
+            self._variable_types[np.all(self.X == np.require(self.X, dtype=np.bool_), axis=0)] = "B"
 
         # Table
         if np.not_equal(estimator.coef_, 0.0).any():
             self.table_str = print_model(
-                self.coefs,
+                self.rho,
                 self.variable_names,
                 self.outcome_name,
                 show_omitted_variables=False,
@@ -57,9 +69,9 @@ class RiskScoreReporter:
 
         # Probability estimates
         if not hasattr(self.estimator, "calibrated_estimator") or self.estimator.calibrated_estimator is None:
-            self.proba = estimator.predict_proba(self.X[:, 1:])
+            self.proba = estimator.predict_proba(self.X)
         else:
-            self.proba = self.estimator.calibrated_estimator.predict_proba(self.X[:, 1:])[:, 1]
+            self.proba = self.estimator.calibrated_estimator.predict_proba(self.X)[:, 1]
 
     @staticmethod
     def from_model(estimator):
@@ -101,12 +113,12 @@ class RiskScoreReporter:
         """Prepare arrays for plotly table."""
 
         # Non-zero coefficients
-        inds = np.flatnonzero(self.coefs[1:])
+        inds = np.flatnonzero(self.rho[1:])
         if len(inds) == 0:
             raise ValueError('all zero coefficients')
 
         self.table["names"] = np.array(self.variable_names)[inds+1].tolist()
-        self.table["scores"] = self.coefs[inds+1]
+        self.table["scores"] = self.rho[inds+1]
 
         self.table["names"] = [str(i+1) + '.    ' + n
                              for i, n in enumerate(self.table["names"])]
@@ -175,9 +187,9 @@ class RiskScoreReporter:
             fig.update_layout(font_family="Source Code Pro")
             fig_str = fig.to_html(include_plotlyjs=False, full_html=False)
 
-            inds = np.flatnonzero(self.coefs)
+            inds = np.flatnonzero(self.rho)
             _vars = np.array(self.variable_names)[inds]
-            _rho = self.coefs[inds]
+            _rho = self.rho[inds]
 
             min_values = self.X.min(axis=0)[inds]
             max_values = self.X.max(axis=0)[inds]
