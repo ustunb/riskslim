@@ -36,7 +36,7 @@ class RiskScoreReporter:
         self.estimator = estimator
         self.X = dataset.X
         self.y = dataset.y
-        self.variable_names = dataset.variable_names
+        self.variable_names = list(dataset.variable_names)
         self.outcome_name = dataset.outcome_name
 
         if hasattr(estimator, "rho"):
@@ -44,7 +44,6 @@ class RiskScoreReporter:
         else:
             # For scikit-learn estimators
             self.rho = np.insert(np.squeeze(self.estimator.coef_), 0, self.estimator.intercept_)
-            self.variable_names.insert(0, "(Intercept)")
 
         if hasattr(estimator, "_variable_types"):
             self._variable_types = estimator._variable_types
@@ -69,9 +68,9 @@ class RiskScoreReporter:
 
         # Probability estimates
         if not hasattr(self.estimator, "calibrated_estimator") or self.estimator.calibrated_estimator is None:
-            self.proba = estimator.predict_proba(self.X)
+            self.proba = estimator.predict_proba(self.X[:, 1:])
         else:
-            self.proba = self.estimator.calibrated_estimator.predict_proba(self.X)[:, 1]
+            self.proba = self.estimator.calibrated_estimator.predict_proba(self.X[:, 1:])[:, 1]
 
     @staticmethod
     def from_model(estimator):
@@ -89,8 +88,8 @@ class RiskScoreReporter:
 
     def print_coefs(self):
         """Print coefficient info."""
-        if hasattr(self.estimator.coef_set):
-            print(self.estimator.coef_set)
+        if hasattr(self.estimator, "_coef_set"):
+            print(self.estimator._coef_set)
         else:
             print(self.estimator.coef_)
 

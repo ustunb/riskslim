@@ -120,7 +120,7 @@ def discrete_descent(rho, Z, C_0, rho_ub, rho_lb, get_L0_penalty, compute_loss_f
     d = len(rho)
 
     # convert solution to integer
-    rho = np.require(np.require(rho, dtype = np.int_), dtype = np.float_)
+    rho = np.require(np.require(rho, dtype = np.int_), dtype = np.float64)
 
     # convert descent dimensions to integer values
     if descent_dimensions is None:
@@ -286,5 +286,4 @@ def _compute_objvals_at_dim(Z, C_0, base_rho, base_scores, base_loss, dim_coefs,
 
     # return objective value at feasible coefficients
     return objval_at_coef_values
-
 

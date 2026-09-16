@@ -1,7 +1,7 @@
 import logging
 import sys
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import time
 import numpy as np
@@ -209,7 +209,7 @@ class Stats:
     """Data class for tracking statistics."""
     incumbent: np.ndarray
     upperbound: float = np.inf
-    bounds: Bounds = Bounds()
+    bounds: Bounds = field(default_factory=Bounds)
     lowerbound: float = 0.0
     relative_gap: float = np.inf
     nodes_processed: int = 0

@@ -24,7 +24,7 @@ class SolutionPool(object):
         elif isinstance(obj, dict):
 
             assert len(obj) == 2
-            objvals = np.copy(obj['objvals']).flatten().astype(dtype = np.float_)
+            objvals = np.copy(obj['objvals']).flatten().astype(dtype = np.float64)
             solutions = np.copy(obj['solutions'])
             n = objvals.size
             if solutions.ndim == 2:
@@ -98,7 +98,7 @@ class SolutionPool(object):
     def objvals(self, objvals):
         if hasattr(objvals, "__len__"):
             if len(objvals) > 0:
-                self._objvals = np.copy(list(objvals)).flatten().astype(dtype = np.float_)
+                self._objvals = np.copy(list(objvals)).flatten().astype(dtype = np.float64)
             elif len(objvals) == 0:
                 self._objvals = np.empty(0)
         else:
@@ -184,11 +184,11 @@ class SolutionPool(object):
 
     def map(self, mapfun, target = 'all'):
         assert callable(mapfun), 'map function must be callable'
-        if target is 'solutions':
+        if target == 'solutions':
             return list(map(mapfun, self.solutions))
-        elif target is 'objvals':
+        elif target == 'objvals':
             return list(map(mapfun, self.objvals))
-        elif target is 'all':
+        elif target == 'all':
             return list(map(mapfun, self.objvals, self.solutions))
         else:
             raise ValueError('target must be either solutions, objvals, or all')
@@ -249,7 +249,7 @@ class FastSolutionPool(object):
     def add(self, new_objvals, new_solutions):
         if isinstance(new_objvals, (np.ndarray, list)):
             n = len(new_objvals)
-            self._objvals = np.append(self._objvals, np.array(new_objvals).astype(dtype = np.float_).flatten())
+            self._objvals = np.append(self._objvals, np.array(new_objvals).astype(dtype = np.float64).flatten())
         else:
             n = 1
             self._objvals = np.append(self._objvals, float(new_objvals))

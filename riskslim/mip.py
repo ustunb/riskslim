@@ -172,8 +172,8 @@ def create_risk_slim(coef_set, settings):
 
     if include_auxillary_variable_for_L0_norm:
         L0_norm_auxillary_name = ['L0_norm']
-        L0_norm_auxillary_ub = [max_size]
-        L0_norm_auxillary_lb = [min_size]
+        L0_norm_auxillary_ub = [float(max_size)]
+        L0_norm_auxillary_lb = [float(min_size)]
         L0_norm_type = 'I'
 
         print_from_function("adding auxiliary variable for L0_norm s.t. %d <= L0_norm <= %d" % (min_size, max_size))

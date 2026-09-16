@@ -659,7 +659,7 @@ class StatsCallback(MIPInfoCallback):
 
             update_iterations = np.array(self.update_iterations)
             upperbounds = np.array(self.upperbounds)
-            gaps = (upperbounds - lowerbounds[update_iterations - 1]) / (np.finfo(np.float).eps + upperbounds)
+            gaps = (upperbounds - lowerbounds[update_iterations - 1]) / (np.finfo(float).eps + upperbounds)
 
             is_increasing = lambda x: (np.diff(x) >= 0).all()
             assert is_increasing(update_iterations)
@@ -699,7 +699,7 @@ class StatsCallback(MIPInfoCallback):
         stats = stats.fillna(method = 'ffill')
 
         # add relative gap
-        gap = (stats['upperbound'] - stats['lowerbound']) / (stats['upperbound'] + np.finfo(np.float).eps)
+        gap = (stats['upperbound'] - stats['lowerbound']) / (stats['upperbound'] + np.finfo(float).eps)
         stats['gap'] = np.fmin(MAX_GAP, gap)
 
         # add model ids
@@ -728,5 +728,4 @@ class StatsCallback(MIPInfoCallback):
                            'simplex_iterations']]
 
         return stats, incumbents
-
 

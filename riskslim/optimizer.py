@@ -72,8 +72,8 @@ class RiskSLIMOptimizer:
                 Variable types for coefficients.
                 Must be either "I" for integers or "C" for floats.
 
-            - \*\*settings : unpacked dict
-                Settings for warmstart (keys: \'init\_\'), cplex (keys: \'cplex\_\'), and lattice CPA.
+            - **settings : unpacked dict
+                Settings for warmstart (keys: 'init_*'), cplex (keys: 'cplex_*'), and lattice CPA.
                 Defaults are defined in ``defaults.DEFAULT_LCPA_SETTINGS``.
 
         """
@@ -132,7 +132,7 @@ class RiskSLIMOptimizer:
         # other handles
         self.get_L0_norm = lambda rho: np.count_nonzero(rho[self.L0_reg_ind])
         self.get_L0_penalty = lambda rho: np.sum(self.C_0_nnz * (rho[self.L0_reg_ind] != 0.0))
-        self.get_alpha = lambda rho: np.array(abs(rho[self.L0_reg_ind]) > 0.0, dtype=np.float_)
+        self.get_alpha = lambda rho: np.array(abs(rho[self.L0_reg_ind]) > 0.0, dtype=np.float64)
         self.get_L0_penalty_from_alpha = lambda alpha: np.sum(self.C_0_nnz * alpha)
         self.get_objval = lambda rho: self.compute_loss(rho) + np.sum(self.C_0_nnz * (rho[self.L0_reg_ind] != 0.0))
 

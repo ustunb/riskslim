@@ -88,8 +88,8 @@ class RiskSLIMClassifier(BaseEstimator, ClassifierMixin):
             Settings are combined with kwargs and then parsed. Parameters including in
             in kwargs will not be accessible or set after a clone.
         **kwargs
-            - \*\*settings : unpacked dict
-                Settings for warmstart (keys: \'init\_\'), cplex (keys: \'cplex\_\'), and lattice CPA.
+            - **settings : unpacked dict
+                Settings for warmstart (keys: 'init_*'), cplex (keys: 'cplex_*'), and lattice CPA.
                 Defaults are defined in ``defaults.DEFAULT_LCPA_SETTINGS``.
         """
         self.verbose = verbose
@@ -190,7 +190,7 @@ class RiskSLIMClassifier(BaseEstimator, ClassifierMixin):
         assert self.fitted
         if self.calibrated_estimator is None:
             # Normal case
-            y_pred = np.sign(proba = expit(self.decision_function(X)))
+            y_pred = np.sign(self.decision_function(X))
         elif isinstance(self.calibrated_estimator, CalibratedClassifierCV):
             # Calibrator
             y_pred = self.calibrated_estimator.predict(X)
@@ -284,19 +284,19 @@ class RiskSLIMClassifier(BaseEstimator, ClassifierMixin):
             raise ValueError("fit RiskSLIM before calling recalibrate")
 
         # fit recalibrate final model
-        clf = CalibratedClassifierCV(base_estimator = self, cv="prefit", method=method)
-        clf.fit(X = X, y = y, sample_weights = sample_weights)
+        clf = CalibratedClassifierCV(estimator = self, cv="prefit", method=method)
+        clf.fit(X = X, y = y, sample_weight = sample_weights)
         self.calibrated_estimator = clf
 
         if self.cv_results is not None:
             # Compute an ensemble (1 per fold) of calibrators / recalibrate cv models
             cv_calibrated_estimators = []
             for train, _ in self.cv.split(X, y.reshape(-1)):
-                clf = CalibratedClassifierCV(base_estimator = self, cv="prefit", method=method)
+                clf = CalibratedClassifierCV(estimator = self, cv="prefit", method=method)
                 if sample_weights is None:
                     clf.fit(X = X[train], y = y[train])
                 else:
-                    clf.fit(X = X[train], y = y[train], sample_weights = sample_weights[train])
+                    clf.fit(X = X[train], y = y[train], sample_weight = sample_weights[train])
                 cv_calibrated_estimators.append(clf)
 
             self.cv_calibrated_estimators = cv_calibrated_estimators
@@ -357,6 +357,6 @@ class RiskSLIMClassifier(BaseEstimator, ClassifierMixin):
                 cv=self.cv,
                 return_estimator=True,
                 scoring=scoring,
-                fit_params= fit_params,
+                params= fit_params,
                 n_jobs=n_jobs
                 )
