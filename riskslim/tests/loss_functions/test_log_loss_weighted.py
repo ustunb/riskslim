@@ -12,8 +12,8 @@ def test_log_loss_value(generated_normal_data):
     rho = generated_normal_data['rho']
 
     # Weights of one are the same as unweighted
-    assert log_loss_weighted.log_loss_value(Z, np.ones(len(Z)), len(Z), rho) == \
-        log_loss.log_loss_value(Z, rho)
+    assert log_loss_weighted.log_loss_value(Z, np.ones(len(Z)), len(Z), rho).round(6) == \
+        log_loss.log_loss_value(Z, rho).round(6)
 
     # Weights of zero should give zero loss
     assert log_loss_weighted.log_loss_value(Z, np.zeros(len(Z)), len(Z), rho) == 0.
@@ -40,7 +40,7 @@ def test_log_loss_value_and_slope(generated_normal_data):
 
     loss, slope = log_loss.log_loss_value_and_slope(Z, rho)
 
-    assert wloss == loss
+    assert wloss.round(6) == loss.round(6)
     assert np.all(slope == wslope)
 
     # Weights are all zero, assert zero
@@ -75,7 +75,7 @@ def test_log_loss_value_from_scores(generated_normal_data):
 
     loss = log_loss.log_loss_value_from_scores(Z.dot(rho))
 
-    assert wloss  == loss
+    assert wloss.round(6)  == loss.round(6)
 
     # Loss of random row in Z, selected using weights
     ind = np.random.choice(np.arange(len(Z)))

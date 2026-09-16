@@ -1,6 +1,5 @@
 """Test data objects."""
 
-import pytest
 import numpy as np
 import pandas as pd
 from riskslim.data import ClassificationDataset
@@ -14,19 +13,16 @@ def test_ClassificationDataset():
     n_variables = 100
 
     X = np.random.rand(n_obs, n_variables)
-    y = np.random.choice([1, -1], n_obs)
+    y = np.random.choice([1, -1], n_obs).reshape(-1, 1)
 
-    variable_names = ['var_' + str(i) for i in range(n_variables-1)]
+    variable_names = ['var_' + str(i) for i in range(n_variables)]
 
-    variable_names.insert(0, '(Intercept)')
-    X[:, 0] = 1
-
-    ds = ClassificationDataset(X, y, variable_names)
-    assert np.all(ds.X == X)
+    ds = ClassificationDataset(X, y, variable_names, outcome_name='outcome')
+    assert np.all(ds.X[:, 1:] == X)
     assert np.all(ds.y == y)
-    assert ds.variable_names == variable_names
+    assert ds.variable_names[1:] == variable_names
     assert ds.sample_weights is None
-    assert ds.outcome_name is None
+    assert ds.outcome_name == 'outcome'
     assert isinstance(ds.df, pd.DataFrame)
     assert isinstance(ds.__str__(), str)
     assert isinstance(ds.__repr__(), str)
@@ -37,11 +33,11 @@ def test_ClassificationDataset():
 def test_bounds():
 
     bounds = Bounds(objval_min=0., objval_max=1., loss_min=0., loss_max=1.,
-                    L0_min=1, L0_max=10)
+                    min_size=1, max_size=10)
 
     assert bounds.objval_min == bounds.loss_min == 0.
     assert bounds.objval_max == bounds.loss_max == 1.
-    assert bounds.L0_min == 1 and bounds.L0_max == 10
+    assert bounds.min_size == 1 and bounds.max_size == 10
 
     bounds = bounds.asdict()
     assert isinstance(bounds, dict)

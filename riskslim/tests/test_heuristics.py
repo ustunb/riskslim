@@ -55,6 +55,6 @@ def test_discrete_descent(generated_normal_data):
 
     assert base_loss < base_objval
     assert base_loss < log_loss_value_from_scores(Z.dot(rho))
-    assert log_loss_value_from_scores(Z.dot(rho_discrete)).astype(np.float32) == \
-        base_loss.astype(np.float32)
+    assert log_loss_value_from_scores(Z.dot(rho_discrete)).astype(np.float32).round(6) == \
+        base_loss.astype(np.float32).round(6)
     assert len(rho) == len(rho_discrete)

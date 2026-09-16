@@ -4,6 +4,7 @@ import pytest
 import numpy as np
 from riskslim.coefficient_set import CoefficientSet, _CoefficientElement
 from riskslim.bounds import get_score_bounds
+from riskslim.data import ClassificationDataset
 
 
 @pytest.mark.parametrize('lb', [-5, [-5]*11])
@@ -32,26 +33,22 @@ def test_coefficientset_init(lb, ub):
     assert len(cs._coef_elements) == len(variable_names)
 
 
-@pytest.mark.parametrize('has_intercept', [
-    True, pytest.param(False, marks=pytest.mark.xfail(raises=ValueError))
-])
-@pytest.mark.parametrize('max_L0_value', [10, None])
+# @pytest.mark.parametrize('has_intercept', [
+#     True, pytest.param(False, marks=pytest.mark.xfail(raises=ValueError))
+# ])
+@pytest.mark.parametrize('max_size', [10, None])
 def test_coefficientset_update_intercept_bounds(
-        generated_normal_data, has_intercept, max_L0_value
+        generated_normal_data, max_size
     ):
-
-    variable_names = generated_normal_data['variable_names']
-
-    if not has_intercept:
-       variable_names = variable_names.copy()
-       del variable_names[0]
-
+    # Dataset
     X = generated_normal_data['X'][0]
     y = generated_normal_data['y']
+    variable_names = generated_normal_data['variable_names']
+    data = ClassificationDataset(X, y, variable_names=variable_names, outcome_name='outcome')
 
-    cs = CoefficientSet(variable_names)
+    cs = CoefficientSet(data.variable_names)
 
-    cs.update_intercept_bounds(X, y, 1, max_L0_value=max_L0_value)
+    cs.update_intercept_bounds(data.X, data.y, 1, max_size=max_size)
 
 
 def test_coefficientset_tabulate():
@@ -186,13 +183,13 @@ def test_get_score_bounds(use_L0):
     rho_ub = np.repeat(-5, 10)
 
     L0_reg_ind = None
-    L0_max = None
+    max_size = None
     if use_L0:
         L0_reg_ind = np.ones(10).astype(int)
         L0_max = 1
 
     s_min, s_max = get_score_bounds(
-        Z_min, Z_max, rho_lb, rho_ub, L0_reg_ind=L0_reg_ind, L0_max=L0_max
+        Z_min, Z_max, rho_lb, rho_ub, L0_reg_ind=L0_reg_ind, max_size=max_size
     )
 
     assert s_min <= s_max

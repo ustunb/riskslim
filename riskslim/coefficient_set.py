@@ -45,7 +45,7 @@ class CoefficientSet:
         self._initialized = True
 
     ### methods ###
-    def update_intercept_bounds(self, X, y, max_offset, max_L0_value = None):
+    def update_intercept_bounds(self, X, y, max_offset, max_size = None):
         """
         uses data to set the lower and upper bound on the offset to a conservative value
         the value is guaranteed to avoid a loss in performance
@@ -63,7 +63,7 @@ class CoefficientSet:
         X
         y
         max_offset
-        max_L0_value
+        max_size
 
         Returns
         -------
@@ -85,14 +85,14 @@ class CoefficientSet:
         penalized_idx = [self._coef_elements[n].penalized for n in variable_names]
         trivial_max_size = len(penalized_idx)
 
-        if max_L0_value is None:
-            max_L0_value = trivial_max_size
+        if max_size is None:
+            max_size = trivial_max_size
 
-        if max_L0_value > 0:
-            max_L0_value = min(trivial_max_size, max_L0_value)
+        if max_size > 0:
+            max_size = min(trivial_max_size, max_size)
 
         # update intercept bounds
-        Z = X * y[:, None]
+        Z = X * y
         Z_min = np.min(Z, axis = 0)
         Z_max = np.max(Z, axis = 0)
 
@@ -104,15 +104,15 @@ class CoefficientSet:
                                         Z_max = Z_max[variable_idx],
                                         rho_lb = self.lb[variable_idx],
                                         rho_ub = self.ub[variable_idx],
-                                        L0_reg_ind = L0_reg_ind,
-                                        max_size = max_L0_value)
+                                        L0_reg_ind = L0_reg_ind[variable_idx],
+                                        max_size = max_size)
 
         # set intercept
         conservative_offset = max(abs(s_min), abs(s_max)) + 1
         if max_offset is None:
             max_offset = conservative_offset
         else:
-            max_offset = np.min(max_offset, conservative_offset)
+            max_offset = min(max_offset, conservative_offset)
         e.ub = max_offset
         e.lb = -max_offset
 

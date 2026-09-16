@@ -17,8 +17,8 @@ def test_chained_updates(update, loss, new_objvals, C_0_nnz):
         objval_max=10,
         loss_min=loss[0],
         loss_max=loss[1],
-        L0_min=1,
-        L0_max=10
+        min_size=1,
+        max_size=10
     )
 
     new_objval_at_feasible, new_objval_at_relaxation = new_objvals
@@ -33,5 +33,5 @@ def test_chained_updates(update, loss, new_objvals, C_0_nnz):
     assert new_bounds.loss_min >= bounds.loss_min
     assert new_bounds.loss_max <= bounds.loss_max
 
-    assert new_bounds.L0_min >= bounds.L0_min
-    assert new_bounds.L0_max <= bounds.L0_max
+    assert new_bounds.min_size >= bounds.min_size
+    assert new_bounds.max_size <= bounds.max_size

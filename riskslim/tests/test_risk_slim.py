@@ -4,6 +4,7 @@ import pprint
 import pytest
 
 import numpy as np
+import pandas as pd
 import riskslim
 
 # Dataset Strategy
@@ -17,7 +18,7 @@ import riskslim
 #
 # loss_computation  normal, fast, lookup
 # max_coefficient   0, 1, >1
-# max_L0_value      0, 1, >1
+# max_size      0, 1, >1
 # max_offset        0, 1, Inf
 # c0_value          eps, 1e-8, 0.01, C0_max
 # sample_weights    no, yes
@@ -93,48 +94,49 @@ default_settings = {
 
 
 @pytest.mark.parametrize('max_coefficient', [5])
-@pytest.mark.parametrize('max_L0_value', [0, 1, 5])
+@pytest.mark.parametrize('max_size', [0, 1, 5])
 @pytest.mark.parametrize('max_offset', [0, 50])
-def test_risk_slim(max_coefficient, max_L0_value, max_offset):
+def test_risk_slim(max_coefficient, max_size, max_offset):
 
     # Load data
-    data = riskslim.load_data_from_csv(
-        dataset_csv_file=data_csv_file, sample_weights_csv_file=sample_weights_csv_file
-    )
+    df = pd.read_csv(data_csv_file)
 
-    N, P = data['X'].shape
+    X = df.iloc[:, 1:].values
+    y = df.iloc[:, 0].values
+
+    N, P = X.shape
 
     # Offset value
     coef_set = riskslim.CoefficientSet(
-        variable_names=data['variable_names'],
+        variable_names=list(df.columns)[1:],
         lb=-max_coefficient, ub=max_coefficient
     )
 
     coef_set.update_intercept_bounds(
-        X = data['X'], y = data['y'], max_offset=max_offset, max_L0_value = max_L0_value
+        X = X, y = y, max_offset=max_offset, max_size = max_size
     )
 
     # Create constraint dictionary
-    trivial_L0_max = P - np.sum(coef_set.C_0j == 0)
-    max_L0_value = min(max_L0_value, trivial_L0_max)
+    trivial_max_size = P - np.sum(coef_set.C_0j == 0)
+    max_size = min(max_size, trivial_max_size)
 
     # Train model using lattice_cpa
-    rs = riskslim.RiskSLIM(
-        coef_set=coef_set, L0_min=0, L0_max=max_L0_value, settings=default_settings
+    rs = riskslim.RiskSLIMClassifier(
+        coef_set=coef_set, min_size=0, max_size=max_size, settings=default_settings
     )
-    rs.fit(data['X'], y = data['y'])
+    rs.fit(X, y)
 
     # Model info contains key results
     pprint.pprint(rs.solution_info)
 
 
-    assert rs.L0_min == rs.bounds.L0_min == 0
-    assert rs.L0_max == rs.bounds.L0_max == max_L0_value
+    assert rs.min_size == rs.bounds.min_size == 0
+    assert rs.max_size == rs.bounds.max_size == max_size
     assert rs.coef_set == coef_set
 
     # Each column of X has a rho and alpha (except for intercept,
     #   which doesn't have an alpha). There are 3 additional parameters:
     #   loss, objval, L0_norm
-    assert (len(data['X'][0]) * 2) - 1 + 3 == rs.mip_indices['n_variables']
+    assert (len(X[0]) * 2) - 1 + 3 == rs.mip_indices['n_variables']
 
     assert True

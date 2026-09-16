@@ -47,7 +47,7 @@ class ClassificationDataset:
         self._sample_weights = sample_weights
         assert self.__check_rep__()
 
-        self._Z = (self._X * self._y[:, None]).astype(np.float64)
+        self._Z = (self._X * self._y).astype(np.float64)
 
         # Infer variable types
         self._variable_types = np.zeros(self.X.shape[1], dtype="str")
@@ -170,13 +170,13 @@ class ClassificationDataset:
 
     def check_data(self):
         if np.all(self._variable_types[1:] == "B"):
-            warn("X is recommended to be all binary.")
+            warnings.warn("X is recommended to be all binary.")
 
         # Constant warning
         idx = np.flatnonzero(self.X == self.X[0], axis=0)
         constant_variables = [self.variable_names[j] for j in idx if j > 0]
         if len(constant_variables):
-            warn("Constant variable other than intercept found in X.")
+            warnings.warn("Constant variable other than intercept found in X.")
 
 
 

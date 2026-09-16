@@ -2,123 +2,132 @@
 
 import pytest
 import numpy as np
+from riskslim.optimizer import RiskSLIMOptimizer
+from riskslim.mip import create_risk_slim
 from riskslim.solution_pool import FastSolutionPool
 from riskslim.coefficient_set import CoefficientSet
 from riskslim.heuristics import discrete_descent, sequential_rounding
-from riskslim import RiskSLIM
-from riskslim.fit.callbacks import LossCallback, PolishAndRoundCallback
-
+from riskslim.callbacks import LossCallback, PolishAndRoundCallback
+from riskslim.defaults import DEFAULT_LCPA_SETTINGS
+from riskslim.data import ClassificationDataset
 
 @pytest.mark.parametrize('cut_queue', [None, FastSolutionPool(12)])
 @pytest.mark.parametrize('polish_queue', [None, FastSolutionPool(12)])
 def test_losscallback(generated_normal_data, cut_queue, polish_queue):
 
+    # Dataset
     X = generated_normal_data['X'][0]
     y = generated_normal_data['y']
-
     variable_names = generated_normal_data['variable_names']
+    data = ClassificationDataset(X, y, variable_names=variable_names, outcome_name='outcome')
 
-    coef_set = CoefficientSet(variable_names)
-    rs = RiskSLIM(coef_set=coef_set, L0_min=0, L0_max=10)
+    # Create mip
+    coef_set = CoefficientSet(data.variable_names)
 
-    # Set data attributes
-    rs.X = X
-    rs.y = y
-    rs.variable_names = variable_names
-    rs.outcome_name = None
-    rs.sample_weights = None
-    rs.init_fit()
-    rs.init_mip()
-    rs.warmstart()
+    mip_settings =mip_settings = {
+        "C_0": 1e-6,
+        "coef_set": coef_set,
+        "tight_formulation": DEFAULT_LCPA_SETTINGS["tight_formulation"],
+        "drop_variables":DEFAULT_LCPA_SETTINGS["drop_variables"],
+        "include_auxillary_variable_for_L0_norm": DEFAULT_LCPA_SETTINGS["include_auxillary_variable_for_L0_norm"],
+        "include_auxillary_variable_for_objval": DEFAULT_LCPA_SETTINGS["include_auxillary_variable_for_objval"],
+    }
 
-    # Initialize solution queues
-    rs.cut_queue = cut_queue
-    rs.polish_queue = polish_queue
+    mip, indices = create_risk_slim(coef_set=coef_set, settings=mip_settings)
 
+    # Create required attributes
+    opt = RiskSLIMOptimizer(data, coef_set, 5)
 
-    loss_cb = rs.mip.register_callback(LossCallback)
+    indices.update({"C_0_nnz": opt.C_0_nnz, "L0_reg_ind": opt.L0_reg_ind})
+
+    loss_cb = mip.register_callback(LossCallback)
 
     loss_cb.initialize(
-        indices=rs.mip_indices,
-        stats=rs.stats,
-        settings=rs.settings,
-        compute_loss_cut=rs.compute_loss_cut,
-        get_alpha=rs.get_alpha,
-        get_L0_penalty_from_alpha=rs.get_L0_penalty_from_alpha,
-        initial_cuts=rs.initial_cuts,
-        cut_queue=rs.cut_queue,
-        polish_queue=rs.polish_queue,
-        verbose=rs.verbose,
-    )
+        indices=indices,
+        stats=opt.stats,
+        settings=DEFAULT_LCPA_SETTINGS,
+        compute_loss_cut=opt.compute_loss_cut,
+        get_alpha=opt.get_alpha,
+        get_L0_penalty_from_alpha=opt.get_L0_penalty_from_alpha,
+        initial_cuts=None,
+        cut_queue=opt.cut_queue,
+        polish_queue=opt.polish_queue,
+        verbose=opt.verbose,
+     )
 
     assert loss_cb.cut_queue is not None
     assert loss_cb.polish_queue is not None
-    assert loss_cb.compute_loss_cut == rs.compute_loss_cut
-    assert loss_cb.get_alpha == rs.get_alpha
-    assert loss_cb.get_L0_penalty_from_alpha == rs.get_L0_penalty_from_alpha
+    assert loss_cb.compute_loss_cut == opt.compute_loss_cut
+    assert loss_cb.get_alpha ==  opt.get_alpha
+    assert loss_cb.get_L0_penalty_from_alpha ==  opt.get_L0_penalty_from_alpha
 
 
 def test_polish_and_round_callback(generated_normal_data):
 
+    # Dataset
     X = generated_normal_data['X'][0]
     y = generated_normal_data['y']
-
     variable_names = generated_normal_data['variable_names']
+    data = ClassificationDataset(X, y, variable_names=variable_names, outcome_name='outcome')
 
-    coef_set = CoefficientSet(variable_names)
-    rs = RiskSLIM(coef_set=coef_set, L0_min=0, L0_max=10)
+    # Create mip
+    coef_set = CoefficientSet(data.variable_names)
 
-    # Set data attributes
-    rs.X = X
-    rs.y = y
-    rs.variable_names = variable_names
-    rs.outcome_name = None
-    rs.sample_weights = None
-    rs.init_fit()
-    rs.init_mip()
-    rs.warmstart()
+    mip_settings =mip_settings = {
+        "C_0": 1e-6,
+        "coef_set": coef_set,
+        "tight_formulation": DEFAULT_LCPA_SETTINGS["tight_formulation"],
+        "drop_variables":DEFAULT_LCPA_SETTINGS["drop_variables"],
+        "include_auxillary_variable_for_L0_norm": DEFAULT_LCPA_SETTINGS["include_auxillary_variable_for_L0_norm"],
+        "include_auxillary_variable_for_objval": DEFAULT_LCPA_SETTINGS["include_auxillary_variable_for_objval"],
+    }
+
+    mip, indices = create_risk_slim(coef_set=coef_set, settings=mip_settings)
+
+    # Create required attributes
+    opt = RiskSLIMOptimizer(data, coef_set, 5)
 
     # Initialize solution queues
-    rs.cut_queue = FastSolutionPool(12)
-    rs.polish_queue = FastSolutionPool(12)
+    opt.cut_queue = FastSolutionPool(12)
+    opt.polish_queue = FastSolutionPool(12)
 
     polisher = lambda rho: discrete_descent(
         rho,
-        rs.Z,
-        rs.C_0,
-        rs.rho_max,
-        rs.rho_min,
-        rs.get_L0_penalty,
-        rs.compute_loss_from_scores,
+        opt.Z,
+        opt.C_0,
+        opt.rho_max,
+        opt.rho_min,
+        opt.get_L0_penalty,
+        opt.compute_loss_from_scores,
         True,
     )
 
     rounder = lambda rho, cutoff: sequential_rounding(
         rho,
-        rs.Z,
-        rs.C_0,
-        rs.compute_loss_from_scores_real,
-        rs.get_L0_penalty,
+        opt.Z,
+        opt.C_0,
+        opt.compute_loss_from_scores_real,
+        opt.get_L0_penalty,
         cutoff
     )
 
-    polish_cb = rs.mip.register_callback(PolishAndRoundCallback)
+    polish_cb = mip.register_callback(PolishAndRoundCallback)
 
     polish_cb.initialize(
-        indices=rs.mip_indices,
-        control=rs.stats,
-        settings=rs.settings,
-        cut_queue=rs.cut_queue,
-        polish_queue=rs.polish_queue,
-        get_objval=rs.get_objval,
-        get_L0_norm=rs.get_L0_norm,
-        is_feasible=rs.is_feasible,
+        indices=opt.mip_indices,
+        control=opt.stats,
+        settings=opt.settings,
+        cut_queue=opt.cut_queue,
+        polish_queue=opt.polish_queue,
+        get_objval=opt.get_objval,
+        get_L0_norm=opt.get_L0_norm,
+        is_feasible=opt.is_feasible,
         polishing_handle=polisher,
         rounding_handle=rounder,
     )
 
-    assert polish_cb.get_objval == rs.get_objval
-    assert polish_cb.get_L0_norm == rs.get_L0_norm
-    assert polish_cb.is_feasible == rs.is_feasible
+    assert polish_cb.get_objval == opt.get_objval
+    assert polish_cb.get_L0_norm == opt.get_L0_norm
+    assert polish_cb.is_feasible == opt.is_feasible
     assert polish_cb.polishing_handle == polisher
     assert polish_cb.rounding_handle == rounder

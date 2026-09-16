@@ -39,7 +39,7 @@ def generate_random_normal(n_rows, n_columns, n_targets, seed):
     # Simulate random int normals with varying overlap
     stdevs = iter(np.linspace(100, 50, n_targets))
 
-    for ind in range(1, n_columns):
+    for ind in range(0, n_columns):
 
         if ind in selected:
             # Class A
@@ -50,11 +50,8 @@ def generate_random_normal(n_rows, n_columns, n_targets, seed):
             # Noise
             X[:, ind] = np.random.normal(0, 100, n_rows).astype(np.int32)
 
-    # Intercept
-    X[:, 0]= 1.
-
     # Variale names
-    variable_names = ['var_' + str(i).zfill(2) for i in range(n_columns-1)]
+    variable_names = ['var_' + str(i).zfill(2) for i in range(n_columns)]
     variable_names.insert(0, '(Intercept)')
 
     # Data

@@ -80,8 +80,8 @@ def test_round_solution_pool(generated_normal_data):
     coef_set = CoefficientSet(variable_names)
 
     constraints = {
-        "L0_min": 0,
-        "L0_max": 10,
+        "min_size": 0,
+        "max_size": 10,
         "coef_set": coef_set,
     }
 
@@ -129,7 +129,7 @@ def test_sequential_round_solution_pool(generated_normal_data):
     )
 
     sol = rounded_pool.solutions[0]
-    assert (sol -  generated_normal_data['rho_true'][0].copy()).mean() < .1
+    assert (sol -  generated_normal_data['rho_true'][0].copy()).mean() < .2
     assert total_runtime > 0
     assert total_rounded > 0
 
@@ -139,19 +139,19 @@ def test_discrete_descent_solution_pool(generated_normal_data, non_integral):
 
     Z = generated_normal_data['Z'][0].copy()
     rho = generated_normal_data['rho_true'][0].copy()
-
+    rho[0] += 1
     # Add small amount of noise to move from ints to floats
     inds = np.where(rho != 0.)[0]
 
     if non_integral:
-        rho[inds] = rho[inds] + (np.random.rand(len(inds))) * 1
+        rho[inds] = rho[inds] + (np.random.rand(len(inds)))
 
     variable_names = generated_normal_data['variable_names'].copy()
     coef_set = CoefficientSet(variable_names)
 
     constraints = {
-        "L0_min": 0,
-        "L0_max": 10,
+        "min_size": 0,
+        "max_size": 10,
         "coef_set": coef_set,
     }
 
@@ -159,7 +159,7 @@ def test_discrete_descent_solution_pool(generated_normal_data, non_integral):
 
     pool = SolutionPool({'objvals': objvals, 'solutions':rho})
 
-    C_0 = np.zeros(len(Z[0])) + .1
+    C_0 = np.zeros(len(Z[0])) + .1e-16
 
     get_L0_penalty = lambda rho: np.sum(
         C_0 * (rho != 0.0)

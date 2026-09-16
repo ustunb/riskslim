@@ -71,6 +71,7 @@ def test_solution_pool_solution_table():
 
     assert table == pool.__repr__() == pool.__str__()
 
+
 def test_solution_pool_copy():
 
     solutions = np.zeros(10)
@@ -234,7 +235,6 @@ def test_solution_pool_remove_suboptimal():
     assert len(pool) == 0
 
 
-
 def test_fast_solution_pool():
 
     solution_pool = FastSolutionPool(1)
@@ -243,6 +243,7 @@ def test_fast_solution_pool():
     assert len(solution_pool.solutions) == 0
 
     assert solution_pool.table() == solution_pool.__repr__() == solution_pool.__str__()
+
 
 def test_fast_solution_pool_add():
     solution_pool = FastSolutionPool(2)

@@ -55,9 +55,8 @@ class RiskSLIMClassifier(BaseEstimator, ClassifierMixin):
     calibrated_estimators_ : list of sklearn.calibration.CalibratedClassifierCV
         Calibrators trained per fold. Must use the fitcv method.
     """
-    def __init__(self, max_coef = 5, max_size = None, coef_set = None,
-                 variable_names = None, outcome_name = None, c0_value = 1e-6,
-                 verbose = True,  **kwargs):
+    def __init__(self, max_coef = 5, max_size = None, variable_names = None,
+                 outcome_name = None, verbose = True,  **kwargs):
         """
         Parameters
         ----------
@@ -109,7 +108,7 @@ class RiskSLIMClassifier(BaseEstimator, ClassifierMixin):
         # internals
         self._data = None
         self._variable_names = variable_names
-        self._outcome_name = outcome_name
+        self._outcome_name = outcome_name if outcome_name is not None else "outcome"
         self._coef_set = None
 
         # todo: check that this
@@ -275,10 +274,8 @@ class RiskSLIMClassifier(BaseEstimator, ClassifierMixin):
         method : {"sigmoid", "isotonic"}
             Linear classifier used to recalibrate scores.
         """
-        # todo: call check_data <- rh: check_data has to be called in .fit() prior to this call
+        # todo: call check_data
         # todo: add support for kwargs (method = 'sigmoid') should be
-        #     <- rh: i don't think kwargs should be user facing; it leads to issues like unclear signatures
-        #            or passing bad args in (e.g. methdo="sigmoid" typo wouldn't raise an error)
 
         if not self.fitted:
             raise ValueError("fit RiskSLIM before calling recalibrate")

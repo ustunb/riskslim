@@ -8,23 +8,23 @@ from cplex import Cplex
 from riskslim.coefficient_set import CoefficientSet
 from riskslim.utils import Stats
 from riskslim.bounds import Bounds
-from riskslim.fit import RiskSLIM
+from riskslim.classifier import RiskSLIMClassifier
 
 
 @pytest.mark.parametrize('init_coef', [True, False])
-def test_RiskSLIM_init(init_coef):
-    """Test RiskSLIM initialization."""
+def test_RiskSLIMClassifier_init(init_coef):
+    """Test RiskSLIMClassifier initialization."""
     variable_names = ['variable_' + str(i) for i in range(10)]
 
     coef_set = CoefficientSet(variable_names) if init_coef else None
 
-    L0_min=0
-    L0_max=10
+    min_size=0
+    max_size=10
 
-    rs = RiskSLIM(coef_set=coef_set, L0_min=L0_min, L0_max=L0_max)
+    rs = RiskSLIMClassifier(coef_set=coef_set, min_size=min_size, max_size=max_size)
 
-    assert rs.L0_min == L0_min
-    assert rs.L0_max == L0_max
+    assert rs.min_size == min_size
+    assert rs.max_size == max_size
     assert rs.X is None
     assert rs.y is None
 
@@ -46,14 +46,14 @@ def test_RiskSLIM_init(init_coef):
 
 
 @pytest.mark.parametrize('use_coef_set', [True, False])
-def test_RiskSLIM_init_fit(generated_normal_data, use_coef_set):
-    """Test RiskSLIM fit initalization."""
+def test_RiskSLIMClassifier_init_fit(generated_normal_data, use_coef_set):
+    """Test RiskSLIMClassifier fit initalization."""
     X = generated_normal_data['X'][0]
     y = generated_normal_data['y']
     variable_names = generated_normal_data['variable_names']
 
     coef_set = CoefficientSet(variable_names) if use_coef_set else None
-    rs = RiskSLIM(coef_set=coef_set, L0_min=0, L0_max=10)
+    rs = RiskSLIMClassifier(coef_set=coef_set, min_size=0, max_size=10)
 
     # Load data into attribute
     #   this is normally done in .fit
@@ -80,9 +80,8 @@ def test_RiskSLIM_init_fit(generated_normal_data, use_coef_set):
     assert (rs.Z.shape == rs.X.shape)
 
 
-
 @pytest.mark.parametrize('loss_computation', ['fast', 'normal', 'weighted', 'lookup'])
-def test_RiskSLIM_init_loss(generated_normal_data, loss_computation):
+def test_RiskSLIMClassifier_init_loss(generated_normal_data, loss_computation):
     """Test setting up loss functions."""
 
     X = generated_normal_data['X'][0]
@@ -98,7 +97,7 @@ def test_RiskSLIM_init_loss(generated_normal_data, loss_computation):
         coef_set = None
 
     settings = {'loss_computation': loss_computation}
-    rs = RiskSLIM(coef_set=coef_set, L0_min=0, L0_max=10, settings=settings)
+    rs = RiskSLIMClassifier(coef_set=coef_set, min_size=0, max_size=10, settings=settings)
 
     # Load data into attribute
     #   this is normally done in .fit
@@ -135,8 +134,8 @@ def test_RiskSLIM_init_loss(generated_normal_data, loss_computation):
 
 @pytest.mark.parametrize('use_rounding', [True, False])
 @pytest.mark.parametrize('polishing_after', [True, False])
-def test_RiskSLIM_warmstart(generated_normal_data, use_rounding, polishing_after):
-    """Test RiskSLIM fitting."""
+def test_RiskSLIMClassifier_warmstart(generated_normal_data, use_rounding, polishing_after):
+    """Test RiskSLIMClassifier fitting."""
     X = generated_normal_data['X']
     y = generated_normal_data['y']
     variable_names = generated_normal_data['variable_names']
@@ -150,7 +149,7 @@ def test_RiskSLIM_warmstart(generated_normal_data, use_rounding, polishing_after
 
     coef_set = CoefficientSet(variable_names=variable_names, lb=lb, ub=ub)
 
-    rs = RiskSLIM(coef_set=coef_set, L0_min=0, L0_max=5)
+    rs = RiskSLIMClassifier(coef_set=coef_set, min_size=0, max_size=5)
 
     # Load data into attribute
     #   this is normally done in .fit
@@ -182,8 +181,8 @@ def test_RiskSLIM_warmstart(generated_normal_data, use_rounding, polishing_after
 
 
 @pytest.mark.parametrize('polish_flag', [True, False])
-def test_RiskSLIM_fit(generated_normal_data, polish_flag):
-    """Test fitting RiskSLIM."""
+def test_RiskSLIMClassifier_fit(generated_normal_data, polish_flag):
+    """Test fitting RiskSLIMClassifier."""
     X = generated_normal_data['X'].copy()
     y = generated_normal_data['y'].copy()
     variable_names = generated_normal_data['variable_names'].copy()
@@ -195,8 +194,6 @@ def test_RiskSLIM_fit(generated_normal_data, polish_flag):
 
     # Settings
     settings = {
-        # Problem Parameters
-        'c0_value': c0_value,
         # LCPA Settings
         'max_runtime': 2,
         'max_tolerance': np.finfo('float').eps,
@@ -216,39 +213,19 @@ def test_RiskSLIM_fit(generated_normal_data, polish_flag):
         'cplex_mipemphasis': 0,
     }
 
-    solutions = np.zeros((n_iters, n_columns), dtype=np.int8)
+    solutions = np.zeros((n_iters, n_columns+1), dtype=np.int8)
 
     for ind in range(n_iters):
 
-        # Constraints
-        ub = np.array([5.] * len(variable_names))
-        lb = np.array([-5.] * len(variable_names))
-
-        # Fix intercept at zero
-        lb[0] = 0.
-        ub[0] = 0.
-
         # Initalize
-        rs = RiskSLIM(L0_min=0, L0_max=10, rho_min=lb, rho_max=ub, c0_value=c0_value,
-                      settings=settings)
-
-        if ind == 0:
-            # Ensure printable
-            rs.print_model()
-            with pytest.raises(ValueError):
-                rs.print_solution()
+        rs = RiskSLIMClassifier(max_size=10, max_coef=5, settings=settings, variable_names=variable_names)
 
         # Fit
-        rs.fit(X[ind], y, variable_names=variable_names)
+        rs.fit(X[ind], y)
         assert rs.fitted
 
-        if ind == 0:
-            # Ensure printable
-            rs.print_model()
-            rs.print_solution()
-
         # Get solutions
-        solutions[ind] = rs.solution_info['solution']
+        solutions[ind] = np.insert(rs.coef_, 0, rs.intercept_)
 
     # Test accuracy between computed and persistent solution
     if polish_flag:
