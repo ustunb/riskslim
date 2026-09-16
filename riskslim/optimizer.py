@@ -6,7 +6,7 @@ import cplex
 from cplex.exceptions import CplexError
 from riskslim.loss_computation import get_loss_functions
 from riskslim.utils import Stats, validate_settings, print_log
-from riskslim.defaults import DEFAULT_LCPA_SETTINGS
+from riskslim.defaults import DEFAULT_INITIALIZATION_SETTINGS, DEFAULT_LCPA_SETTINGS
 from riskslim.mip import add_mip_starts, create_risk_slim, set_cplex_mip_parameters
 from riskslim.solution_pool import SolutionPool, FastSolutionPool
 from riskslim.heuristics import discrete_descent, sequential_rounding
@@ -109,6 +109,8 @@ class RiskSLIMOptimizer:
             'cplex':{k[6:]: settings[k] for k in settings if k.startswith("cplex_")},
             'lcpa':{k: settings[k] for k in settings if settings if not k.startswith(("init_", "cplex_"))}
             }
+        self.warmstart_settings = validate_settings(parsed['warmstart'], DEFAULT_INITIALIZATION_SETTINGS)
+        self.cplex_settings = parsed['cplex']
         mip_settings = {
             "C_0": self.c0_value,
             "coef_set": self.coef_set,
@@ -163,7 +165,7 @@ class RiskSLIMOptimizer:
         # warmstart procedure
         initial_cuts = None
         if settings["initialization_flag"] :
-            initial_cuts, pool, bounds = self.warmstart(mip_settings, **parsed['warmstart'])
+            initial_cuts, pool, bounds = self.warmstart(self.pool, self.bounds, mip_settings, **parsed['warmstart'])
             self.pool.append(pool)
             self.bounds = bounds
 
@@ -172,6 +174,7 @@ class RiskSLIMOptimizer:
         mip_settings.update(bounds.asdict())
         cpx, indices = create_risk_slim(coef_set=self.coef_set, settings= mip_settings)
         indices.update({"C_0_nnz": self.C_0_nnz, "L0_reg_ind": self.L0_reg_ind})
+        self.mip_indices = indices
 
         # add constraints
         # todo: remove this and find way to access cpx from RiskSLIM directly
@@ -195,6 +198,7 @@ class RiskSLIMOptimizer:
                            )
 
         # add heuristic callback if rounding or polishing
+        heuristic_cb = None
         if settings["round_flag"] or settings["polish_flag"]:
             heuristic_cb = cpx.register_callback(PolishAndRoundCallback)
             active_set_flag = self.max_size <= self.n_variables
@@ -244,12 +248,10 @@ class RiskSLIMOptimizer:
 
         # finalize
         self.mip = set_cplex_mip_parameters(cpx, parsed['cplex'], display_cplex_progress=settings["display_cplex_progress"])
-        self.mip_indices = indices
         self.mip_settings = mip_settings
         self.loss_callback = loss_cb
         self.heuristic_cb = heuristic_cb
         self.settings = settings
-        self.cplex_settings = parsed['cplex']
 
     def warmstart(self, pool, bounds, mip_settings, **kwargs):
         """Run an initialization routine to speed up RiskSLIM.
