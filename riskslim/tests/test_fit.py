@@ -80,7 +80,7 @@ def test_RiskSLIMClassifier_init_fit(generated_normal_data, use_coef_set):
     assert (rs.Z.shape == rs.X.shape)
 
 
-@pytest.mark.parametrize('loss_computation', ['fast', 'normal', 'weighted', 'lookup'])
+@pytest.mark.parametrize('loss_computation', ['normal'])
 def test_RiskSLIMClassifier_init_loss(generated_normal_data, loss_computation):
     """Test setting up loss functions."""
 
@@ -90,11 +90,7 @@ def test_RiskSLIMClassifier_init_loss(generated_normal_data, loss_computation):
     variable_names = generated_normal_data['variable_names']
 
     # Initalize
-    if loss_computation == 'lookup':
-        coef_set = CoefficientSet(variable_names, lb=-10, ub=10)
-        coef_set.update_intercept_bounds(X=X, y=y, max_offset=0)
-    else:
-        coef_set = None
+    coef_set = None
 
     settings = {'loss_computation': loss_computation}
     rs = RiskSLIMClassifier(coef_set=coef_set, min_size=0, max_size=10, settings=settings)
@@ -107,9 +103,6 @@ def test_RiskSLIMClassifier_init_loss(generated_normal_data, loss_computation):
     rs.outcome_name = None
     rs.sample_weights = None
 
-    if loss_computation == 'weighted':
-        rs.sample_weights = np.random.rand(len(X))
-
     rs.init_fit()
     rs.init_mip()
 
@@ -118,12 +111,6 @@ def test_RiskSLIMClassifier_init_loss(generated_normal_data, loss_computation):
 
     Z = np.require(rs.Z, requirements = ['F'])
     rho = np.require(rho, requirements = ['F'])
-
-    if loss_computation != 'lookup':
-        pass
-    else:
-        assert rs.compute_loss(rho) == rs.compute_loss_real(rho)
-        assert rs.compute_loss_from_scores(Z.dot(rho)) == rs.compute_loss_from_scores_real(Z.dot(rho))
 
     loss, slope = rs.compute_loss_cut(rho)
     loss_real, slope_real = rs.compute_loss_cut_real(rho)
@@ -198,7 +185,6 @@ def test_RiskSLIMClassifier_fit(generated_normal_data, polish_flag):
         'max_runtime': 2,
         'max_tolerance': np.finfo('float').eps,
         'display_cplex_progress': False,
-        'loss_computation': 'fast',
         'round_flag': False,
         'polish_flag': polish_flag,
         'chained_updates_flag': True,

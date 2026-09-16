@@ -35,9 +35,6 @@ examples/ex_00_tests.py
 !examples/data/breastcancer_weights.csv
 riskslim/tests/test_common.py
 riskslim/tests/test_template.py
-riskslim/loss_functions/build/
-riskslim/loss_functions/*.so
-riskslim/loss_functions/*.c
 
 # Distribution / packaging
 .Python
