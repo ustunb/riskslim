@@ -184,11 +184,11 @@ class SolutionPool(object):
 
     def map(self, mapfun, target = 'all'):
         assert callable(mapfun), 'map function must be callable'
-        if target is 'solutions':
+        if target == 'solutions':
             return list(map(mapfun, self.solutions))
-        elif target is 'objvals':
+        elif target == 'objvals':
             return list(map(mapfun, self.objvals))
-        elif target is 'all':
+        elif target == 'all':
             return list(map(mapfun, self.objvals, self.solutions))
         else:
             raise ValueError('target must be either solutions, objvals, or all')

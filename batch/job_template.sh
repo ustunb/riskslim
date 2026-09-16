@@ -4,15 +4,15 @@
 #
 # To test the script, run the following command from risk-slim directory:
 #
-# `bash batch/job_template.sh`
+# bash batch/job_template.sh
 #
 # To see a detailed list of all arguments that can be passed into risk_slim, use:
 #
-# `python "batch/train_risk_slim.py --help`
+# python batch/train_risk_slim.py --help
 #
 #  or
 #
-# `python2 "batch/train_risk_slim.py --help`
+# python3 batch/train_risk_slim.py --help
 #
 # Recommended Directory Structure for Batch Computing:
 #
@@ -29,6 +29,7 @@
 # Advantaged settings are be configured through a JSON file. See: `batch/settings_template.json` for a template
 # The values can be changed directly using a text editor, or programmatically using a tool such as
 # `jq` https://stedolan.github.io/jq/
+
 
 #directories
 repo_dir=$(pwd)
@@ -88,4 +89,3 @@ python3 "${batch_dir}/train_risk_slim.py"  \
     --log "${log_file}"
 
 exit
-W

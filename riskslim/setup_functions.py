@@ -95,7 +95,7 @@ def setup_loss_functions(data, coef_set, L0_max = None, loss_computation = None,
                                         L0_max = L0_max)
 
 
-        Z = np.require(Z, requirements=['F'], dtype = float)
+        Z = np.require(Z, requirements=['F'], dtype = np.float_)
         print_log("%d rows in lookup table" % (s_max - s_min + 1))
 
         loss_value_tbl, prob_value_tbl, tbl_offset = get_loss_value_and_prob_tables(s_min, s_max)
