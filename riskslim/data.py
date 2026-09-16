@@ -26,6 +26,7 @@ class ClassificationDataset:
         Sample weights with shape (n_features, 1). Must all be positive.
     """
     def __init__(self, X, y, variable_names = None, outcome_name=None, sample_weights=None):
+        y = np.ravel(y)
 
         # todo copy
         # convert y \in 0,1 to y \in -1,1 in this function?
@@ -46,6 +47,7 @@ class ClassificationDataset:
 
         self._sample_weights = sample_weights
         assert self.__check_rep__()
+        self._y = np.where(self._y == 0, -1, self._y)
 
         self._Z = (self._X * self._y[:, None]).astype(np.float64)
 
@@ -169,14 +171,14 @@ class ClassificationDataset:
                 return str(self.df)
 
     def check_data(self):
-        if np.all(self._variable_types[1:] == "B"):
-            warn("X is recommended to be all binary.")
+        if not np.all(self._variable_types[1:] == "B"):
+            warnings.warn("X is recommended to be all binary.")
 
         # Constant warning
-        idx = np.flatnonzero(self.X == self.X[0], axis=0)
+        idx = np.flatnonzero(np.all(self.X == self.X[0], axis=0))
         constant_variables = [self.variable_names[j] for j in idx if j > 0]
         if len(constant_variables):
-            warn("Constant variable other than intercept found in X.")
+            warnings.warn("Constant variable other than intercept found in X.")
 
 
 
@@ -197,4 +199,3 @@ def default_variable_names(n_variables, prefix = 'x'):
     namer = prefix + '{' + fmt + '}'
     names = [namer.format(j) for j in range(n_variables)]
     return names
-

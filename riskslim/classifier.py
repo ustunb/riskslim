@@ -105,12 +105,13 @@ class RiskSLIMClassifier(BaseEstimator, ClassifierMixin):
         # todo: check that these are the right type / shape
         self.max_size = max_size # positive integer-valued
         self.max_coef = max_coef # positive integer-valued
+        self.c0_value = c0_value
 
         # internals
         self._data = None
         self._variable_names = variable_names
         self._outcome_name = outcome_name
-        self._coef_set = None
+        self._coef_set = coef_set
 
         # todo: check that this
         self._settings = kwargs
@@ -152,12 +153,14 @@ class RiskSLIMClassifier(BaseEstimator, ClassifierMixin):
             self._coef_set = CoefficientSet(self._data.variable_names, lb = -self.max_coef, ub = self.max_coef)
         self.max_coef = self._coef_set.max_coef
 
+        settings = {**self._settings, **kwargs}
+
         # Initialize optimizer
         if self.optimizer is None:
-            self.optimizer = RiskSLIMOptimizer(data = self._data, coef_set = self._coef_set, max_size = self.max_size, verbose=self.verbose, **kwargs)
+            self.optimizer = RiskSLIMOptimizer(data = self._data, coef_set = self._coef_set, max_size = self.max_size, c0_value = self.c0_value, verbose=self.verbose, **settings)
 
         # fit
-        self.optimizer.optimize(self._data.X, self._data.y, self._data.sample_weights, **kwargs)
+        self.optimizer.optimize(self._data.X, self._data.y, self._data.sample_weights)
         self.fitted = True
 
         # Attributes
@@ -170,7 +173,7 @@ class RiskSLIMClassifier(BaseEstimator, ClassifierMixin):
         # Inialize a reporter
         self.reporter = RiskScoreReporter.from_model(estimator=self)
 
-        return self.__repr__()
+        return self
 
 
     def predict(self, X):
@@ -194,6 +197,9 @@ class RiskSLIMClassifier(BaseEstimator, ClassifierMixin):
         elif isinstance(self.calibrated_estimator, CalibratedClassifierCV):
             # Calibrator
             y_pred = self.calibrated_estimator.predict(X)
+
+        if np.array_equal(self.classes_, np.array([0, 1])):
+            y_pred = np.where(y_pred == -1, 0, y_pred)
 
         return y_pred
 
