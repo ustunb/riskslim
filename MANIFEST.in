@@ -1,1 +1,17 @@
-include requirements.txt
+include README.rst
+include LICENSE
+include pyproject.toml
+include MANIFEST.in
+include uv.lock
+include riskslim_todo.md
+include examples/README.rst
+recursive-include examples *.py
+recursive-include tests *.py
+recursive-include riskslim *.py *.html
+
+prune scripts
+prune data
+prune docs
+prune .github
+prune .claude
+global-exclude *.pyc __pycache__ .DS_Store

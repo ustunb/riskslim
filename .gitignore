@@ -14,15 +14,14 @@ doc/datasets/generated/
 
 # sklearn template
 doc/
-*.yml
 .nojekyll
 ci_scripts/
 skltemplate/
 
 # riskslim directories
-batch/data/
-batch/results/
-batch/log/
+scripts/data/
+scripts/results/
+scripts/log/
 dev/
 cluster/
 
@@ -33,13 +32,12 @@ examples/data/*weights.csv
 examples/ex_00_tests.py
 !examples/data/breastcancer_cvindices.csv
 !examples/data/breastcancer_weights.csv
-riskslim/tests/test_common.py
-riskslim/tests/test_template.py
 
 # Distribution / packaging
 .Python
 env/
 venv/
+.venv/
 build/
 develop-eggs/
 dist/
@@ -55,6 +53,9 @@ var/
 .installed.cfg
 *.egg
 .idea
+.claude/
+AGENTS.md
+riskslim_report.html
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

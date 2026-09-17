@@ -50,12 +50,12 @@ include-package-data = false
 riskslim = ["template.html"]
 
 [tool.pytest.ini_options]
-testpaths = ["riskslim/tests"]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+addopts = "--import-mode=importlib"
 markers = [
   "slow: correctness tests that take more than a few seconds",
-  "cplex: requires the CPLEX solver",
 ]
-addopts = "-m 'not slow and not cplex'"
 
 [tool.ruff]
 line-length = 100
@@ -64,7 +64,7 @@ exclude = ["scripts", "data", "docs"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "D"]
 ignore = ["D104"]
-per-file-ignores = { "riskslim/tests/**/*.py" = ["D"], "examples/**/*.py" = ["D"] }
+per-file-ignores = { "tests/**/*.py" = ["D"], "examples/**/*.py" = ["D"] }
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

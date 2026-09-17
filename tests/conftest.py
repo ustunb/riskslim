@@ -4,7 +4,7 @@ import pytest
 
 import numpy as np
 
-from .utils import generate_random_normal
+from utils import generate_random_normal
 
 
 @pytest.fixture(scope='module')

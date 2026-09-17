@@ -1,5 +1,5 @@
-import os
 import pprint
+from pathlib import Path
 
 import pytest
 
@@ -30,8 +30,8 @@ import riskslim
 
 # data
 data_name = "breastcancer"  # name of the data
-data_dir = os.getcwd() + '/examples/data/'  # directory where datasets are stored
-data_csv_file = data_dir + data_name + '_data.csv'  # csv file for the data
+data_dir = Path(__file__).parents[1] / 'data'  # directory where datasets are stored
+data_csv_file = data_dir / (data_name + '_data.csv')  # csv file for the data
 sample_weights_csv_file = None  # csv file of sample weights for the data (optional)
 
 default_settings = {
