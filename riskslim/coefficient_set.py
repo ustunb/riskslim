@@ -97,7 +97,7 @@ class CoefficientSet:
         Z_max = np.max(Z, axis = 0)
 
         # get regularized indices
-        L0_reg_ind = self.penalized_indices()
+        L0_reg_ind = self.penalized_indices()[variable_idx]
 
         # get smallest / largest score
         s_min, s_max = get_score_bounds(Z_min = Z_min[variable_idx],
@@ -112,7 +112,7 @@ class CoefficientSet:
         if max_offset is None:
             max_offset = conservative_offset
         else:
-            max_offset = np.min(max_offset, conservative_offset)
+            max_offset = min(max_offset, conservative_offset)
         e.ub = max_offset
         e.lb = -max_offset
 
