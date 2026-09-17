@@ -5,7 +5,6 @@ import numpy as np
 
 from sklearn.calibration import calibration_curve
 from sklearn.metrics import roc_curve
-from sklearn.calibration import CalibratedClassifierCV
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots

@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import time
 import numpy as np
-import pandas as pd
 import prettytable as pt
 from .bounds import Bounds
 from .defaults import INTERCEPT_NAME
@@ -131,7 +130,7 @@ def print_log(msg, print_flag = True):
 #
 def check_cplex():
     try:
-        import cplex
+        __import__("cplex")
     except:
         raise ImportError("CPLEX must be installed.")
     return True

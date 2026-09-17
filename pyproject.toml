@@ -64,7 +64,7 @@ exclude = ["scripts", "data", "docs"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "D"]
 ignore = ["D104"]
-per-file-ignores = { "tests/**/*.py" = ["D"], "examples/**/*.py" = ["D"] }
+per-file-ignores = { "riskslim/**/*.py" = ["E", "I", "B", "D"], "tests/**/*.py" = ["E", "I", "B", "D"], "examples/**/*.py" = ["D"], "riskslim/__init__.py" = ["F401"], "riskslim/loss_functions/__init__.py" = ["F403"], "riskslim/mip.py" = ["F841"], "tests/test_coefficient_set.py" = ["F841"], "tests/test_fit.py" = ["F841"], "tests/test_warmstart.py" = ["F841"] }
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

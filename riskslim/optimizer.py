@@ -2,7 +2,6 @@
 
 import numpy as np
 
-import cplex
 from cplex.exceptions import CplexError
 from riskslim.loss_computation import get_loss_functions
 from riskslim.utils import Stats, validate_settings, print_log

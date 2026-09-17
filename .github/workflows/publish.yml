@@ -1,0 +1,53 @@
+# Publish via PyPI Trusted Publishing when a release tag is created.
+name: publish
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv build
+      - run: uvx twine check dist/*
+      - name: Tag must match pyproject version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VER=$(uv run --isolated --no-project --with tomli python -c \
+            "import tomli;print(tomli.load(open('pyproject.toml','rb'))['project']['version'])")
+          [ "$TAG" = "$VER" ] || { echo "tag $TAG != version $VER"; exit 1; }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/riskslim
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

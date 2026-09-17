@@ -3,7 +3,7 @@ import warnings
 
 import numpy as np
 import pandas as pd
-from riskslim.defaults import INTERCEPT_NAME, OUTCOME_NAME
+from riskslim.defaults import INTERCEPT_NAME
 from riskslim.utils import is_integer
 
 

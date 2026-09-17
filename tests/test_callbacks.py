@@ -1,7 +1,6 @@
 """Test callback classes."""
 
 import pytest
-import numpy as np
 from riskslim.optimizer import RiskSLIMOptimizer
 from riskslim.mip import create_risk_slim
 from riskslim.solution_pool import FastSolutionPool

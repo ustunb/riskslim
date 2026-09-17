@@ -1,8 +1,6 @@
 """Test utility functions."""
 
-import os
 import tempfile
-from itertools import cycle
 import logging
 import pytest
 import numpy as np
