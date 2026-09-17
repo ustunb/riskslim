@@ -29,12 +29,13 @@ def generated_normal_data():
         rho_true[i] = _rho_true
 
     # Labels
-    y = _data['y']
+    y = np.ravel(_data['y'])
 
     rho = np.ones(n_columns)
 
-    Z = X * y
+    Z = X * y[:, None]
 
     names = ['var_' + str(i).zfill(2) for i in range(n_columns)]
 
-    yield {'X':X, 'y':y, 'Z':Z, 'rho':rho, 'rho_true':rho_true, 'variable_names':names}
+    yield {'X':X, 'y':y, 'Z':Z, 'rho':rho, 'rho_true':rho_true, 'variable_names':names,
+           'outcome_name': _data['outcome_name']}

@@ -52,7 +52,6 @@ def generate_random_normal(n_rows, n_columns, n_targets, seed):
 
     # Variale names
     variable_names = ['var_' + str(i).zfill(2) for i in range(n_columns)]
-    variable_names.insert(0, '(Intercept)')
 
     # Data
     data = {}

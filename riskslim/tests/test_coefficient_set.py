@@ -48,7 +48,7 @@ def test_coefficientset_update_intercept_bounds(
 
     cs = CoefficientSet(data.variable_names)
 
-    cs.update_intercept_bounds(data.X, data.y, 1, max_size=max_size)
+    cs.update_intercept_bounds(data.X, data.y, 1, max_L0_value=max_size)
 
 
 def test_coefficientset_tabulate():

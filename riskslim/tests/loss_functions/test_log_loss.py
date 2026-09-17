@@ -55,5 +55,5 @@ def test_log_probs(generated_normal_data):
     y = generated_normal_data['y']
 
     # True predictions will have log probability -> 1
-    inds = np.where(np.sign(np.dot(X, rho)) == y[:, 0])[0]
+    inds = np.where(np.sign(np.dot(X, rho)) == y)[0]
     assert np.all(log_loss.log_probs(Z, rho)[inds] > .99)

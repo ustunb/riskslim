@@ -78,7 +78,6 @@ default_settings = {
     'init_max_iterations': 10000,                       # max # of cuts needed to stop CPA
     'init_max_tolerance': 0.0001,                       # tolerance of solution to stop CPA
     'init_max_runtime_per_iteration': 300.0,            # max time per iteration of CPA
-    'init_max_cplex_time_per_iteration': 10.0,          # max time per iteration to solve surrogate problem in CPA
     #
     'init_use_sequential_rounding': True,               # use SeqRd in initialization procedure
     'init_sequential_rounding_max_runtime': 30.0,       # max runtime for SeqRd in initialization procedure
@@ -107,13 +106,17 @@ def test_risk_slim(max_coefficient, max_size, max_offset):
     N, P = X.shape
 
     # Offset value
+    variable_names = list(df.columns)[1:]
     coef_set = riskslim.CoefficientSet(
-        variable_names=list(df.columns)[1:],
+        variable_names=['(Intercept)'] + variable_names,
         lb=-max_coefficient, ub=max_coefficient
     )
 
     coef_set.update_intercept_bounds(
-        X = X, y = y, max_offset=max_offset, max_size = max_size
+        X=np.insert(X, 0, 1.0, axis=1),
+        y=np.ravel(y),
+        max_offset=max_offset,
+        max_L0_value=max_size,
     )
 
     # Create constraint dictionary
@@ -122,21 +125,29 @@ def test_risk_slim(max_coefficient, max_size, max_offset):
 
     # Train model using lattice_cpa
     rs = riskslim.RiskSLIMClassifier(
-        coef_set=coef_set, min_size=0, max_size=max_size, settings=default_settings
+        coef_set=coef_set,
+        max_size=max_size,
+        variable_names=variable_names,
+        outcome_name=df.columns[0],
+        c0_value=default_settings['c0_value'],
+        **{
+            key: value for key, value in default_settings.items()
+            if key not in ('c0_value', 'w_pos')
+        },
     )
-    rs.fit(X, y)
+    rs.fit(X, np.ravel(y))
 
     # Model info contains key results
-    pprint.pprint(rs.solution_info)
+    pprint.pprint(rs.optimizer.solution_info)
 
 
-    assert rs.min_size == rs.bounds.min_size == 0
-    assert rs.max_size == rs.bounds.max_size == max_size
-    assert rs.coef_set == coef_set
+    assert rs.optimizer.min_size == rs.optimizer.bounds.min_size == 0
+    assert rs.max_size == rs.optimizer.bounds.max_size == max_size
+    assert rs.optimizer.coef_set == coef_set
 
     # Each column of X has a rho and alpha (except for intercept,
     #   which doesn't have an alpha). There are 3 additional parameters:
     #   loss, objval, L0_norm
-    assert (len(X[0]) * 2) - 1 + 3 == rs.mip_indices['n_variables']
+    assert (len(X[0]) * 2) + 1 + 3 == rs.optimizer.mip_indices['n_variables']
 
     assert True

@@ -13,7 +13,7 @@ def test_ClassificationDataset():
     n_variables = 100
 
     X = np.random.rand(n_obs, n_variables)
-    y = np.random.choice([1, -1], n_obs).reshape(-1, 1)
+    y = np.random.choice([1, -1], n_obs)
 
     variable_names = ['var_' + str(i) for i in range(n_variables)]
 

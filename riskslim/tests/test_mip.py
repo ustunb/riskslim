@@ -14,7 +14,7 @@ from riskslim.mip import create_risk_slim, set_cplex_mip_parameters, add_mip_sta
 def test_create_risk_slim(generated_normal_data, relax_integer_variables):
     """Testing setting up MIP in CPLEX."""
 
-    variable_names = generated_normal_data['variable_names'].copy()
+    variable_names = ['(Intercept)'] + generated_normal_data['variable_names'].copy()
     coef_set = CoefficientSet(variable_names)
 
     mip_settings = {
@@ -60,7 +60,7 @@ def test_create_risk_slim(generated_normal_data, relax_integer_variables):
 @pytest.mark.parametrize("relax_integer_variables", [True, False])
 def test_set_cplex_mip_parameters(generated_normal_data, relax_integer_variables):
 
-    variable_names = generated_normal_data['variable_names'].copy()
+    variable_names = ['(Intercept)'] + generated_normal_data['variable_names'].copy()
 
     if relax_integer_variables:
         vtypes = ['I'] * len(variable_names)
@@ -92,8 +92,8 @@ def test_set_cplex_mip_parameters(generated_normal_data, relax_integer_variables
 
 def test_add_mip_starts(generated_normal_data):
 
-    Z = generated_normal_data['Z'][0]
-    variable_names = generated_normal_data['variable_names'].copy()
+    Z = np.insert(generated_normal_data['Z'][0], 0, 1.0, axis=1)
+    variable_names = ['(Intercept)'] + generated_normal_data['variable_names'].copy()
 
     vtypes = ['C'] * len(variable_names)
 
