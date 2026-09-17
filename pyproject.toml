@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "riskslim"
 version = "0.1.0"
 description = "Optimized risk scores on large-scale datasets"
-readme = "README.rst"
+readme = "README.md"
 license = "GPL-3.0-or-later"
 requires-python = ">=3.11"
 authors = [

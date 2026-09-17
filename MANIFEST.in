@@ -1,5 +1,7 @@
-include README.rst
+include README.md
 include LICENSE
+include NOTICE
+include CONTRIBUTING.md
 include pyproject.toml
 include MANIFEST.in
 include uv.lock

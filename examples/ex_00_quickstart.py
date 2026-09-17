@@ -6,7 +6,7 @@ from riskslim.utils import open_file
 import pandas as pd
 
 # Load Data
-df = pd.read_csv("https://raw.githubusercontent.com/ustunb/risk-slim/master/examples/data/mushroom_data.csv")
+df = pd.read_csv("https://raw.githubusercontent.com/ustunb/riskslim/master/examples/data/mushroom_data.csv")
 y, X = df.iloc[:, 0].values, df.iloc[:, 1:].values
 
 
