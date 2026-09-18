@@ -7,7 +7,8 @@
 #   warm start: off, on — distinct solver initialization paths; lazy loss cuts stay enabled
 #   size path: 4/None, 2, 1, 0 — fresh fits as the model-size limit tightens
 #   penalty path: 1e-6, .01, .1, 1 — fresh fits as sparsity pressure increases
-# n/a: duplicate and noisy-duplicate arrangements await the separate approved fixtures.
+#   redundant features: none, duplicates, noisy duplicates — joint penalty-plus-redundancy behavior
+# n/a: noisy duplicates x risk-score — exact enumeration would require 11^8 states.
 
 import numpy as np
 import pytest
@@ -21,16 +22,25 @@ BASELINE_CASE_IDS = tuple(
     for truth_name in ("integer", "fractional", "shifted_fractional")
 )
 MODEL_COEFFICIENT_BOUNDS = {"risk-score": 5, "checklist": 1}
+REDUNDANCY_MODEL_CASES = (
+    ("none", "risk-score"),
+    ("none", "checklist"),
+    ("duplicates", "risk-score"),
+    ("duplicates", "checklist"),
+    ("noisy_duplicates", "checklist"),
+)
 OPTIMAL_STATUSES = {"integer optimal solution", "integer optimal, tolerance"}
 OBJECTIVE_TOLERANCE = 1e-6
 
 
-def get_oracle(case, model_type, c0_value, max_size):
+def get_oracle(case, model_type, c0_value, max_size, exact_query=None):
     task = case["tasks"][model_type]
     regeneration_command = (
         f"uv run python tests/generate_training_test_cases.py --regenerate --case {case['case_id']}"
     )
-    query = task["queries"].get((c0_value, max_size))
+    query = exact_query
+    if query is None:
+        query = task["queries"].get((c0_value, max_size))
     assert query is not None, (
         f"Precondition: {case['case_id']} {model_type} query is missing. Run "
         f"`{regeneration_command}`."
@@ -70,9 +80,9 @@ def assert_loss_does_not_decrease(earlier_result, later_result):
 
 
 def fit_and_assert_global_optimum(
-    case, model_type, warm_start, c0_value, max_size, oracle_max_size
+    case, model_type, warm_start, c0_value, max_size, oracle_max_size, exact_query=None
 ):
-    task, oracle = get_oracle(case, model_type, c0_value, oracle_max_size)
+    task, oracle = get_oracle(case, model_type, c0_value, oracle_max_size, exact_query=exact_query)
     classifier = RiskSLIMClassifier(
         initialization_flag=warm_start,
         max_coef=MODEL_COEFFICIENT_BOUNDS[model_type],
@@ -141,6 +151,7 @@ def fit_and_assert_global_optimum(
         "loss": pure_logistic_loss,
         "objective": recomputed_objective,
         "support": support,
+        "rho": rho,
         "oracle": oracle,
     }
 
@@ -193,3 +204,52 @@ def test_solver_returns_global_optimum_with_coefficient_bounds(
 ):
     case = training_test_cases["synthetic_oracles"][case_id]
     fit_and_assert_global_optimum(case, model_type, warm_start, 1e-6, 4, 4)
+
+
+@pytest.mark.parametrize("warm_start", [False, True], ids=["warm-off", "warm-on"])
+@pytest.mark.parametrize(
+    "redundant_features,model_type",
+    REDUNDANCY_MODEL_CASES,
+    ids=[
+        "none-risk-score",
+        "none-checklist",
+        "duplicates-risk-score",
+        "duplicates-checklist",
+        "noisy-duplicates-checklist",
+    ],
+)
+@pytest.mark.parametrize("case_id", BASELINE_CASE_IDS)
+def test_solver_drops_redundant_features_at_global_optimum(
+    training_test_cases, case_id, redundant_features, model_type, warm_start
+):
+    if redundant_features == "none":
+        case = training_test_cases["synthetic_oracles"][case_id]
+        fit_and_assert_global_optimum(case, model_type, warm_start, 0.01, 4, 4)
+        return
+
+    redundant_case_id = f"{case_id}__{redundant_features}"
+    case = training_test_cases["synthetic_oracles"][redundant_case_id]
+    evidence = case["tasks"][model_type]["redundancy_evidence"]
+    certificate = evidence["certifying_penalty"]
+    exact_query = evidence["certifying_query"]
+    c0_value = certificate["c0"]
+    max_size = certificate["max_size"]
+
+    assert certificate["empty_model_objective_gap"] > OBJECTIVE_TOLERANCE
+    assert certificate["pair_violation_objective_gap"] > OBJECTIVE_TOLERANCE
+    assert exact_query["cardinality"] > 0
+    assert exact_query["query_identity"]["c0"] == c0_value
+    assert exact_query["query_identity"]["max_size"] == max_size
+
+    result = fit_and_assert_global_optimum(
+        case,
+        model_type,
+        warm_start,
+        c0_value,
+        max_size,
+        max_size,
+        exact_query=exact_query,
+    )
+    feature_coefficients = result["rho"][1:]
+    assert result["support"] > 0
+    assert not np.any((feature_coefficients[:4] != 0.0) & (feature_coefficients[4:] != 0.0))
