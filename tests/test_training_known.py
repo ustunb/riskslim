@@ -1,8 +1,12 @@
-import json
-from pathlib import Path
+# Test strategy: training against saved known results
+#
+# Dimensions:
+#   known dataset: breastcancer, mammo — distinct real inputs and saved results
+#   planted-data seed: 0..4 — retained temporarily until exact synthetic-oracle tests replace it
+#
+# These saved known results are regression references, not independently exact oracles.
 
 import numpy as np
-import pandas as pd
 import pytest
 
 from riskslim import RiskSLIMClassifier
@@ -11,20 +15,17 @@ from riskslim.loss_functions.log_loss import log_loss_value
 from utils import generate_random_normal
 
 
-GOLDEN_DIR = Path(__file__).parent / "golden"
-
-
-def test_golden_dataset(dataset_name):
-    fixture = json.loads((GOLDEN_DIR / f"{dataset_name}_k5.json").read_text())
-    frame = pd.read_csv(Path(__file__).parents[1] / "data" / f"{dataset_name}_data.csv")
-    X = frame.iloc[:, 1:].to_numpy()
-    y = frame.iloc[:, 0].to_numpy()
+def test_training_matches_known_reference(known_dataset_name, training_test_cases):
+    reference = training_test_cases["known_reference_results"][known_dataset_name]
+    X = reference["X"]
+    y = reference["y"]
+    expected = reference["expected"]
     clf = RiskSLIMClassifier(
         max_coef=5,
         max_size=5,
         c0_value=1e-6,
-        variable_names=list(frame.columns[1:]),
-        outcome_name=frame.columns[0],
+        variable_names=list(reference["variable_names"]),
+        outcome_name=reference["outcome_name"],
         verbose=False,
         cplex_randomseed=0,
         max_tolerance=1e-6,
@@ -33,7 +34,7 @@ def test_golden_dataset(dataset_name):
     clf.fit(X, y)
 
     solution_info = clf.optimizer.solution_info
-    assert abs(solution_info["objective_value"] - fixture["objective_value"]) <= 1e-4
+    assert abs(solution_info["objective_value"] - expected["objective_value"]) <= 1e-4
     assert clf.optimizer.stats.cplex_status in {
         "integer optimal solution",
         "integer optimal, tolerance",
@@ -42,11 +43,11 @@ def test_golden_dataset(dataset_name):
     assert np.count_nonzero(clf.coef_) <= 5
     assert np.all(np.abs(rho[1:]) <= 5)
     assert np.all(rho == np.rint(rho))
-    assert np.mean(clf.predict(X) == np.asarray(fixture["predictions"])) >= 0.99
+    assert np.mean(clf.predict(X) == np.asarray(expected["predictions"])) >= 0.99
 
 
 @pytest.fixture(params=["breastcancer", "mammo"])
-def dataset_name(request):
+def known_dataset_name(request):
     return request.param
 
 

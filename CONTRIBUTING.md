@@ -24,7 +24,8 @@ New behavior needs a test. Bug fixes need a test that fails before the fix.
 
 ```bash
 uv run ruff check riskslim tests
-uv run ruff format --check examples/quickstart.py tests/test_golden.py
+uv run ruff format --check examples/quickstart.py tests/conftest.py \
+  tests/generate_training_test_cases.py tests/test_training_known.py
 uv build && uvx twine check dist/*
 ```
 

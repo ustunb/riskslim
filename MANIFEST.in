@@ -9,7 +9,7 @@ include riskslim_todo.md
 include examples/README.rst
 recursive-include examples *.py
 recursive-include tests *.py
-recursive-include tests/golden *.json
+include tests/training_test_cases.pkl
 recursive-include riskslim *.py *.html
 
 prune scripts

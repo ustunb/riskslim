@@ -26,7 +26,9 @@ jobs:
         with:
           python-version: "3.12"
       - run: uvx ruff check riskslim tests
-      - run: uvx ruff format --check examples/quickstart.py tests/test_golden.py
+      - run: >-
+          uvx ruff format --check examples/quickstart.py tests/conftest.py
+          tests/generate_training_test_cases.py tests/test_training_known.py
 
   tests:
     name: tests (py${{ matrix.python-version }})
