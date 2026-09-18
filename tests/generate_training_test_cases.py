@@ -1,27 +1,74 @@
-"""Maintain the checked-in training test-case store.
+"""Generate the checked-in exact training test cases.
 
-Known-reference expectations are never recomputed with the solver under test.
-Future synthetic generation can load this store and replace only
-``synthetic_oracles``.
+This maintenance script independently enumerates bounded integer score models.
+It never calls RiskSLIM loss or solver code to choose an oracle solution.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
+import itertools
+import json
+import math
+import os
 import pickle
+import time
+import warnings
 from pathlib import Path
 
+import numpy as np
+from scipy.special import expit
+from sklearn.exceptions import ConvergenceWarning
+from sklearn.linear_model import LogisticRegression
+
+from riskslim.coefficient_set import CoefficientSet
+from riskslim.data import ClassificationDataset
+
+
 SCHEMA_VERSION = 1
-TESTS_DIR = Path(__file__).resolve().parent
-DEFAULT_OUTPUT_PATH = TESTS_DIR / "training_test_cases.pkl"
+SYNTHETIC_RECORD_VERSION = 1
+ORACLE_ALGORITHM_VERSION = "integer-intercept-profile-v1"
+DATA_GENERATION_VERSION = "independent-bernoulli-logistic-v1"
+TEST_CASE_PATH = Path(__file__).resolve().parent / "training_test_cases.pkl"
+N_SAMPLES = 10_000
+SEED = 0
+CHUNK_SIZE = 256
+BENCHMARK_VECTORS = 256
+MAX_PROFILE_WORKSPACE_BYTES = 512 * 1024**2
+PROFILE_WORKSPACE_ARRAY_MULTIPLIER = 6
+INTERCEPT_DELTA_EXPONENT = math.expm1(1.0)
+C0_VALUES = (1e-6, 0.01, 0.1, 1.0)
+MAX_SIZES = (4, 2, 1, 0)
+MODEL_FEATURE_BOUNDS = {"risk-score": (-5, 5), "checklist": (-1, 1)}
+TRUTHS = {
+    "integer": (-1.0, 1.0, 2.0, 3.0, 4.0),
+    "fractional": (-1.0, 1.0, 2.0, 0.5, 1.5),
+    "shifted_fractional": (1.5, 1.0, 2.0, 0.5, 1.5),
+}
+FEATURE_DISTRIBUTIONS = ("binary", "continuous", "mixed")
 
 
-def load_store(output_path: Path) -> dict:
-    """Load the store so later generation can preserve known records."""
-    with output_path.open("rb") as file_handle:
+def baseline_case_ids() -> tuple[str, ...]:
+    """Return the admitted independent feature-by-truth baseline."""
+    return tuple(
+        f"{feature_distribution}__{truth_name}"
+        for feature_distribution in FEATURE_DISTRIBUTIONS
+        for truth_name in TRUTHS
+    )
+
+
+def load_store() -> dict:
+    """Load the shared store without altering known-reference records."""
+    if not TEST_CASE_PATH.exists():
+        raise FileNotFoundError(
+            "known expectations cannot be recomputed; restore them with "
+            "`git restore tests/training_test_cases.pkl`"
+        )
+    with TEST_CASE_PATH.open("rb") as file_handle:
         store = pickle.load(file_handle)
     if not isinstance(store, dict) or store.get("schema_version") != SCHEMA_VERSION:
-        raise ValueError(f"unsupported training test-case store: {output_path}")
+        raise ValueError("unsupported training test-case store")
     if not isinstance(store.get("synthetic_oracles"), dict):
         raise ValueError("synthetic_oracles must be a dictionary")
     if not isinstance(store.get("known_reference_results"), dict):
@@ -29,27 +76,716 @@ def load_store(output_path: Path) -> dict:
     return store
 
 
+def write_store(store: dict) -> None:
+    """Atomically replace the trusted local pickle."""
+    temporary_path = TEST_CASE_PATH.with_name(f".{TEST_CASE_PATH.name}.{os.getpid()}.tmp")
+    with temporary_path.open("wb") as file_handle:
+        pickle.dump(store, file_handle, protocol=pickle.HIGHEST_PROTOCOL)
+    temporary_path.replace(TEST_CASE_PATH)
+
+
+def hash_array(digest, array: np.ndarray) -> None:
+    """Add an array's dtype, shape, and contiguous bytes to a digest."""
+    contiguous = np.ascontiguousarray(array)
+    digest.update(str(contiguous.dtype).encode("ascii"))
+    digest.update(json.dumps(contiguous.shape).encode("ascii"))
+    digest.update(contiguous.view(np.uint8))
+
+
+def compute_data_digest(X, y, variable_names, outcome_name) -> str:
+    """Return a stable identity for a generated training dataset."""
+    digest = hashlib.sha256()
+    for array in (X, y):
+        hash_array(digest, array)
+    digest.update(json.dumps(variable_names).encode("utf-8"))
+    digest.update(outcome_name.encode("utf-8"))
+    return digest.hexdigest()
+
+
+def identity_digest(identity: dict) -> str:
+    """Hash a JSON-compatible identity dictionary."""
+    encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def generate_data(case_id: str) -> dict:
+    """Generate one fixed-seed independent Bernoulli-logistic dataset."""
+    feature_distribution, truth_name = case_id.split("__")
+    truth = np.asarray(TRUTHS[truth_name], dtype=np.float64)
+    feature_rng = np.random.default_rng(SEED)
+    if feature_distribution == "binary":
+        X = feature_rng.binomial(1, 0.5, size=(N_SAMPLES, 4)).astype(np.int8)
+        variable_names = tuple(f"binary_{index}" for index in range(1, 5))
+    elif feature_distribution == "continuous":
+        X = feature_rng.normal(0.0, 2.0, size=(N_SAMPLES, 4))
+        variable_names = tuple(f"continuous_{index}" for index in range(1, 5))
+    else:
+        binary = feature_rng.binomial(1, 0.5, size=(N_SAMPLES, 2))
+        continuous = feature_rng.normal(0.0, 2.0, size=(N_SAMPLES, 2))
+        X = np.hstack((binary, continuous)).astype(np.float64)
+        variable_names = ("binary_1", "binary_2", "continuous_1", "continuous_2")
+
+    label_seed_sequence = [SEED, 0, 1]
+    label_rng = np.random.default_rng(np.random.SeedSequence(label_seed_sequence))
+    probabilities = expit(truth[0] + X @ truth[1:])
+    y = label_rng.binomial(1, probabilities).astype(np.int8)
+    outcome_name = "y"
+    data_digest = compute_data_digest(X, y, variable_names, outcome_name)
+    data_identity = {
+        "generation_version": DATA_GENERATION_VERSION,
+        "case_id": case_id,
+        "feature_distribution": feature_distribution,
+        "rho_true": truth.tolist(),
+        "n_samples": N_SAMPLES,
+        "seed": SEED,
+        "label_seed_sequence": label_seed_sequence,
+        "data_digest": data_digest,
+    }
+    return {
+        "case_id": case_id,
+        "X": X,
+        "y": y,
+        "variable_names": variable_names,
+        "outcome_name": outcome_name,
+        "data_digest": data_digest,
+        "data_identity": data_identity,
+        "rho_true": truth,
+    }
+
+
+def determine_coefficient_bounds(data: dict, feature_bounds: tuple[int, int]) -> dict:
+    """Derive the intercept domain with the repository's coefficient set."""
+    dataset = ClassificationDataset(
+        data["X"], data["y"], list(data["variable_names"]), data["outcome_name"]
+    )
+    coefficient_set = CoefficientSet(
+        dataset.variable_names,
+        lb=feature_bounds[0],
+        ub=feature_bounds[1],
+        vtype="I",
+        print_flag=False,
+    )
+    coefficient_set.update_intercept_bounds(
+        X=dataset.X,
+        y=dataset.y,
+        max_offset=None,
+        max_L0_value=data["X"].shape[1],
+    )
+    raw_lower = coefficient_set.lb.astype(np.float64)
+    raw_upper = coefficient_set.ub.astype(np.float64)
+    integer_lower = np.r_[math.ceil(raw_lower[0]), raw_lower[1:]].astype(np.int16)
+    integer_upper = np.r_[math.floor(raw_upper[0]), raw_upper[1:]].astype(np.int16)
+    if np.any(integer_lower > integer_upper):
+        raise AssertionError("automatic coefficient bounds contain no integer")
+    return {
+        "coefficient_set_lower_bounds": raw_lower,
+        "coefficient_set_upper_bounds": raw_upper,
+        "effective_integer_lower_bounds": integer_lower,
+        "effective_integer_upper_bounds": integer_upper,
+    }
+
+
+def build_feature_coefficients(feature_bounds: tuple[int, int]) -> np.ndarray:
+    """Materialize every four-feature bounded integer vector compactly."""
+    values = range(feature_bounds[0], feature_bounds[1] + 1)
+    coefficients = np.fromiter(
+        itertools.chain.from_iterable(itertools.product(values, repeat=4)), dtype=np.int8
+    )
+    return coefficients.reshape(-1, 4)
+
+
+def profile_integer_intercepts(scores, y, intercept_lower, intercept_upper):
+    """Find every bounded integer-intercept minimum by discrete convex search."""
+    n_vectors = scores.shape[1]
+    lower = np.full(n_vectors, intercept_lower, dtype=np.int64)
+    upper = np.full(n_vectors, intercept_upper, dtype=np.int64)
+    positive_rate = float(np.mean(y))
+    while np.any(lower < upper):
+        active_indices = np.flatnonzero(lower < upper)
+        midpoints = lower + (upper - lower) // 2
+        active_midpoints = midpoints[active_indices]
+        probabilities = expit(scores[:, active_indices] + active_midpoints[None, :])
+        differences = (
+            np.mean(np.log1p(INTERCEPT_DELTA_EXPONENT * probabilities), axis=0) - positive_rate
+        )
+        move_upper = differences >= 0.0
+        upper[active_indices[move_upper]] = active_midpoints[move_upper]
+        lower[active_indices[~move_upper]] = active_midpoints[~move_upper] + 1
+
+    intercepts = lower.astype(np.int16)
+    signed_scores = (1.0 - 2.0 * y[:, None]) * (scores + intercepts[None, :])
+    losses = np.mean(np.logaddexp(0.0, signed_scores), axis=0)
+    ties = np.ones(n_vectors, dtype=np.uint8)
+    can_tie_right = intercepts < intercept_upper
+    if np.any(can_tie_right):
+        indices = np.flatnonzero(can_tie_right)
+        probabilities = expit(scores[:, indices] + intercepts[indices][None, :])
+        differences = (
+            np.mean(np.log1p(INTERCEPT_DELTA_EXPONENT * probabilities), axis=0) - positive_rate
+        )
+        ties[indices[differences == 0.0]] = 2
+    return intercepts, losses, ties
+
+
+def validate_intercept_profiler() -> dict:
+    """Compare profiling with independent direct enumeration on small fixtures."""
+    fixture_y = np.array([1, 0], dtype=np.int8)
+    fixtures = {
+        "lower_endpoint": (np.array([10.0, 10.0]), {-2}),
+        "upper_endpoint": (np.array([-10.0, -10.0]), {2}),
+        "adjacent_tie": (np.array([0.0, -1.0]), {0, 1}),
+        "unique_zero": (np.array([0.0, 0.0]), {0}),
+    }
+    results = {}
+    for name, (scores, expected_minimizers) in fixtures.items():
+        intercepts, losses, _ = profile_integer_intercepts(scores[:, None], fixture_y, -2, 2)
+        direct_losses = np.asarray(
+            [
+                np.mean(np.logaddexp(0.0, (1.0 - 2.0 * fixture_y) * (scores + intercept)))
+                for intercept in range(-2, 3)
+            ]
+        )
+        minimum_loss = float(np.min(direct_losses))
+        minimizers = set(np.arange(-2, 3)[direct_losses == minimum_loss].tolist())
+        if minimizers != expected_minimizers or int(intercepts[0]) not in minimizers:
+            raise AssertionError(f"intercept profiler failed {name}")
+        if not np.isclose(losses[0], minimum_loss, rtol=0.0, atol=2e-15):
+            raise AssertionError(f"intercept profiler loss failed {name}")
+        results[name] = sorted(minimizers)
+
+    rng = np.random.default_rng(9173)
+    X = rng.normal(size=(37, 2))
+    y = rng.binomial(1, expit(-0.3 + X @ np.array([0.7, -1.1]))).astype(np.int8)
+    coefficients = np.asarray(list(itertools.product(range(-2, 3), repeat=2)))
+    scores = X @ coefficients.T
+    intercepts, losses, _ = profile_integer_intercepts(scores, y, -4, 4)
+    direct_intercepts = np.arange(-4, 5)
+    for index, score in enumerate(scores.T):
+        direct_losses = np.asarray(
+            [
+                np.mean(np.logaddexp(0.0, (1.0 - 2.0 * y) * (score + intercept)))
+                for intercept in direct_intercepts
+            ]
+        )
+        best_loss = np.min(direct_losses)
+        if not np.isclose(losses[index], best_loss, rtol=0.0, atol=2e-15):
+            raise AssertionError("profiled loss disagrees with direct enumeration")
+        if int(intercepts[index]) not in direct_intercepts[direct_losses == best_loss]:
+            raise AssertionError("profiled intercept is not a direct minimizer")
+    return {"passed": True, "deterministic_minimizers": results, "full_models_checked": 225}
+
+
+def limited_batch_size(n_samples: int, requested_vectors: int) -> int:
+    """Cap batches under the declared six-float-array workspace."""
+    bytes_per_vector = n_samples * np.dtype(np.float64).itemsize
+    maximum_vectors = MAX_PROFILE_WORKSPACE_BYTES // (
+        PROFILE_WORKSPACE_ARRAY_MULTIPLIER * bytes_per_vector
+    )
+    if maximum_vectors < 1:
+        raise ValueError("profile exceeds the 512 MiB workspace even for one vector")
+    return min(requested_vectors, maximum_vectors)
+
+
+def benchmark_profile(X, y, coefficients, intercept_bounds, batch_size) -> dict:
+    """Estimate complete enumeration time from one bounded batch."""
+    count = min(batch_size, len(coefficients))
+    started = time.perf_counter()
+    profile_integer_intercepts(X @ coefficients[:count].T, y, *intercept_bounds)
+    seconds = time.perf_counter() - started
+    return {
+        "vectors_benchmarked": count,
+        "benchmark_seconds": seconds,
+        "estimated_enumeration_seconds": seconds * len(coefficients) / count,
+    }
+
+
+def enumerate_losses(X, y, coefficients, intercept_bounds, batch_size):
+    """Profile every feature vector in bounded-memory NumPy batches."""
+    intercepts = np.empty(len(coefficients), dtype=np.int16)
+    losses = np.empty(len(coefficients), dtype=np.float64)
+    ties = np.empty(len(coefficients), dtype=np.uint8)
+    started = time.perf_counter()
+    for start in range(0, len(coefficients), batch_size):
+        stop = min(start + batch_size, len(coefficients))
+        intercepts[start:stop], losses[start:stop], ties[start:stop] = profile_integer_intercepts(
+            X @ coefficients[start:stop].T, y, *intercept_bounds
+        )
+    return intercepts, losses, ties, time.perf_counter() - started
+
+
+def validate_loss_arrays(coefficients, intercepts, losses, supports, ties, lower, upper):
+    """Reject incomplete or invalid exact-enumeration output."""
+    n_vectors, n_features = coefficients.shape
+    if n_features != 4:
+        raise ValueError("baseline coefficient arrays must have four columns")
+    if any(array.shape != (n_vectors,) for array in (intercepts, losses, supports, ties)):
+        raise ValueError("loss arrays must share the feature-vector count")
+    if not np.isfinite(losses).all() or np.any(losses < 0.0):
+        raise ValueError("losses must be finite and nonnegative")
+    if not np.equal(intercepts, np.rint(intercepts)).all():
+        raise ValueError("intercepts must be integers")
+    if np.any(intercepts < lower[0]) or np.any(intercepts > upper[0]):
+        raise ValueError("intercepts fall outside their integer bounds")
+    if np.any(coefficients < lower[1:]) or np.any(coefficients > upper[1:]):
+        raise ValueError("feature coefficients fall outside their integer bounds")
+    if not np.array_equal(supports, np.count_nonzero(coefficients, axis=1)):
+        raise ValueError("supports do not match feature coefficients")
+    if not np.isin(ties, (1, 2)).all():
+        raise ValueError("intercept tie multiplicities must be 1 or 2")
+
+
+def select_queries(loss_digest, coefficients, intercepts, losses, supports) -> dict:
+    """Answer every size and penalty query from one shared loss table."""
+    queries = {}
+    for c0_value in C0_VALUES:
+        for max_size in MAX_SIZES:
+            feasible_indices = np.flatnonzero(supports <= max_size)
+            objectives = losses[feasible_indices] + c0_value * supports[feasible_indices]
+            local_index = int(np.argmin(objectives))
+            index = int(feasible_indices[local_index])
+            objective = float(objectives[local_index])
+            query_identity = {
+                "loss_identity_digest": loss_digest,
+                "c0": float(c0_value),
+                "max_size": int(max_size),
+            }
+            queries[(float(c0_value), int(max_size))] = {
+                "query_identity": query_identity,
+                "query_identity_digest": identity_digest(query_identity),
+                "representative_rho": np.r_[intercepts[index], coefficients[index]].astype(
+                    np.int16
+                ),
+                "pure_logistic_loss": float(losses[index]),
+                "penalty": float(c0_value * supports[index]),
+                "objective": objective,
+                "cardinality": int(supports[index]),
+                "representative_tie_count": int(np.count_nonzero(objectives == objective)),
+                "proven_complete": True,
+            }
+    return queries
+
+
+def validate_query_paths(queries: dict) -> None:
+    """Check exact-query monotonicity across the admitted paths."""
+    tolerance = 5e-14
+    for max_size in MAX_SIZES:
+        path = [queries[(c0, max_size)] for c0 in C0_VALUES]
+        support_path = [query["cardinality"] for query in path]
+        loss_path = [query["pure_logistic_loss"] for query in path]
+        if any(right > left for left, right in zip(support_path, support_path[1:], strict=False)):
+            raise AssertionError("support increased with c0")
+        if any(
+            right + tolerance < left for left, right in zip(loss_path, loss_path[1:], strict=False)
+        ):
+            raise AssertionError("loss decreased with c0")
+    for c0_value in C0_VALUES:
+        path = [queries[(c0_value, max_size)] for max_size in MAX_SIZES]
+        objective_path = [query["objective"] for query in path]
+        loss_path = [query["pure_logistic_loss"] for query in path]
+        if any(
+            right + tolerance < left
+            for left, right in zip(objective_path, objective_path[1:], strict=False)
+        ):
+            raise AssertionError("objective decreased as max size shrank")
+        if any(
+            right + tolerance < left for left, right in zip(loss_path, loss_path[1:], strict=False)
+        ):
+            raise AssertionError("loss decreased as max size shrank")
+    if any(queries[(1.0, max_size)]["cardinality"] != 0 for max_size in MAX_SIZES):
+        raise AssertionError("c0=1 baseline optimum must have zero feature support")
+
+
+def fit_continuous_reference(data: dict) -> dict | None:
+    """Fit the diagnostic unconstrained model for fractional planted truths."""
+    truth = data["rho_true"]
+    if np.array_equal(truth, np.rint(truth)):
+        return None
+    settings = {
+        "method": "sklearn.LogisticRegression",
+        "penalty": None,
+        "solver": "lbfgs",
+        "tolerance": 1e-12,
+        "max_iterations": 10_000,
+    }
+    started = time.perf_counter()
+    model = LogisticRegression(
+        penalty=None,
+        fit_intercept=True,
+        solver="lbfgs",
+        tol=settings["tolerance"],
+        max_iter=settings["max_iterations"],
+        random_state=SEED,
+    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", message="'penalty' was deprecated.*", category=FutureWarning
+        )
+        warnings.simplefilter("error", ConvergenceWarning)
+        model.fit(data["X"], data["y"])
+    rho = np.r_[model.intercept_[0], model.coef_[0]]
+    probabilities = expit(rho[0] + data["X"] @ rho[1:])
+    augmented_X = np.column_stack((np.ones(len(data["X"])), data["X"]))
+    gradient = augmented_X.T @ (probabilities - data["y"]) / len(data["y"])
+    signed_scores = (1.0 - 2.0 * data["y"]) * (rho[0] + data["X"] @ rho[1:])
+    converged = bool(model.n_iter_[0] < model.max_iter)
+    gradient_infinity_norm = float(np.max(np.abs(gradient)))
+    if not converged or not np.isfinite(rho).all() or gradient_infinity_norm > 1e-6:
+        raise AssertionError("continuous diagnostic did not reach a finite stationary fit")
+    identity = {"data_digest": data["data_digest"], **settings}
+    return {
+        "identity": identity,
+        "identity_digest": identity_digest(identity),
+        "rho": rho,
+        "pure_logistic_loss": float(np.mean(np.logaddexp(0.0, signed_scores))),
+        "converged": converged,
+        "gradient_infinity_norm": gradient_infinity_norm,
+        "n_iterations": int(model.n_iter_[0]),
+        "fit_seconds": time.perf_counter() - started,
+        "interpretation": "diagnostic primal fit; not a rigorous lower bound or integer oracle",
+    }
+
+
+def preflight_case(case_id: str) -> dict:
+    """Build and benchmark every exact profile before enumeration."""
+    data = generate_data(case_id)
+    batch_size = limited_batch_size(N_SAMPLES, CHUNK_SIZE)
+    profiles = {}
+    for model_type, feature_bounds in MODEL_FEATURE_BOUNDS.items():
+        bounds = determine_coefficient_bounds(data, feature_bounds)
+        coefficients = build_feature_coefficients(feature_bounds)
+        intercept_bounds = (
+            int(bounds["effective_integer_lower_bounds"][0]),
+            int(bounds["effective_integer_upper_bounds"][0]),
+        )
+        benchmark = benchmark_profile(
+            data["X"], data["y"], coefficients, intercept_bounds, BENCHMARK_VECTORS
+        )
+        nominal_models = len(coefficients) * (intercept_bounds[1] - intercept_bounds[0] + 1)
+        profiles[model_type] = {
+            "bounds": bounds,
+            "coefficients": coefficients,
+            "intercept_bounds": intercept_bounds,
+            "batch_size": batch_size,
+            "nominal_full_models": nominal_models,
+            "benchmark": benchmark,
+        }
+        print(
+            f"preflight {case_id} {model_type}: {len(coefficients):,} vectors, "
+            f"intercept [{intercept_bounds[0]}, {intercept_bounds[1]}], "
+            f"{nominal_models:,} nominal models, batch {batch_size}, "
+            f"estimate {benchmark['estimated_enumeration_seconds']:.1f}s",
+            flush=True,
+        )
+    return {"data": data, "profiles": profiles}
+
+
+def generate_task_record(data: dict, model_type: str, profile: dict) -> dict:
+    """Generate one complete exact loss table and its reusable queries."""
+    coefficients = profile["coefficients"]
+    intercepts, losses, ties, enumeration_seconds = enumerate_losses(
+        data["X"], data["y"], coefficients, profile["intercept_bounds"], profile["batch_size"]
+    )
+    supports = np.count_nonzero(coefficients, axis=1).astype(np.uint8)
+    bounds = profile["bounds"]
+    validate_loss_arrays(
+        coefficients,
+        intercepts,
+        losses,
+        supports,
+        ties,
+        bounds["effective_integer_lower_bounds"],
+        bounds["effective_integer_upper_bounds"],
+    )
+    loss_identity = {
+        "algorithm_version": ORACLE_ALGORITHM_VERSION,
+        "data_identity": data["data_identity"],
+        "data_digest": data["data_digest"],
+        "model_type": model_type,
+        "effective_integer_lower_bounds": bounds["effective_integer_lower_bounds"].tolist(),
+        "effective_integer_upper_bounds": bounds["effective_integer_upper_bounds"].tolist(),
+    }
+    loss_digest = identity_digest(loss_identity)
+    queries = select_queries(loss_digest, coefficients, intercepts, losses, supports)
+    validate_query_paths(queries)
+    return {
+        "loss_identity": loss_identity,
+        "loss_identity_digest": loss_digest,
+        "coefficient_set_lower_bounds": bounds["coefficient_set_lower_bounds"],
+        "coefficient_set_upper_bounds": bounds["coefficient_set_upper_bounds"],
+        "effective_integer_lower_bounds": bounds["effective_integer_lower_bounds"],
+        "effective_integer_upper_bounds": bounds["effective_integer_upper_bounds"],
+        "feature_coefficients": coefficients,
+        "optimal_intercepts": intercepts,
+        "pure_logistic_losses": losses,
+        "supports": supports,
+        "intercept_tie_multiplicities": ties,
+        "queries": queries,
+        "coverage": {
+            "proven_complete": True,
+            "profiled_feature_vectors": int(len(coefficients)),
+            "nominal_full_models": int(profile["nominal_full_models"]),
+        },
+        "runtime": {
+            "preflight": profile["benchmark"],
+            "enumeration_seconds": enumeration_seconds,
+            "effective_batch_size": profile["batch_size"],
+            "max_workspace_bytes": MAX_PROFILE_WORKSPACE_BYTES,
+        },
+        "tie_count_scope": "adjacent equal float64 intercept minima for each feature vector",
+    }
+
+
+def generate_case_record(case_id: str, preflight: dict, diagnostics: dict) -> dict:
+    """Generate both bounded model tasks for one admitted dataset."""
+    data = preflight["data"]
+    started = time.perf_counter()
+    tasks = {}
+    for model_type, profile in preflight["profiles"].items():
+        task_started = time.perf_counter()
+        tasks[model_type] = generate_task_record(data, model_type, profile)
+        print(
+            f"generated {case_id} {model_type} in {time.perf_counter() - task_started:.1f}s",
+            flush=True,
+        )
+    return {
+        "record_version": SYNTHETIC_RECORD_VERSION,
+        "case_id": case_id,
+        "X": data["X"],
+        "y": data["y"],
+        "variable_names": data["variable_names"],
+        "outcome_name": data["outcome_name"],
+        "rho_true": data["rho_true"],
+        "data_digest": data["data_digest"],
+        "data_identity": data["data_identity"],
+        "continuous_reference": fit_continuous_reference(data),
+        "tasks": tasks,
+        "profiler_diagnostics": diagnostics,
+        "generation_seconds": time.perf_counter() - started,
+    }
+
+
+def expected_data_identity(record: dict) -> dict:
+    """Build the declared generation identity for a stored case."""
+    feature_distribution, truth_name = record["case_id"].split("__")
+    return {
+        "generation_version": DATA_GENERATION_VERSION,
+        "case_id": record["case_id"],
+        "feature_distribution": feature_distribution,
+        "rho_true": list(TRUTHS[truth_name]),
+        "n_samples": N_SAMPLES,
+        "seed": SEED,
+        "label_seed_sequence": [SEED, 0, 1],
+        "data_digest": record["data_digest"],
+    }
+
+
+def validate_stored_data(record: dict) -> None:
+    """Validate one stored dataset and its continuous diagnostic."""
+    case_id = record.get("case_id")
+    if record.get("record_version") != SYNTHETIC_RECORD_VERSION:
+        raise ValueError(f"{case_id} has an unsupported record version")
+    if case_id not in baseline_case_ids():
+        raise ValueError(f"unknown baseline case: {case_id}")
+    X = record.get("X")
+    y = record.get("y")
+    variable_names = record.get("variable_names")
+    outcome_name = record.get("outcome_name")
+    if not isinstance(X, np.ndarray) or X.shape != (N_SAMPLES, 4):
+        raise ValueError(f"{case_id} X has the wrong shape")
+    if not isinstance(y, np.ndarray) or y.shape != (N_SAMPLES,):
+        raise ValueError(f"{case_id} y has the wrong shape")
+    if len(variable_names) != 4 or outcome_name != "y":
+        raise ValueError(f"{case_id} feature or outcome metadata is invalid")
+    data_digest = compute_data_digest(X, y, variable_names, outcome_name)
+    if record.get("data_digest") != data_digest:
+        raise ValueError(f"{case_id} data digest does not match")
+    if record.get("data_identity") != expected_data_identity(record):
+        raise ValueError(f"{case_id} data identity does not match")
+    if not np.array_equal(record.get("rho_true"), record["data_identity"]["rho_true"]):
+        raise ValueError(f"{case_id} planted coefficients do not match")
+
+    continuous_reference = record.get("continuous_reference")
+    fractional_truth = not np.array_equal(record["rho_true"], np.rint(record["rho_true"]))
+    if not fractional_truth:
+        if continuous_reference is not None:
+            raise ValueError(f"{case_id} should not have a continuous diagnostic")
+    elif (
+        not isinstance(continuous_reference, dict)
+        or not continuous_reference.get("converged")
+        or not np.isfinite(continuous_reference.get("pure_logistic_loss", np.nan))
+        or not np.isfinite(continuous_reference.get("rho", np.nan)).all()
+        or continuous_reference.get("gradient_infinity_norm", np.inf) > 1e-6
+        or continuous_reference.get("identity", {}).get("data_digest") != data_digest
+    ):
+        raise ValueError(f"{case_id} continuous diagnostic is invalid")
+
+
+def expected_loss_identity(record: dict, model_type: str, task: dict) -> dict:
+    """Build the loss identity that must accompany cached arrays."""
+    return {
+        "algorithm_version": ORACLE_ALGORITHM_VERSION,
+        "data_identity": record["data_identity"],
+        "data_digest": record["data_digest"],
+        "model_type": model_type,
+        "effective_integer_lower_bounds": task["effective_integer_lower_bounds"].tolist(),
+        "effective_integer_upper_bounds": task["effective_integer_upper_bounds"].tolist(),
+    }
+
+
+def validate_stored_task(record: dict, model_type: str) -> dict:
+    """Validate cached bounds and every exact loss array without enumerating."""
+    case_id = record["case_id"]
+    task = record.get("tasks", {}).get(model_type)
+    if not isinstance(task, dict):
+        raise ValueError(f"{case_id} is missing {model_type}")
+    feature_bounds = MODEL_FEATURE_BOUNDS[model_type]
+    expected_coefficients = build_feature_coefficients(feature_bounds)
+    if not np.array_equal(task.get("feature_coefficients"), expected_coefficients):
+        raise ValueError(f"{case_id} {model_type} coefficient grid does not match")
+    expected_bounds = determine_coefficient_bounds(record, feature_bounds)
+    for name, expected in expected_bounds.items():
+        if not np.array_equal(task.get(name), expected):
+            raise ValueError(f"{case_id} {model_type} {name} does not match")
+    validate_loss_arrays(
+        task["feature_coefficients"],
+        task["optimal_intercepts"],
+        task["pure_logistic_losses"],
+        task["supports"],
+        task["intercept_tie_multiplicities"],
+        task["effective_integer_lower_bounds"],
+        task["effective_integer_upper_bounds"],
+    )
+    expected_identity = expected_loss_identity(record, model_type, task)
+    stored_identity = task.get("loss_identity")
+    if stored_identity != expected_identity:
+        raise ValueError(f"{case_id} {model_type} loss identity does not match")
+    stored_digest = task.get("loss_identity_digest")
+    if stored_digest != identity_digest(stored_identity):
+        raise ValueError(f"{case_id} {model_type} loss identity digest does not match")
+    if not task.get("coverage", {}).get("proven_complete"):
+        raise ValueError(f"{case_id} {model_type} is not marked complete")
+    return expected_identity
+
+
+def validate_queries(task: dict) -> None:
+    """Compare stored queries with fresh queries over the cached loss arrays."""
+    expected = select_queries(
+        task["loss_identity_digest"],
+        task["feature_coefficients"],
+        task["optimal_intercepts"],
+        task["pure_logistic_losses"],
+        task["supports"],
+    )
+    actual = task.get("queries")
+    if not isinstance(actual, dict) or set(actual) != set(expected):
+        raise ValueError("stored query grid does not match")
+    for key, expected_query in expected.items():
+        actual_query = actual[key]
+        if not np.array_equal(
+            actual_query.get("representative_rho"), expected_query["representative_rho"]
+        ):
+            raise ValueError(f"query {key} representative does not match")
+        for name, value in expected_query.items():
+            if name != "representative_rho" and actual_query.get(name) != value:
+                raise ValueError(f"query {key} {name} does not match")
+    validate_query_paths(actual)
+
+
+def validate_synthetic_oracles(store: dict) -> None:
+    """Validate every admitted baseline record, loss table, and query."""
+    synthetic_oracles = store["synthetic_oracles"]
+    if set(synthetic_oracles) != set(baseline_case_ids()):
+        raise ValueError("stored synthetic cases do not match the admitted baseline")
+    for case_id in baseline_case_ids():
+        record = synthetic_oracles[case_id]
+        validate_stored_data(record)
+        if not record.get("profiler_diagnostics", {}).get("passed"):
+            raise ValueError(f"{case_id} profiler diagnostics did not pass")
+        if set(record.get("tasks", {})) != set(MODEL_FEATURE_BOUNDS):
+            raise ValueError(f"{case_id} task profiles do not match")
+        for model_type in MODEL_FEATURE_BOUNDS:
+            validate_stored_task(record, model_type)
+            validate_queries(record["tasks"][model_type])
+
+
+def refresh_queries(store: dict) -> None:
+    """Rebuild queries from validated cached losses."""
+    synthetic_oracles = store["synthetic_oracles"]
+    if set(synthetic_oracles) != set(baseline_case_ids()):
+        raise ValueError("stored synthetic cases do not match the admitted baseline")
+    for case_id in baseline_case_ids():
+        record = synthetic_oracles[case_id]
+        validate_stored_data(record)
+        for model_type in MODEL_FEATURE_BOUNDS:
+            task = record["tasks"][model_type]
+            validate_stored_task(record, model_type)
+            task["queries"] = select_queries(
+                task["loss_identity_digest"],
+                task["feature_coefficients"],
+                task["optimal_intercepts"],
+                task["pure_logistic_losses"],
+                task["supports"],
+            )
+            validate_queries(task)
+
+
 def parse_args() -> argparse.Namespace:
-    """Parse the test-case store path."""
+    """Parse validation or explicit baseline regeneration."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_PATH)
+    operation = parser.add_mutually_exclusive_group()
+    operation.add_argument("--regenerate", action="store_true")
+    operation.add_argument("--refresh-queries", action="store_true")
+    parser.add_argument("--case", choices=baseline_case_ids())
     return parser.parse_args()
 
 
 def main() -> None:
-    """Validate the store without changing its known-reference records."""
+    """Validate the store or regenerate the selected exact baseline records."""
     args = parse_args()
-    output_path = args.output.resolve()
-    if not output_path.exists():
-        raise FileNotFoundError(
-            "known expectations cannot be recomputed; restore the checked-in store with "
-            "`git restore tests/training_test_cases.pkl`"
+    store = load_store()
+    if args.case and not args.regenerate:
+        raise ValueError("--case requires --regenerate")
+    if args.refresh_queries:
+        started = time.perf_counter()
+        known_reference_bytes = pickle.dumps(
+            store["known_reference_results"], protocol=pickle.HIGHEST_PROTOCOL
         )
-    store = load_store(output_path)
-    print(
-        f"validated {output_path}; preserved "
-        f"{len(store['known_reference_results'])} known-reference records"
+        refresh_queries(store)
+        if known_reference_bytes != pickle.dumps(
+            store["known_reference_results"], protocol=pickle.HIGHEST_PROTOCOL
+        ):
+            raise AssertionError("known-reference records changed during query refresh")
+        write_store(store)
+        validate_synthetic_oracles(store)
+        print(
+            f"refreshed queries for {len(store['synthetic_oracles'])} records in "
+            f"{time.perf_counter() - started:.2f}s without loss enumeration"
+        )
+        return
+    if not args.regenerate:
+        started = time.perf_counter()
+        validate_synthetic_oracles(store)
+        print(
+            f"validated {len(store['synthetic_oracles'])} synthetic records in "
+            f"{time.perf_counter() - started:.2f}s"
+        )
+        return
+    diagnostics = validate_intercept_profiler()
+    selected_case_ids = (args.case,) if args.case else baseline_case_ids()
+    preflights = {case_id: preflight_case(case_id) for case_id in selected_case_ids}
+    known_reference_bytes = pickle.dumps(
+        store["known_reference_results"], protocol=pickle.HIGHEST_PROTOCOL
     )
+    synthetic_oracles = dict(store["synthetic_oracles"]) if args.case else {}
+    for case_id in selected_case_ids:
+        synthetic_oracles[case_id] = generate_case_record(case_id, preflights[case_id], diagnostics)
+    store["synthetic_oracles"] = synthetic_oracles
+    if known_reference_bytes != pickle.dumps(
+        store["known_reference_results"], protocol=pickle.HIGHEST_PROTOCOL
+    ):
+        raise AssertionError("known-reference records changed during synthetic regeneration")
+    write_store(store)
+    print(f"saved {TEST_CASE_PATH} with {len(synthetic_oracles)} synthetic records")
 
 
 if __name__ == "__main__":
