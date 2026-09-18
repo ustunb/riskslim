@@ -39,8 +39,6 @@ BENCHMARK_VECTORS = 256
 MAX_PROFILE_WORKSPACE_BYTES = 512 * 1024**2
 PROFILE_WORKSPACE_ARRAY_MULTIPLIER = 6
 INTERCEPT_DELTA_EXPONENT = math.expm1(1.0)
-C0_VALUES = (1e-6, 0.01, 0.1, 1.0)
-MAX_SIZES = (4, 2, 1, 0)
 MODEL_FEATURE_BOUNDS = {"risk-score": (-5, 5), "checklist": (-1, 1)}
 TRUTHS = {
     "integer": (-1.0, 1.0, 2.0, 3.0, 4.0),
@@ -49,33 +47,46 @@ TRUTHS = {
 }
 FEATURE_DISTRIBUTIONS = ("binary", "continuous", "mixed")
 REDUNDANT_FEATURES = ("duplicates", "noisy_duplicates")
+BINARY_FEATURE_PROBABILITY = 0.5
+CONTINUOUS_FEATURE_STANDARD_DEVIATION = 2.0
+LABEL_SEED_SEQUENCE = [SEED, 0, 1]
 NOISE_SEED_SEQUENCE = [SEED, 1, 2]
 BIT_FLIP_PROBABILITY = 0.05
 GAUSSIAN_NOISE_STANDARD_DEVIATION = 0.25
+CONTINUOUS_REFERENCE_TOLERANCE = 1e-12
+CONTINUOUS_REFERENCE_MAX_ITERATIONS = 10_000
+PROVISIONAL_REDUNDANCY_PENALTY = 0.01
+ALTERNATIVE_REDUNDANCY_PENALTIES = (0.1, 0.03)
+C0_VALUES = (1e-6, PROVISIONAL_REDUNDANCY_PENALTY, 0.1, 1.0)
 CERTIFICATE_GAP_TOLERANCE = 1e-6
+CONTINUOUS_GRADIENT_TOLERANCE = 1e-6
+QUERY_PATH_TOLERANCE = 5e-14
+PROFILE_COMPARISON_TOLERANCE = 2e-15
+BASE_FEATURE_COUNT = len(next(iter(TRUTHS.values()))) - 1
+REDUNDANT_FEATURE_COUNT = 2 * BASE_FEATURE_COUNT
+FIXED_SIZE_LIMITS = (2, 1, 0)
+MAX_SIZES = (BASE_FEATURE_COUNT, *FIXED_SIZE_LIMITS)
+REDUNDANT_MAX_SIZES = (REDUNDANT_FEATURE_COUNT, *FIXED_SIZE_LIMITS)
+MODEL_GENERATION_ORDER = ("checklist", "risk-score")
+BASELINE_CASE_IDS = tuple(
+    f"{feature_distribution}__{truth_name}"
+    for feature_distribution in FEATURE_DISTRIBUTIONS
+    for truth_name in TRUTHS
+)
+REDUNDANT_CASE_IDS = tuple(
+    f"{case_id}__{redundant_features}"
+    for case_id in BASELINE_CASE_IDS
+    for redundant_features in REDUNDANT_FEATURES
+)
+ALL_CASE_IDS = BASELINE_CASE_IDS + REDUNDANT_CASE_IDS
 
 
-def baseline_case_ids() -> tuple[str, ...]:
-    """Return the admitted independent feature-by-truth baseline."""
-    return tuple(
-        f"{feature_distribution}__{truth_name}"
-        for feature_distribution in FEATURE_DISTRIBUTIONS
-        for truth_name in TRUTHS
-    )
-
-
-def redundant_case_ids() -> tuple[str, ...]:
-    """Return the approved duplicate and noisy-duplicate case IDs."""
-    return tuple(
-        f"{case_id}__{redundant_features}"
-        for case_id in baseline_case_ids()
-        for redundant_features in REDUNDANT_FEATURES
-    )
-
-
-def all_case_ids() -> tuple[str, ...]:
-    """Return every admitted synthetic case ID."""
-    return baseline_case_ids() + redundant_case_ids()
+ARGUMENT_PARSER = argparse.ArgumentParser(description=__doc__)
+OPERATION_ARGUMENTS = ARGUMENT_PARSER.add_mutually_exclusive_group()
+OPERATION_ARGUMENTS.add_argument("--regenerate", action="store_true")
+OPERATION_ARGUMENTS.add_argument("--refresh-queries", action="store_true")
+OPERATION_ARGUMENTS.add_argument("--preflight", action="store_true")
+ARGUMENT_PARSER.add_argument("--case", choices=ALL_CASE_IDS)
 
 
 def load_store() -> dict:
@@ -128,6 +139,50 @@ def identity_digest(identity: dict) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def build_data_identity(case_id: str, data_digest: str) -> dict:
+    """Build the stable identity for one baseline dataset."""
+    feature_distribution, truth_name = case_id.split("__")
+    return {
+        "generation_version": DATA_GENERATION_VERSION,
+        "case_id": case_id,
+        "feature_distribution": feature_distribution,
+        "rho_true": list(TRUTHS[truth_name]),
+        "n_samples": N_SAMPLES,
+        "seed": SEED,
+        "label_seed_sequence": list(LABEL_SEED_SEQUENCE),
+        "data_digest": data_digest,
+    }
+
+
+def redundant_perturbation(redundant_features: str) -> dict:
+    """Describe the deterministic duplicate transformation."""
+    if redundant_features == "duplicates":
+        return {"kind": "exact_copy"}
+    return {
+        "kind": "distribution_specific_noise",
+        "seed_sequence": NOISE_SEED_SEQUENCE,
+        "binary_bit_flip_probability": BIT_FLIP_PROBABILITY,
+        "continuous_gaussian_standard_deviation": GAUSSIAN_NOISE_STANDARD_DEVIATION,
+    }
+
+
+def build_redundant_data_identity(source: dict, redundant_features: str, data_digest: str) -> dict:
+    """Build the stable identity for one redundant-feature dataset."""
+    return {
+        "generation_version": REDUNDANT_DATA_GENERATION_VERSION,
+        "case_id": f"{source['case_id']}__{redundant_features}",
+        "source_case_id": source["case_id"],
+        "source_data_digest": source["data_digest"],
+        "feature_distribution": source["data_identity"]["feature_distribution"],
+        "rho_true": source["rho_true"].tolist(),
+        "n_samples": N_SAMPLES,
+        "redundant_features": redundant_features,
+        "perturbation": redundant_perturbation(redundant_features),
+        "labels_from_clean_features": True,
+        "data_digest": data_digest,
+    }
+
+
 def values_match(left, right) -> bool:
     """Compare nested cache metadata, including NumPy arrays."""
     if isinstance(left, np.ndarray) or isinstance(right, np.ndarray):
@@ -161,33 +216,29 @@ def generate_data(case_id: str) -> dict:
     truth = np.asarray(TRUTHS[truth_name], dtype=np.float64)
     feature_rng = np.random.default_rng(SEED)
     if feature_distribution == "binary":
-        X = feature_rng.binomial(1, 0.5, size=(N_SAMPLES, 4)).astype(np.int8)
-        variable_names = tuple(f"binary_{index}" for index in range(1, 5))
+        X = feature_rng.binomial(
+            1, BINARY_FEATURE_PROBABILITY, size=(N_SAMPLES, BASE_FEATURE_COUNT)
+        ).astype(np.int8)
+        variable_names = tuple(f"binary_{index}" for index in range(1, BASE_FEATURE_COUNT + 1))
     elif feature_distribution == "continuous":
-        X = feature_rng.normal(0.0, 2.0, size=(N_SAMPLES, 4))
-        variable_names = tuple(f"continuous_{index}" for index in range(1, 5))
+        X = feature_rng.normal(
+            0.0, CONTINUOUS_FEATURE_STANDARD_DEVIATION, size=(N_SAMPLES, BASE_FEATURE_COUNT)
+        )
+        variable_names = tuple(f"continuous_{index}" for index in range(1, BASE_FEATURE_COUNT + 1))
     else:
-        binary = feature_rng.binomial(1, 0.5, size=(N_SAMPLES, 2))
-        continuous = feature_rng.normal(0.0, 2.0, size=(N_SAMPLES, 2))
+        binary = feature_rng.binomial(1, BINARY_FEATURE_PROBABILITY, size=(N_SAMPLES, 2))
+        continuous = feature_rng.normal(
+            0.0, CONTINUOUS_FEATURE_STANDARD_DEVIATION, size=(N_SAMPLES, 2)
+        )
         X = np.hstack((binary, continuous)).astype(np.float64)
         variable_names = ("binary_1", "binary_2", "continuous_1", "continuous_2")
 
-    label_seed_sequence = [SEED, 0, 1]
-    label_rng = np.random.default_rng(np.random.SeedSequence(label_seed_sequence))
+    label_rng = np.random.default_rng(np.random.SeedSequence(LABEL_SEED_SEQUENCE))
     probabilities = expit(truth[0] + X @ truth[1:])
     y = label_rng.binomial(1, probabilities).astype(np.int8)
     outcome_name = "y"
     data_digest = compute_data_digest(X, y, variable_names, outcome_name)
-    data_identity = {
-        "generation_version": DATA_GENERATION_VERSION,
-        "case_id": case_id,
-        "feature_distribution": feature_distribution,
-        "rho_true": truth.tolist(),
-        "n_samples": N_SAMPLES,
-        "seed": SEED,
-        "label_seed_sequence": label_seed_sequence,
-        "data_digest": data_digest,
-    }
+    data_identity = build_data_identity(case_id, data_digest)
     return {
         "case_id": case_id,
         "X": X,
@@ -207,20 +258,19 @@ def generate_redundant_data(source: dict, redundant_features: str) -> dict:
     clean_X = source["X"]
     if redundant_features == "duplicates":
         copied_X = clean_X.copy()
-        perturbation = {"kind": "exact_copy"}
     else:
         feature_distribution = source["data_identity"]["feature_distribution"]
         noise_rng = np.random.default_rng(np.random.SeedSequence(NOISE_SEED_SEQUENCE))
         copied_X = clean_X.astype(np.float64, copy=True)
         if feature_distribution == "binary":
-            binary_columns = range(4)
+            binary_columns = range(BASE_FEATURE_COUNT)
             continuous_columns = ()
         elif feature_distribution == "continuous":
             binary_columns = ()
-            continuous_columns = range(4)
+            continuous_columns = range(BASE_FEATURE_COUNT)
         else:
             binary_columns = range(2)
-            continuous_columns = range(2, 4)
+            continuous_columns = range(BASE_FEATURE_COUNT // 2, BASE_FEATURE_COUNT)
         if binary_columns:
             flips = noise_rng.binomial(
                 1, BIT_FLIP_PROBABILITY, size=(N_SAMPLES, len(binary_columns))
@@ -234,12 +284,6 @@ def generate_redundant_data(source: dict, redundant_features: str) -> dict:
             )
         if feature_distribution == "binary":
             copied_X = copied_X.astype(np.int8)
-        perturbation = {
-            "kind": "distribution_specific_noise",
-            "seed_sequence": NOISE_SEED_SEQUENCE,
-            "binary_bit_flip_probability": BIT_FLIP_PROBABILITY,
-            "continuous_gaussian_standard_deviation": GAUSSIAN_NOISE_STANDARD_DEVIATION,
-        }
 
     X = np.hstack((clean_X, copied_X))
     suffix = "duplicate" if redundant_features == "duplicates" else "noisy_duplicate"
@@ -248,19 +292,7 @@ def generate_redundant_data(source: dict, redundant_features: str) -> dict:
     )
     case_id = f"{source['case_id']}__{redundant_features}"
     data_digest = compute_data_digest(X, source["y"], variable_names, source["outcome_name"])
-    data_identity = {
-        "generation_version": REDUNDANT_DATA_GENERATION_VERSION,
-        "case_id": case_id,
-        "source_case_id": source["case_id"],
-        "source_data_digest": source["data_digest"],
-        "feature_distribution": source["data_identity"]["feature_distribution"],
-        "rho_true": source["rho_true"].tolist(),
-        "n_samples": N_SAMPLES,
-        "redundant_features": redundant_features,
-        "perturbation": perturbation,
-        "labels_from_clean_features": True,
-        "data_digest": data_digest,
-    }
+    data_identity = build_redundant_data_identity(source, redundant_features, data_digest)
     return {
         "case_id": case_id,
         "source_case_id": source["case_id"],
@@ -271,7 +303,7 @@ def generate_redundant_data(source: dict, redundant_features: str) -> dict:
         "outcome_name": source["outcome_name"],
         "data_digest": data_digest,
         "data_identity": data_identity,
-        "rho_true": np.r_[source["rho_true"], np.zeros(4)],
+        "rho_true": np.r_[source["rho_true"], np.zeros(BASE_FEATURE_COUNT)],
         "source_rho_true": source["rho_true"].copy(),
     }
 
@@ -308,7 +340,9 @@ def determine_coefficient_bounds(data: dict, feature_bounds: tuple[int, int]) ->
     }
 
 
-def build_feature_coefficients(feature_bounds: tuple[int, int], n_features: int = 4) -> np.ndarray:
+def build_feature_coefficients(
+    feature_bounds: tuple[int, int], n_features: int = BASE_FEATURE_COUNT
+) -> np.ndarray:
     """Materialize every bounded integer feature vector compactly."""
     values = range(feature_bounds[0], feature_bounds[1] + 1)
     coefficients = np.fromiter(
@@ -334,10 +368,10 @@ def minimum_grouped_pair_violating_supports(
     coefficients: np.ndarray, feature_bound: int
 ) -> np.ndarray:
     """Return minimum supports among original splits selecting both members of a pair."""
-    pair_sums = coefficients[:, :4] + coefficients[:, 4:]
-    pair_supports = (coefficients[:, :4] != 0).astype(np.uint8) + (coefficients[:, 4:] != 0).astype(
-        np.uint8
-    )
+    pair_sums = coefficients[:, :BASE_FEATURE_COUNT] + coefficients[:, BASE_FEATURE_COUNT:]
+    pair_supports = (coefficients[:, :BASE_FEATURE_COUNT] != 0).astype(np.uint8) + (
+        coefficients[:, BASE_FEATURE_COUNT:] != 0
+    ).astype(np.uint8)
     nonzero_values = [value for value in range(-feature_bound, feature_bound + 1) if value]
     sums_with_two_nonzero_terms = {
         left + right for left in nonzero_values for right in nonzero_values
@@ -402,7 +436,7 @@ def validate_intercept_profiler() -> dict:
         minimizers = set(np.arange(-2, 3)[direct_losses == minimum_loss].tolist())
         if minimizers != expected_minimizers or int(intercepts[0]) not in minimizers:
             raise AssertionError(f"intercept profiler failed {name}")
-        if not np.isclose(losses[0], minimum_loss, rtol=0.0, atol=2e-15):
+        if not np.isclose(losses[0], minimum_loss, rtol=0.0, atol=PROFILE_COMPARISON_TOLERANCE):
             raise AssertionError(f"intercept profiler loss failed {name}")
         results[name] = sorted(minimizers)
 
@@ -421,7 +455,7 @@ def validate_intercept_profiler() -> dict:
             ]
         )
         best_loss = np.min(direct_losses)
-        if not np.isclose(losses[index], best_loss, rtol=0.0, atol=2e-15):
+        if not np.isclose(losses[index], best_loss, rtol=0.0, atol=PROFILE_COMPARISON_TOLERANCE):
             raise AssertionError("profiled loss disagrees with direct enumeration")
         if int(intercepts[index]) not in direct_intercepts[direct_losses == best_loss]:
             raise AssertionError("profiled intercept is not a direct minimizer")
@@ -431,10 +465,10 @@ def validate_intercept_profiler() -> dict:
 def validate_duplicate_grouping() -> dict:
     """Exhaustively compare grouped and direct duplicate grids at a small bound."""
     rng = np.random.default_rng(3107)
-    clean_X = rng.normal(size=(31, 4))
+    clean_X = rng.normal(size=(31, BASE_FEATURE_COUNT))
     X = np.hstack((clean_X, clean_X))
     y = rng.binomial(1, expit(-0.2 + clean_X @ np.array([0.8, -0.6, 0.4, 1.1])))
-    direct_coefficients = build_feature_coefficients((-1, 1), n_features=8)
+    direct_coefficients = build_feature_coefficients((-1, 1), n_features=REDUNDANT_FEATURE_COUNT)
     pair_sums, grouped_coefficients, grouped_supports = build_duplicate_group_coefficients((-1, 1))
     direct_intercepts, direct_losses, _ = profile_integer_intercepts(
         X @ direct_coefficients.T, y, -5, 5
@@ -445,10 +479,13 @@ def validate_duplicate_grouping() -> dict:
     grouped_indices = {tuple(pair_sum): index for index, pair_sum in enumerate(pair_sums)}
     minimum_direct_supports = np.full(len(pair_sums), 9, dtype=np.uint8)
     for coefficient_index, coefficient in enumerate(direct_coefficients):
-        pair_sum = coefficient[:4] + coefficient[4:]
+        pair_sum = coefficient[:BASE_FEATURE_COUNT] + coefficient[BASE_FEATURE_COUNT:]
         grouped_index = grouped_indices[tuple(pair_sum)]
         if not np.isclose(
-            direct_losses[coefficient_index], grouped_losses[grouped_index], rtol=0.0, atol=2e-15
+            direct_losses[coefficient_index],
+            grouped_losses[grouped_index],
+            rtol=0.0,
+            atol=PROFILE_COMPARISON_TOLERANCE,
         ):
             raise AssertionError("duplicate grouping changed a profiled loss")
         if direct_intercepts[coefficient_index] != grouped_intercepts[grouped_index]:
@@ -462,13 +499,15 @@ def validate_duplicate_grouping() -> dict:
 
     direct_supports = np.count_nonzero(direct_coefficients, axis=1).astype(np.uint8)
     direct_violates_pair = np.any(
-        (direct_coefficients[:, :4] != 0) & (direct_coefficients[:, 4:] != 0), axis=1
+        (direct_coefficients[:, :BASE_FEATURE_COUNT] != 0)
+        & (direct_coefficients[:, BASE_FEATURE_COUNT:] != 0),
+        axis=1,
     )
     grouped_violating_supports = minimum_grouped_pair_violating_supports(
         grouped_coefficients, feature_bound=1
     )
     for c0_value in C0_VALUES:
-        for max_size in (8, 2, 1, 0):
+        for max_size in REDUNDANT_MAX_SIZES:
             direct_feasible = direct_supports <= max_size
             grouped_feasible = grouped_supports <= max_size
             direct_objective = np.min(
@@ -477,7 +516,12 @@ def validate_duplicate_grouping() -> dict:
             grouped_objective = np.min(
                 grouped_losses[grouped_feasible] + c0_value * grouped_supports[grouped_feasible]
             )
-            if not np.isclose(direct_objective, grouped_objective, rtol=0.0, atol=2e-15):
+            if not np.isclose(
+                direct_objective,
+                grouped_objective,
+                rtol=0.0,
+                atol=PROFILE_COMPARISON_TOLERANCE,
+            ):
                 raise AssertionError("duplicate grouping changed a query optimum")
             direct_violating = direct_violates_pair & direct_feasible
             grouped_violating = grouped_violating_supports <= max_size
@@ -495,7 +539,7 @@ def validate_duplicate_grouping() -> dict:
                     direct_violating_objective,
                     grouped_violating_objective,
                     rtol=0.0,
-                    atol=2e-15,
+                    atol=PROFILE_COMPARISON_TOLERANCE,
                 ):
                     raise AssertionError("duplicate grouping changed pair-violation optimum")
     return {
@@ -503,8 +547,8 @@ def validate_duplicate_grouping() -> dict:
         "bound": [-1, 1],
         "direct_vectors_checked": int(len(direct_coefficients)),
         "grouped_states_checked": int(len(grouped_coefficients)),
-        "queries_checked": len(C0_VALUES) * 4,
-        "pair_violation_queries_checked": len(C0_VALUES) * 4,
+        "queries_checked": len(C0_VALUES) * len(REDUNDANT_MAX_SIZES),
+        "pair_violation_queries_checked": len(C0_VALUES) * len(REDUNDANT_MAX_SIZES),
     }
 
 
@@ -571,38 +615,49 @@ def select_queries(
     loss_digest, coefficients, intercepts, losses, supports, max_sizes=MAX_SIZES
 ) -> dict:
     """Answer every size and penalty query from one shared loss table."""
-    queries = {}
-    for c0_value in C0_VALUES:
-        for max_size in max_sizes:
-            feasible_indices = np.flatnonzero(supports <= max_size)
-            objectives = losses[feasible_indices] + c0_value * supports[feasible_indices]
-            local_index = int(np.argmin(objectives))
-            index = int(feasible_indices[local_index])
-            objective = float(objectives[local_index])
-            query_identity = {
-                "loss_identity_digest": loss_digest,
-                "c0": float(c0_value),
-                "max_size": int(max_size),
-            }
-            queries[(float(c0_value), int(max_size))] = {
-                "query_identity": query_identity,
-                "query_identity_digest": identity_digest(query_identity),
-                "representative_rho": np.r_[intercepts[index], coefficients[index]].astype(
-                    np.int16
-                ),
-                "pure_logistic_loss": float(losses[index]),
-                "penalty": float(c0_value * supports[index]),
-                "objective": objective,
-                "cardinality": int(supports[index]),
-                "representative_tie_count": int(np.count_nonzero(objectives == objective)),
-                "proven_complete": True,
-            }
-    return queries
+    return {
+        (float(c0_value), int(max_size)): select_query(
+            loss_digest,
+            coefficients,
+            intercepts,
+            losses,
+            supports,
+            c0_value,
+            max_size,
+        )
+        for c0_value in C0_VALUES
+        for max_size in max_sizes
+    }
+
+
+def select_query(
+    loss_digest, coefficients, intercepts, losses, supports, c0_value, max_size
+) -> dict:
+    """Select one exact optimum from a cached loss table."""
+    feasible_indices = np.flatnonzero(supports <= max_size)
+    objectives = losses[feasible_indices] + c0_value * supports[feasible_indices]
+    index = int(feasible_indices[int(np.argmin(objectives))])
+    objective = float(losses[index] + c0_value * supports[index])
+    query_identity = {
+        "loss_identity_digest": loss_digest,
+        "c0": float(c0_value),
+        "max_size": int(max_size),
+    }
+    return {
+        "query_identity": query_identity,
+        "query_identity_digest": identity_digest(query_identity),
+        "representative_rho": np.r_[intercepts[index], coefficients[index]].astype(np.int16),
+        "pure_logistic_loss": float(losses[index]),
+        "penalty": float(c0_value * supports[index]),
+        "objective": objective,
+        "cardinality": int(supports[index]),
+        "representative_tie_count": int(np.count_nonzero(objectives == objective)),
+        "proven_complete": True,
+    }
 
 
 def validate_query_paths(queries: dict, max_sizes=MAX_SIZES) -> None:
     """Check exact-query monotonicity across the admitted paths."""
-    tolerance = 5e-14
     for max_size in max_sizes:
         path = [queries[(c0, max_size)] for c0 in C0_VALUES]
         support_path = [query["cardinality"] for query in path]
@@ -610,7 +665,8 @@ def validate_query_paths(queries: dict, max_sizes=MAX_SIZES) -> None:
         if any(right > left for left, right in zip(support_path, support_path[1:], strict=False)):
             raise AssertionError("support increased with c0")
         if any(
-            right + tolerance < left for left, right in zip(loss_path, loss_path[1:], strict=False)
+            right + QUERY_PATH_TOLERANCE < left
+            for left, right in zip(loss_path, loss_path[1:], strict=False)
         ):
             raise AssertionError("loss decreased with c0")
     for c0_value in C0_VALUES:
@@ -618,12 +674,13 @@ def validate_query_paths(queries: dict, max_sizes=MAX_SIZES) -> None:
         objective_path = [query["objective"] for query in path]
         loss_path = [query["pure_logistic_loss"] for query in path]
         if any(
-            right + tolerance < left
+            right + QUERY_PATH_TOLERANCE < left
             for left, right in zip(objective_path, objective_path[1:], strict=False)
         ):
             raise AssertionError("objective decreased as max size shrank")
         if any(
-            right + tolerance < left for left, right in zip(loss_path, loss_path[1:], strict=False)
+            right + QUERY_PATH_TOLERANCE < left
+            for left, right in zip(loss_path, loss_path[1:], strict=False)
         ):
             raise AssertionError("loss decreased as max size shrank")
     if any(queries[(1.0, max_size)]["cardinality"] != 0 for max_size in max_sizes):
@@ -639,8 +696,8 @@ def fit_continuous_reference(data: dict) -> dict | None:
         "method": "sklearn.LogisticRegression",
         "penalty": None,
         "solver": "lbfgs",
-        "tolerance": 1e-12,
-        "max_iterations": 10_000,
+        "tolerance": CONTINUOUS_REFERENCE_TOLERANCE,
+        "max_iterations": CONTINUOUS_REFERENCE_MAX_ITERATIONS,
     }
     started = time.perf_counter()
     model = LogisticRegression(
@@ -664,7 +721,11 @@ def fit_continuous_reference(data: dict) -> dict | None:
     signed_scores = (1.0 - 2.0 * data["y"]) * (rho[0] + data["X"] @ rho[1:])
     converged = bool(model.n_iter_[0] < model.max_iter)
     gradient_infinity_norm = float(np.max(np.abs(gradient)))
-    if not converged or not np.isfinite(rho).all() or gradient_infinity_norm > 1e-6:
+    if (
+        not converged
+        or not np.isfinite(rho).all()
+        or gradient_infinity_norm > CONTINUOUS_GRADIENT_TOLERANCE
+    ):
         raise AssertionError("continuous diagnostic did not reach a finite stationary fit")
     identity = {"data_digest": data["data_digest"], **settings}
     return {
@@ -680,47 +741,13 @@ def fit_continuous_reference(data: dict) -> dict | None:
     }
 
 
-def preflight_case(case_id: str) -> dict:
-    """Build and benchmark every exact profile before enumeration."""
-    data = generate_data(case_id)
-    batch_size = limited_batch_size(N_SAMPLES, CHUNK_SIZE)
-    profiles = {}
-    for model_type, feature_bounds in MODEL_FEATURE_BOUNDS.items():
-        bounds = determine_coefficient_bounds(data, feature_bounds)
-        coefficients = build_feature_coefficients(feature_bounds)
-        intercept_bounds = (
-            int(bounds["effective_integer_lower_bounds"][0]),
-            int(bounds["effective_integer_upper_bounds"][0]),
-        )
-        benchmark = benchmark_profile(
-            data["X"], data["y"], coefficients, intercept_bounds, BENCHMARK_VECTORS
-        )
-        nominal_models = len(coefficients) * (intercept_bounds[1] - intercept_bounds[0] + 1)
-        profiles[model_type] = {
-            "bounds": bounds,
-            "coefficients": coefficients,
-            "intercept_bounds": intercept_bounds,
-            "batch_size": batch_size,
-            "nominal_full_models": nominal_models,
-            "benchmark": benchmark,
-        }
-        print(
-            f"preflight {case_id} {model_type}: {len(coefficients):,} vectors, "
-            f"intercept [{intercept_bounds[0]}, {intercept_bounds[1]}], "
-            f"{nominal_models:,} nominal models, batch {batch_size}, "
-            f"estimate {benchmark['estimated_enumeration_seconds']:.1f}s",
-            flush=True,
-        )
-    return {"data": data, "profiles": profiles}
-
-
 def exact_strategy_for(data: dict, model_type: str) -> dict:
     """Declare the approved exact enumeration strategy for a redundant profile."""
     if data["redundant_features"] == "duplicates":
         return {
             "name": "duplicate-pair-group-sums",
-            "pair_count": 4,
-            "pairing": [[index, index + 4] for index in range(4)],
+            "pair_count": BASE_FEATURE_COUNT,
+            "pairing": [[index, index + BASE_FEATURE_COUNT] for index in range(BASE_FEATURE_COUNT)],
             "representative": "clip_pair_sum_then_assign_remainder",
             "support": "minimum_nonzero_coefficients_for_each_pair_sum",
         }
@@ -729,15 +756,24 @@ def exact_strategy_for(data: dict, model_type: str) -> dict:
     raise ValueError("no approved exact strategy for noisy-duplicate risk-score data")
 
 
-def preflight_redundant_case(source: dict, redundant_features: str) -> dict:
-    """Build and benchmark every approved redundant-feature exact profile."""
-    data = generate_redundant_data(source, redundant_features)
-    profiles = {}
+def preflight_case(case_id: str) -> dict:
+    """Build and benchmark every approved exact profile for one case."""
+    source = None
+    if case_id in BASELINE_CASE_IDS:
+        data = generate_data(case_id)
+    else:
+        source_case_id, redundant_features = case_id.rsplit("__", 1)
+        source = generate_data(source_case_id)
+        data = generate_redundant_data(source, redundant_features)
+
+    redundant_features = data.get("redundant_features")
     model_types = (
-        MODEL_FEATURE_BOUNDS if redundant_features == "duplicates" else {"checklist": (-1, 1)}
+        MODEL_FEATURE_BOUNDS
+        if redundant_features in (None, "duplicates")
+        else {"checklist": MODEL_FEATURE_BOUNDS["checklist"]}
     )
+    profiles = {}
     for model_type, feature_bounds in model_types.items():
-        strategy = exact_strategy_for(data, model_type)
         bounds = determine_coefficient_bounds(data, feature_bounds)
         if redundant_features == "duplicates":
             score_coefficients, coefficients, supports = build_duplicate_group_coefficients(
@@ -745,7 +781,7 @@ def preflight_redundant_case(source: dict, redundant_features: str) -> dict:
             )
             score_X = source["X"]
         else:
-            coefficients = build_feature_coefficients(feature_bounds, n_features=8)
+            coefficients = build_feature_coefficients(feature_bounds, n_features=data["X"].shape[1])
             score_coefficients = coefficients
             supports = np.count_nonzero(coefficients, axis=1).astype(np.uint8)
             score_X = data["X"]
@@ -757,30 +793,60 @@ def preflight_redundant_case(source: dict, redundant_features: str) -> dict:
         benchmark = benchmark_profile(
             score_X, data["y"], score_coefficients, intercept_bounds, BENCHMARK_VECTORS
         )
-        bounded_values = feature_bounds[1] - feature_bounds[0] + 1
-        nominal_models = bounded_values**8 * (intercept_bounds[1] - intercept_bounds[0] + 1)
-        profiles[model_type] = {
+        nominal_models = (feature_bounds[1] - feature_bounds[0] + 1) ** data["X"].shape[1] * (
+            intercept_bounds[1] - intercept_bounds[0] + 1
+        )
+        profile = {
             "bounds": bounds,
             "coefficients": coefficients,
-            "score_coefficients": score_coefficients,
-            "score_X": score_X,
-            "supports": supports,
             "intercept_bounds": intercept_bounds,
             "batch_size": batch_size,
             "nominal_full_models": nominal_models,
             "benchmark": benchmark,
-            "exact_strategy": strategy,
-            "max_sizes": (8, 2, 1, 0),
         }
+        strategy_message = ""
+        if redundant_features:
+            strategy = exact_strategy_for(data, model_type)
+            profile.update(
+                score_coefficients=score_coefficients,
+                score_X=score_X,
+                supports=supports,
+                exact_strategy=strategy,
+                max_sizes=REDUNDANT_MAX_SIZES,
+            )
+            strategy_message = f", strategy {strategy['name']}"
+        profiles[model_type] = profile
+        state_name = "exact states" if redundant_features else "vectors"
         print(
-            f"preflight {data['case_id']} {model_type}: {len(coefficients):,} exact states, "
+            f"preflight {case_id} {model_type}: {len(coefficients):,} {state_name}, "
             f"intercept [{intercept_bounds[0]}, {intercept_bounds[1]}], "
             f"{nominal_models:,} nominal models, batch {batch_size}, "
-            f"estimate {benchmark['estimated_enumeration_seconds']:.1f}s, "
-            f"strategy {strategy['name']}",
+            f"estimate {benchmark['estimated_enumeration_seconds']:.1f}s{strategy_message}",
             flush=True,
         )
     return {"data": data, "profiles": profiles}
+
+
+def preflight_cases(case_ids: tuple[str, ...]) -> dict:
+    """Preflight each selected baseline or redundant case."""
+    return {case_id: preflight_case(case_id) for case_id in case_ids}
+
+
+def build_loss_identity(
+    data: dict, model_type: str, bounds: dict, exact_strategy: dict | None = None
+) -> dict:
+    """Build the stable identity shared by generated and validated loss tables."""
+    identity = {
+        "algorithm_version": ORACLE_ALGORITHM_VERSION,
+        "data_identity": data["data_identity"],
+        "data_digest": data["data_digest"],
+        "model_type": model_type,
+        "effective_integer_lower_bounds": bounds["effective_integer_lower_bounds"].tolist(),
+        "effective_integer_upper_bounds": bounds["effective_integer_upper_bounds"].tolist(),
+    }
+    if exact_strategy is not None:
+        identity["exact_strategy"] = exact_strategy
+    return identity
 
 
 def generate_task_record(data: dict, model_type: str, profile: dict) -> dict:
@@ -808,17 +874,8 @@ def generate_task_record(data: dict, model_type: str, profile: dict) -> dict:
         bounds["effective_integer_lower_bounds"],
         bounds["effective_integer_upper_bounds"],
     )
-    loss_identity = {
-        "algorithm_version": ORACLE_ALGORITHM_VERSION,
-        "data_identity": data["data_identity"],
-        "data_digest": data["data_digest"],
-        "model_type": model_type,
-        "effective_integer_lower_bounds": bounds["effective_integer_lower_bounds"].tolist(),
-        "effective_integer_upper_bounds": bounds["effective_integer_upper_bounds"].tolist(),
-    }
     exact_strategy = profile.get("exact_strategy")
-    if exact_strategy is not None:
-        loss_identity["exact_strategy"] = exact_strategy
+    loss_identity = build_loss_identity(data, model_type, bounds, exact_strategy)
     loss_digest = identity_digest(loss_identity)
     max_sizes = profile.get("max_sizes", MAX_SIZES)
     queries = select_queries(
@@ -857,21 +914,11 @@ def generate_task_record(data: dict, model_type: str, profile: dict) -> dict:
     return record
 
 
-def generate_case_record(case_id: str, preflight: dict, diagnostics: dict) -> dict:
-    """Generate both bounded model tasks for one admitted dataset."""
-    data = preflight["data"]
-    started = time.perf_counter()
-    tasks = {}
-    for model_type, profile in preflight["profiles"].items():
-        task_started = time.perf_counter()
-        tasks[model_type] = generate_task_record(data, model_type, profile)
-        print(
-            f"generated {case_id} {model_type} in {time.perf_counter() - task_started:.1f}s",
-            flush=True,
-        )
-    return {
+def initialize_case_record(data: dict, diagnostics: dict) -> dict:
+    """Build the data and diagnostic fields shared by every case record."""
+    record = {
         "record_version": SYNTHETIC_RECORD_VERSION,
-        "case_id": case_id,
+        "case_id": data["case_id"],
         "X": data["X"],
         "y": data["y"],
         "variable_names": data["variable_names"],
@@ -880,10 +927,16 @@ def generate_case_record(case_id: str, preflight: dict, diagnostics: dict) -> di
         "data_digest": data["data_digest"],
         "data_identity": data["data_identity"],
         "continuous_reference": fit_continuous_reference(data),
-        "tasks": tasks,
+        "tasks": {},
         "profiler_diagnostics": diagnostics,
-        "generation_seconds": time.perf_counter() - started,
     }
+    if data.get("redundant_features"):
+        record.update(
+            source_case_id=data["source_case_id"],
+            redundant_features=data["redundant_features"],
+            source_rho_true=data["source_rho_true"],
+        )
+    return record
 
 
 def query_task(task: dict, c0_value: float, max_size: int) -> dict:
@@ -891,36 +944,22 @@ def query_task(task: dict, c0_value: float, max_size: int) -> dict:
     cached = task["queries"].get((c0_value, max_size))
     if cached is not None:
         return cached
-    coefficients = task["feature_coefficients"]
-    supports = task["supports"]
-    feasible_indices = np.flatnonzero(supports <= max_size)
-    objectives = (
-        task["pure_logistic_losses"][feasible_indices] + c0_value * supports[feasible_indices]
+    return select_query(
+        task["loss_identity_digest"],
+        task["feature_coefficients"],
+        task["optimal_intercepts"],
+        task["pure_logistic_losses"],
+        task["supports"],
+        c0_value,
+        max_size,
     )
-    local_index = int(np.argmin(objectives))
-    index = int(feasible_indices[local_index])
-    objective = float(objectives[local_index])
-    query_identity = {
-        "loss_identity_digest": task["loss_identity_digest"],
-        "c0": float(c0_value),
-        "max_size": int(max_size),
-    }
-    return {
-        "query_identity": query_identity,
-        "query_identity_digest": identity_digest(query_identity),
-        "representative_rho": np.r_[task["optimal_intercepts"][index], coefficients[index]].astype(
-            np.int16
-        ),
-        "pure_logistic_loss": float(task["pure_logistic_losses"][index]),
-        "penalty": float(c0_value * supports[index]),
-        "objective": objective,
-        "cardinality": int(supports[index]),
-        "representative_tie_count": int(np.count_nonzero(objectives == objective)),
-        "proven_complete": True,
-    }
 
 
-def build_redundancy_certificate(task: dict, c0_value: float = 0.01, max_size: int = 8) -> dict:
+def build_redundancy_certificate(
+    task: dict,
+    c0_value: float = PROVISIONAL_REDUNDANCY_PENALTY,
+    max_size: int = REDUNDANT_FEATURE_COUNT,
+) -> dict:
     """Certify whether a penalty removes unnecessary paired selections."""
     query = query_task(task, c0_value, max_size)
     coefficients = task["feature_coefficients"]
@@ -930,7 +969,9 @@ def build_redundancy_certificate(task: dict, c0_value: float = 0.01, max_size: i
         violating_supports = minimum_grouped_pair_violating_supports(coefficients, feature_bound)
         violates_pair_property = violating_supports <= max_size
     else:
-        paired_supports = (coefficients[:, :4] != 0) & (coefficients[:, 4:] != 0)
+        paired_supports = (coefficients[:, :BASE_FEATURE_COUNT] != 0) & (
+            coefficients[:, BASE_FEATURE_COUNT:] != 0
+        )
         violates_pair_property = np.any(paired_supports, axis=1) & (supports <= max_size)
         violating_supports = supports
     violating_objectives = task["pure_logistic_losses"] + c0_value * violating_supports
@@ -944,7 +985,11 @@ def build_redundancy_certificate(task: dict, c0_value: float = 0.01, max_size: i
     empty_gap = empty_objective - query["objective"]
     representative = query["representative_rho"][1:]
     selected_pair_members = [
-        [int(representative[index] != 0), int(representative[index + 4] != 0)] for index in range(4)
+        [
+            int(representative[index] != 0),
+            int(representative[index + BASE_FEATURE_COUNT] != 0),
+        ]
+        for index in range(BASE_FEATURE_COUNT)
     ]
     return {
         "c0": c0_value,
@@ -967,7 +1012,7 @@ def build_redundancy_certificate(task: dict, c0_value: float = 0.01, max_size: i
 
 def find_certifying_penalty(task: dict) -> dict | None:
     """Choose the first reported alternative with a nonempty pair-removal certificate."""
-    for c0_value in (0.1, 0.03):
+    for c0_value in ALTERNATIVE_REDUNDANCY_PENALTIES:
         certificate = build_redundancy_certificate(task, c0_value)
         if (
             certificate["nonempty_useful_support"]
@@ -997,76 +1042,41 @@ def attach_redundancy_evidence(task: dict) -> None:
     task["redundancy_evidence"] = {
         "provisional_c0_0.01": provisional,
         "certifying_penalty": certifying,
-        "certifying_query": query_task(task, c0_value, 8),
+        "certifying_query": query_task(task, c0_value, REDUNDANT_FEATURE_COUNT),
     }
 
 
-def initialize_redundant_case_record(data: dict, diagnostics: dict) -> dict:
-    """Build the shared metadata for one redundant-feature record."""
-    return {
-        "record_version": SYNTHETIC_RECORD_VERSION,
-        "case_id": data["case_id"],
-        "source_case_id": data["source_case_id"],
-        "redundant_features": data["redundant_features"],
-        "X": data["X"],
-        "y": data["y"],
-        "variable_names": data["variable_names"],
-        "outcome_name": data["outcome_name"],
-        "rho_true": data["rho_true"],
-        "source_rho_true": data["source_rho_true"],
-        "data_digest": data["data_digest"],
-        "data_identity": data["data_identity"],
-        "continuous_reference": fit_continuous_reference(data),
-        "tasks": {},
-        "profiler_diagnostics": diagnostics,
-    }
-
-
-def generate_redundant_case_record(preflight: dict, diagnostics: dict) -> dict:
-    """Generate approved exact tasks for one redundant-feature dataset."""
-    data = preflight["data"]
-    started = time.perf_counter()
-    record = initialize_redundant_case_record(data, diagnostics)
-    for model_type, profile in preflight["profiles"].items():
-        task_started = time.perf_counter()
-        task = generate_task_record(data, model_type, profile)
-        attach_redundancy_evidence(task)
-        certificate = task["redundancy_evidence"]["provisional_c0_0.01"]
-        record["tasks"][model_type] = task
-        print(
-            f"generated {data['case_id']} {model_type} in "
-            f"{time.perf_counter() - task_started:.1f}s; c0=.01 certificate "
-            f"nonempty={certificate['nonempty_useful_support']} "
-            f"one-per-pair={certificate['all_optima_drop_unneeded_pair_members']} "
-            f"gap={certificate['pair_violation_objective_gap']:.12g}",
-            flush=True,
-        )
-    record["generation_seconds"] = time.perf_counter() - started
-    return record
-
-
-def generate_redundant_case_records(preflights: dict, diagnostics: dict) -> dict:
-    """Generate all cheap checklist profiles before grouped risk-score profiles."""
+def generate_case_records(preflights: dict, diagnostics: dict) -> dict:
+    """Generate records with every cheap checklist profile before risk-score work."""
     started = {case_id: time.perf_counter() for case_id in preflights}
-    records = {}
-    for case_id, preflight in preflights.items():
-        records[case_id] = initialize_redundant_case_record(preflight["data"], diagnostics)
-    for model_type in ("checklist", "risk-score"):
+    records = {
+        case_id: initialize_case_record(preflight["data"], diagnostics)
+        for case_id, preflight in preflights.items()
+    }
+    for model_type in MODEL_GENERATION_ORDER:
         for case_id, preflight in preflights.items():
             profile = preflight["profiles"].get(model_type)
             if profile is None:
                 continue
             task_started = time.perf_counter()
             task = generate_task_record(preflight["data"], model_type, profile)
-            attach_redundancy_evidence(task)
+            redundant = bool(preflight["data"].get("redundant_features"))
+            if redundant:
+                attach_redundancy_evidence(task)
             records[case_id]["tasks"][model_type] = task
-            certificate = task["redundancy_evidence"]["provisional_c0_0.01"]
+            certificate_message = ""
+            if redundant:
+                certificate = task["redundancy_evidence"]["provisional_c0_0.01"]
+                certificate_message = (
+                    "; c0=.01 certificate "
+                    f"nonempty={certificate['nonempty_useful_support']} "
+                    "one-per-pair="
+                    f"{certificate['all_optima_drop_unneeded_pair_members']} "
+                    f"gap={certificate['pair_violation_objective_gap']:.12g}"
+                )
             print(
                 f"generated {case_id} {model_type} in "
-                f"{time.perf_counter() - task_started:.1f}s; c0=.01 certificate "
-                f"nonempty={certificate['nonempty_useful_support']} "
-                f"one-per-pair={certificate['all_optima_drop_unneeded_pair_members']} "
-                f"gap={certificate['pair_violation_objective_gap']:.12g}",
+                f"{time.perf_counter() - task_started:.1f}s{certificate_message}",
                 flush=True,
             )
     for case_id, record in records.items():
@@ -1074,69 +1084,39 @@ def generate_redundant_case_records(preflights: dict, diagnostics: dict) -> dict
     return records
 
 
-def expected_data_identity(record: dict) -> dict:
-    """Build the declared generation identity for a stored case."""
-    feature_distribution, truth_name = record["case_id"].split("__")
-    return {
-        "generation_version": DATA_GENERATION_VERSION,
-        "case_id": record["case_id"],
-        "feature_distribution": feature_distribution,
-        "rho_true": list(TRUTHS[truth_name]),
-        "n_samples": N_SAMPLES,
-        "seed": SEED,
-        "label_seed_sequence": [SEED, 0, 1],
-        "data_digest": record["data_digest"],
-    }
-
-
-def expected_redundant_data_identity(record: dict, source: dict) -> dict:
-    """Build the declared identity for one redundant-feature dataset."""
-    redundant_features = record["redundant_features"]
-    if redundant_features == "duplicates":
-        perturbation = {"kind": "exact_copy"}
-    else:
-        perturbation = {
-            "kind": "distribution_specific_noise",
-            "seed_sequence": NOISE_SEED_SEQUENCE,
-            "binary_bit_flip_probability": BIT_FLIP_PROBABILITY,
-            "continuous_gaussian_standard_deviation": GAUSSIAN_NOISE_STANDARD_DEVIATION,
-        }
-    return {
-        "generation_version": REDUNDANT_DATA_GENERATION_VERSION,
-        "case_id": record["case_id"],
-        "source_case_id": source["case_id"],
-        "source_data_digest": source["data_digest"],
-        "feature_distribution": source["data_identity"]["feature_distribution"],
-        "rho_true": source["rho_true"].tolist(),
-        "n_samples": N_SAMPLES,
-        "redundant_features": redundant_features,
-        "perturbation": perturbation,
-        "labels_from_clean_features": True,
-        "data_digest": record["data_digest"],
-    }
-
-
-def validate_stored_data(record: dict) -> None:
+def validate_stored_data(record: dict, source: dict | None = None) -> None:
     """Validate one stored dataset and its continuous diagnostic."""
     case_id = record.get("case_id")
     if record.get("record_version") != SYNTHETIC_RECORD_VERSION:
         raise ValueError(f"{case_id} has an unsupported record version")
-    if case_id not in baseline_case_ids():
+    if source is not None:
+        if case_id != f"{source['case_id']}__{record.get('redundant_features')}":
+            raise ValueError(f"{case_id} has inconsistent redundant-feature metadata")
+        expected = generate_redundant_data(source, record["redundant_features"])
+        for name in ("X", "y", "rho_true", "source_rho_true"):
+            if not np.array_equal(record.get(name), expected[name]):
+                raise ValueError(f"{case_id} {name} does not match deterministic generation")
+        for name in ("variable_names", "outcome_name", "data_digest", "data_identity"):
+            if record.get(name) != expected[name]:
+                raise ValueError(f"{case_id} {name} does not match deterministic generation")
+        validate_continuous_reference(record)
+        return
+    if case_id not in BASELINE_CASE_IDS:
         raise ValueError(f"unknown baseline case: {case_id}")
     X = record.get("X")
     y = record.get("y")
     variable_names = record.get("variable_names")
     outcome_name = record.get("outcome_name")
-    if not isinstance(X, np.ndarray) or X.shape != (N_SAMPLES, 4):
+    if not isinstance(X, np.ndarray) or X.shape != (N_SAMPLES, BASE_FEATURE_COUNT):
         raise ValueError(f"{case_id} X has the wrong shape")
     if not isinstance(y, np.ndarray) or y.shape != (N_SAMPLES,):
         raise ValueError(f"{case_id} y has the wrong shape")
-    if len(variable_names) != 4 or outcome_name != "y":
+    if len(variable_names) != BASE_FEATURE_COUNT or outcome_name != "y":
         raise ValueError(f"{case_id} feature or outcome metadata is invalid")
     data_digest = compute_data_digest(X, y, variable_names, outcome_name)
     if record.get("data_digest") != data_digest:
         raise ValueError(f"{case_id} data digest does not match")
-    if record.get("data_identity") != expected_data_identity(record):
+    if record.get("data_identity") != build_data_identity(case_id, record["data_digest"]):
         raise ValueError(f"{case_id} data identity does not match")
     if not np.array_equal(record.get("rho_true"), record["data_identity"]["rho_true"]):
         raise ValueError(f"{case_id} planted coefficients do not match")
@@ -1158,45 +1138,12 @@ def validate_continuous_reference(record: dict) -> None:
         or not continuous_reference.get("converged")
         or not np.isfinite(continuous_reference.get("pure_logistic_loss", np.nan))
         or not np.isfinite(continuous_reference.get("rho", np.nan)).all()
-        or continuous_reference.get("gradient_infinity_norm", np.inf) > 1e-6
+        or continuous_reference.get("gradient_infinity_norm", np.inf)
+        > CONTINUOUS_GRADIENT_TOLERANCE
         or continuous_reference.get("identity", {}).get("data_digest") != data_digest
         or np.asarray(continuous_reference.get("rho", [])).shape != (record["X"].shape[1] + 1,)
     ):
         raise ValueError(f"{case_id} continuous diagnostic is invalid")
-
-
-def validate_stored_redundant_data(record: dict, source: dict) -> None:
-    """Validate deterministic redundant data against its clean source."""
-    case_id = record.get("case_id")
-    if record.get("record_version") != SYNTHETIC_RECORD_VERSION:
-        raise ValueError(f"{case_id} has an unsupported record version")
-    if case_id != f"{source['case_id']}__{record.get('redundant_features')}":
-        raise ValueError(f"{case_id} has inconsistent redundant-feature metadata")
-    expected = generate_redundant_data(source, record["redundant_features"])
-    for name in ("X", "y", "rho_true", "source_rho_true"):
-        if not np.array_equal(record.get(name), expected[name]):
-            raise ValueError(f"{case_id} {name} does not match deterministic generation")
-    for name in ("variable_names", "outcome_name", "data_digest"):
-        if record.get(name) != expected[name]:
-            raise ValueError(f"{case_id} {name} does not match deterministic generation")
-    if record.get("data_identity") != expected_redundant_data_identity(record, source):
-        raise ValueError(f"{case_id} data identity does not match")
-    validate_continuous_reference(record)
-
-
-def expected_loss_identity(record: dict, model_type: str, task: dict) -> dict:
-    """Build the loss identity that must accompany cached arrays."""
-    identity = {
-        "algorithm_version": ORACLE_ALGORITHM_VERSION,
-        "data_identity": record["data_identity"],
-        "data_digest": record["data_digest"],
-        "model_type": model_type,
-        "effective_integer_lower_bounds": task["effective_integer_lower_bounds"].tolist(),
-        "effective_integer_upper_bounds": task["effective_integer_upper_bounds"].tolist(),
-    }
-    if record.get("redundant_features"):
-        identity["exact_strategy"] = exact_strategy_for(record, model_type)
-    return identity
 
 
 def validate_stored_task(record: dict, model_type: str) -> dict:
@@ -1232,7 +1179,8 @@ def validate_stored_task(record: dict, model_type: str) -> dict:
         task["effective_integer_lower_bounds"],
         task["effective_integer_upper_bounds"],
     )
-    expected_identity = expected_loss_identity(record, model_type, task)
+    strategy = exact_strategy_for(record, model_type) if record.get("redundant_features") else None
+    expected_identity = build_loss_identity(record, model_type, task, strategy)
     stored_identity = task.get("loss_identity")
     if stored_identity != expected_identity:
         raise ValueError(f"{case_id} {model_type} loss identity does not match")
@@ -1245,7 +1193,7 @@ def validate_stored_task(record: dict, model_type: str) -> dict:
         expected_strategy = exact_strategy_for(record, model_type)
         if task.get("exact_strategy") != expected_strategy:
             raise ValueError(f"{case_id} {model_type} exact strategy does not match")
-        if tuple(task.get("query_max_sizes", ())) != (8, 2, 1, 0):
+        if tuple(task.get("query_max_sizes", ())) != REDUNDANT_MAX_SIZES:
             raise ValueError(f"{case_id} {model_type} query sizes do not match")
     return expected_identity
 
@@ -1279,27 +1227,18 @@ def validate_queries(task: dict) -> None:
 def validate_synthetic_oracles(store: dict) -> None:
     """Validate every admitted record, loss table, and query."""
     synthetic_oracles = store["synthetic_oracles"]
-    if set(synthetic_oracles) != set(all_case_ids()):
+    if set(synthetic_oracles) != set(ALL_CASE_IDS):
         raise ValueError("stored synthetic cases do not match the admitted registry")
-    for case_id in baseline_case_ids():
+    for case_id in ALL_CASE_IDS:
         record = synthetic_oracles[case_id]
-        validate_stored_data(record)
-        if not record.get("profiler_diagnostics", {}).get("passed"):
-            raise ValueError(f"{case_id} profiler diagnostics did not pass")
-        if set(record.get("tasks", {})) != set(MODEL_FEATURE_BOUNDS):
-            raise ValueError(f"{case_id} task profiles do not match")
-        for model_type in MODEL_FEATURE_BOUNDS:
-            validate_stored_task(record, model_type)
-            validate_queries(record["tasks"][model_type])
-    for case_id in redundant_case_ids():
-        record = synthetic_oracles[case_id]
-        source = synthetic_oracles[record["source_case_id"]]
-        validate_stored_redundant_data(record, source)
+        redundant = bool(record.get("redundant_features"))
+        source = synthetic_oracles[record["source_case_id"]] if redundant else None
+        validate_stored_data(record, source)
         if not record.get("profiler_diagnostics", {}).get("passed"):
             raise ValueError(f"{case_id} profiler diagnostics did not pass")
         expected_models = (
             set(MODEL_FEATURE_BOUNDS)
-            if record["redundant_features"] == "duplicates"
+            if record.get("redundant_features") != "noisy_duplicates"
             else {"checklist"}
         )
         if set(record.get("tasks", {})) != expected_models:
@@ -1307,25 +1246,28 @@ def validate_synthetic_oracles(store: dict) -> None:
         for model_type, task in record["tasks"].items():
             validate_stored_task(record, model_type)
             validate_queries(task)
-            expected_task = dict(task)
-            attach_redundancy_evidence(expected_task)
-            if not values_match(
-                task.get("redundancy_evidence"), expected_task["redundancy_evidence"]
-            ):
-                raise ValueError(f"{case_id} {model_type} redundancy evidence does not match")
+            if redundant:
+                expected_task = dict(task)
+                attach_redundancy_evidence(expected_task)
+                if not values_match(
+                    task.get("redundancy_evidence"), expected_task["redundancy_evidence"]
+                ):
+                    raise ValueError(f"{case_id} {model_type} redundancy evidence does not match")
 
 
 def refresh_queries(store: dict) -> None:
     """Rebuild queries from validated cached losses."""
     synthetic_oracles = store["synthetic_oracles"]
-    if set(synthetic_oracles) != set(all_case_ids()):
+    if set(synthetic_oracles) != set(ALL_CASE_IDS):
         raise ValueError("stored synthetic cases do not match the admitted registry")
-    for case_id in all_case_ids():
+    for case_id in ALL_CASE_IDS:
         record = synthetic_oracles[case_id]
-        if record.get("redundant_features"):
-            validate_stored_redundant_data(record, synthetic_oracles[record["source_case_id"]])
-        else:
-            validate_stored_data(record)
+        source = (
+            synthetic_oracles[record["source_case_id"]]
+            if record.get("redundant_features")
+            else None
+        )
+        validate_stored_data(record, source)
         for model_type in record["tasks"]:
             task = record["tasks"][model_type]
             validate_stored_task(record, model_type)
@@ -1343,113 +1285,65 @@ def refresh_queries(store: dict) -> None:
             validate_queries(task)
 
 
-def parse_args() -> argparse.Namespace:
-    """Parse validation, preflight, or explicit regeneration."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    operation = parser.add_mutually_exclusive_group()
-    operation.add_argument("--regenerate", action="store_true")
-    operation.add_argument("--refresh-queries", action="store_true")
-    operation.add_argument("--preflight", action="store_true")
-    parser.add_argument("--case", choices=all_case_ids())
-    return parser.parse_args()
-
-
-def main() -> None:
-    """Validate the store or regenerate selected exact records."""
-    args = parse_args()
-    store = load_store()
-    if args.case and not (args.regenerate or args.preflight):
-        raise ValueError("--case requires --regenerate or --preflight")
-    if args.refresh_queries:
-        started = time.perf_counter()
-        known_reference_bytes = pickle.dumps(
-            store["known_reference_results"], protocol=pickle.HIGHEST_PROTOCOL
-        )
-        refresh_queries(store)
-        if known_reference_bytes != pickle.dumps(
-            store["known_reference_results"], protocol=pickle.HIGHEST_PROTOCOL
-        ):
-            raise AssertionError("known-reference records changed during query refresh")
-        validate_synthetic_oracles(store)
-        write_store(store)
-        print(
-            f"refreshed queries for {len(store['synthetic_oracles'])} records in "
-            f"{time.perf_counter() - started:.2f}s without loss enumeration"
-        )
-        return
-    if not args.regenerate:
-        if args.preflight:
-            selected_case_ids = (args.case,) if args.case else all_case_ids()
-            diagnostics = {
-                "passed": True,
-                "intercept_profiler": validate_intercept_profiler(),
-                "duplicate_grouping": validate_duplicate_grouping(),
-            }
-            preflights = {}
-            for case_id in selected_case_ids:
-                if case_id in baseline_case_ids():
-                    preflights[case_id] = preflight_case(case_id)
-                else:
-                    source_case_id, redundant_features = case_id.rsplit("__", 1)
-                    source = generate_data(source_case_id)
-                    preflights[case_id] = preflight_redundant_case(source, redundant_features)
-            estimate = sum(
-                profile["benchmark"]["estimated_enumeration_seconds"]
-                for preflight in preflights.values()
-                for profile in preflight["profiles"].values()
-            )
-            print(
-                f"preflight passed for {len(preflights)} records; "
-                f"estimated enumeration {estimate:.1f}s; diagnostics {diagnostics}",
-                flush=True,
-            )
-            return
-        started = time.perf_counter()
-        validate_synthetic_oracles(store)
-        print(
-            f"validated {len(store['synthetic_oracles'])} synthetic records in "
-            f"{time.perf_counter() - started:.2f}s"
-        )
-        return
-    diagnostics = {
+def build_profiler_diagnostics() -> dict:
+    """Run the independent profiler and duplicate-grouping microchecks."""
+    return {
         "passed": True,
         "intercept_profiler": validate_intercept_profiler(),
         "duplicate_grouping": validate_duplicate_grouping(),
     }
-    selected_case_ids = (args.case,) if args.case else all_case_ids()
-    preflights = {}
-    for case_id in selected_case_ids:
-        if case_id in baseline_case_ids():
-            preflights[case_id] = preflight_case(case_id)
-        else:
-            source_case_id, redundant_features = case_id.rsplit("__", 1)
-            source = generate_data(source_case_id)
-            preflights[case_id] = preflight_redundant_case(source, redundant_features)
+
+
+def run_preflight(case_id: str | None) -> None:
+    """Run diagnostics and report resource estimates without enumerating."""
+    diagnostics = build_profiler_diagnostics()
+    selected_case_ids = (case_id,) if case_id else ALL_CASE_IDS
+    preflights = preflight_cases(selected_case_ids)
+    estimate = sum(
+        profile["benchmark"]["estimated_enumeration_seconds"]
+        for preflight in preflights.values()
+        for profile in preflight["profiles"].values()
+    )
+    print(
+        f"preflight passed for {len(preflights)} records; "
+        f"estimated enumeration {estimate:.1f}s; diagnostics {diagnostics}",
+        flush=True,
+    )
+
+
+def refresh_store_queries(store: dict) -> None:
+    """Refresh and persist queries while protecting known-reference records."""
+    started = time.perf_counter()
+    known_reference_bytes = pickle.dumps(
+        store["known_reference_results"], protocol=pickle.HIGHEST_PROTOCOL
+    )
+    refresh_queries(store)
+    if known_reference_bytes != pickle.dumps(
+        store["known_reference_results"], protocol=pickle.HIGHEST_PROTOCOL
+    ):
+        raise AssertionError("known-reference records changed during query refresh")
+    validate_synthetic_oracles(store)
+    write_store(store)
+    print(
+        f"refreshed queries for {len(store['synthetic_oracles'])} records in "
+        f"{time.perf_counter() - started:.2f}s without loss enumeration"
+    )
+
+
+def regenerate_store(store: dict, case_id: str | None) -> None:
+    """Regenerate selected records while protecting every unselected section."""
+    diagnostics = build_profiler_diagnostics()
+    selected_case_ids = (case_id,) if case_id else ALL_CASE_IDS
+    preflights = preflight_cases(selected_case_ids)
     known_reference_bytes = pickle.dumps(
         store["known_reference_results"], protocol=pickle.HIGHEST_PROTOCOL
     )
     baseline_bytes = {
         case_id: pickle.dumps(store["synthetic_oracles"][case_id], protocol=pickle.HIGHEST_PROTOCOL)
-        for case_id in baseline_case_ids()
+        for case_id in BASELINE_CASE_IDS
     }
     synthetic_oracles = dict(store["synthetic_oracles"])
-    if args.case is None:
-        for case_id in baseline_case_ids():
-            synthetic_oracles[case_id] = generate_case_record(
-                case_id, preflights[case_id], diagnostics
-            )
-        redundant_preflights = {case_id: preflights[case_id] for case_id in redundant_case_ids()}
-        synthetic_oracles.update(generate_redundant_case_records(redundant_preflights, diagnostics))
-    else:
-        case_id = args.case
-        if case_id in baseline_case_ids():
-            synthetic_oracles[case_id] = generate_case_record(
-                case_id, preflights[case_id], diagnostics
-            )
-        else:
-            synthetic_oracles[case_id] = generate_redundant_case_record(
-                preflights[case_id], diagnostics
-            )
+    synthetic_oracles.update(generate_case_records(preflights, diagnostics))
     store["synthetic_oracles"] = synthetic_oracles
     if known_reference_bytes != pickle.dumps(
         store["known_reference_results"], protocol=pickle.HIGHEST_PROTOCOL
@@ -1468,4 +1362,20 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    arguments = ARGUMENT_PARSER.parse_args()
+    training_case_store = load_store()
+    if arguments.case and not (arguments.regenerate or arguments.preflight):
+        raise ValueError("--case requires --regenerate or --preflight")
+    if arguments.refresh_queries:
+        refresh_store_queries(training_case_store)
+    elif arguments.preflight:
+        run_preflight(arguments.case)
+    elif arguments.regenerate:
+        regenerate_store(training_case_store, arguments.case)
+    else:
+        validation_started = time.perf_counter()
+        validate_synthetic_oracles(training_case_store)
+        print(
+            f"validated {len(training_case_store['synthetic_oracles'])} synthetic records in "
+            f"{time.perf_counter() - validation_started:.2f}s"
+        )
