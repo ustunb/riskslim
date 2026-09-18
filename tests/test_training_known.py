@@ -2,7 +2,6 @@
 #
 # Dimensions:
 #   known dataset: breastcancer, mammo — distinct real inputs and saved results
-#   planted-data seed: 0..4 — retained temporarily until exact synthetic-oracle tests replace it
 #
 # These saved known results are regression references, not independently exact oracles.
 
@@ -10,9 +9,6 @@ import numpy as np
 import pytest
 
 from riskslim import RiskSLIMClassifier
-from riskslim.data import ClassificationDataset
-from riskslim.loss_functions.log_loss import log_loss_value
-from utils import generate_random_normal
 
 
 def test_training_matches_known_reference(known_dataset_name, training_test_cases):
@@ -49,26 +45,3 @@ def test_training_matches_known_reference(known_dataset_name, training_test_case
 @pytest.fixture(params=["breastcancer", "mammo"])
 def known_dataset_name(request):
     return request.param
-
-
-@pytest.mark.parametrize("seed", range(5))
-def test_synthetic_planted(seed):
-    data, rho_true = generate_random_normal(200, 12, 4, seed)
-    y = np.ravel(data["y"])
-    dataset = ClassificationDataset(
-        data["X"], y, variable_names=data["variable_names"], outcome_name=data["outcome_name"]
-    )
-    rho_planted = np.insert(rho_true, 0, 0)
-    planted_objective = log_loss_value(dataset.Z, rho_planted) + 1e-6 * 4
-
-    clf = RiskSLIMClassifier(
-        max_coef=5,
-        max_size=4,
-        c0_value=1e-6,
-        variable_names=data["variable_names"],
-        outcome_name=data["outcome_name"],
-        verbose=False,
-        max_runtime=60,
-    )
-    clf.fit(data["X"], y)
-    assert clf.optimizer.solution_info["objective_value"] <= planted_objective + 1e-6

@@ -3,7 +3,7 @@
 import time
 import numpy as np
 
-from cplex.callbacks import HeuristicCallback, LazyConstraintCallback
+from cplex.callbacks import HeuristicCallback, IncumbentCallback, LazyConstraintCallback
 
 from riskslim.utils import Stats, cast_to_integer, is_integer
 from riskslim.mip import convert_to_risk_slim_cplex_solution
@@ -217,6 +217,26 @@ class LossCallback(LazyConstraintCallback):
 
         #log('left cut callback')
         return
+
+
+class LossIncumbentCallback(IncumbentCallback):
+    """Reject incumbents whose surrogate loss understates their exact loss."""
+
+    def initialize(self, indices, compute_loss, tolerance):
+        assert isinstance(indices, dict)
+        assert callable(compute_loss)
+        assert tolerance >= 0.0
+
+        self.loss_idx = indices['loss'][0]
+        self.rho_idx = indices['rho']
+        self.compute_loss = compute_loss
+        self.tolerance = tolerance
+
+    def __call__(self):
+        rho = np.array(self.get_values(self.rho_idx))
+        surrogate_loss = self.get_values(self.loss_idx)
+        if surrogate_loss + self.tolerance < self.compute_loss(rho):
+            self.reject()
 
 
 class PolishAndRoundCallback(HeuristicCallback):

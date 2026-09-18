@@ -16,7 +16,7 @@ from riskslim.warmstart import (
     sequential_round_solution_pool,
     discrete_descent_solution_pool,
     )
-from riskslim.callbacks import LossCallback, PolishAndRoundCallback
+from riskslim.callbacks import LossCallback, LossIncumbentCallback, PolishAndRoundCallback
 
 
 class RiskSLIMOptimizer:
@@ -89,7 +89,6 @@ class RiskSLIMOptimizer:
         # bounds
         self.n_variables = data.d
         self.min_size = 0
-        self.max_size = np.minimum(max_size, self.n_variables)
 
         # coefficient bounds
         self.coef_set.update_intercept_bounds(X = self.data.X, y = self.data.y, max_offset = max_abs_offset)
@@ -121,6 +120,7 @@ class RiskSLIMOptimizer:
 
         # vectorized regularization parameters
         self.L0_reg_ind = self.coef_set.penalized_indices()
+        self.max_size = np.minimum(max_size, np.count_nonzero(self.L0_reg_ind))
         self.C_0 = self.coef_set.c0
         self.C_0[self.L0_reg_ind] = self.c0_value
         self.C_0_nnz = self.C_0[self.L0_reg_ind]
@@ -196,6 +196,15 @@ class RiskSLIMOptimizer:
                            verbose=self.verbose,
                            )
 
+        incumbent_cb = cpx.register_callback(LossIncumbentCallback)
+        incumbent_cb.initialize(
+                indices=indices,
+                compute_loss=self.compute_loss,
+                tolerance=settings["max_tolerance"],
+                )
+        # CPLEX requires primal-only presolve when an incumbent callback can reject solutions.
+        cpx.parameters.preprocessing.reduce.set(1)
+
         # add heuristic callback if rounding or polishing
         heuristic_cb = None
         if settings["round_flag"] or settings["polish_flag"]:
@@ -249,6 +258,7 @@ class RiskSLIMOptimizer:
         self.mip = set_cplex_mip_parameters(cpx, parsed['cplex'], display_cplex_progress=settings["display_cplex_progress"])
         self.mip_settings = mip_settings
         self.loss_callback = loss_cb
+        self.loss_incumbent_callback = incumbent_cb
         self.heuristic_cb = heuristic_cb
         self.settings = settings
 

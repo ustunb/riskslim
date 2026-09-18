@@ -9,7 +9,9 @@ from riskslim.heuristics import sequential_rounding, discrete_descent
 def test_sequential_rounding(generated_normal_data, c0_weight):
 
     Z = generated_normal_data['Z'][0]
-    rho = generated_normal_data['rho_true'][0] + (np.random.rand(Z.shape[-1]) * .5)
+    rng = np.random.default_rng(0)
+    rho = generated_normal_data['rho_true'][0] + (rng.random(Z.shape[-1]) * .5)
+    rho_before_rounding = rho.copy()
     C_0 = np.ones_like(rho) * c0_weight
 
     get_L0_penalty = lambda rho: np.sum(
@@ -20,13 +22,15 @@ def test_sequential_rounding(generated_normal_data, c0_weight):
         rho, Z, C_0, log_loss_value_from_scores, get_L0_penalty
     )
 
+    np.testing.assert_array_equal(rho, rho_before_rounding)
+    if not early_stop_flag:
+        np.testing.assert_array_equal(rho_rounded, np.rint(rho_rounded))
+
     if c0_weight == 1:
         # Large penalty gives all zeros
         assert np.all(rho_rounded == 0)
-    else:
-        assert np.all(rho_rounded == rho)
 
-    rho_rand = np.random.rand(12)
+    rho_rand = rng.random(12)
     objval_rand = log_loss_value_from_scores(Z.dot(rho_rand)) + get_L0_penalty(rho_rand)
 
     assert not early_stop_flag

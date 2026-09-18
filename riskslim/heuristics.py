@@ -26,6 +26,7 @@ def sequential_rounding(rho, Z, C_0, compute_loss_from_scores_real, get_L0_penal
     assert callable(compute_loss_from_scores_real)
     assert callable(get_L0_penalty)
 
+    rho = np.copy(rho)
     d = rho.shape[0]
 
     rho_floor = np.floor(rho)

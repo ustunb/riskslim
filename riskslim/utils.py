@@ -200,7 +200,7 @@ def cast_to_integer(x):
 
     """
     original_type = x.dtype
-    return np.require(np.require(x, dtype=np.int_), dtype=original_type)
+    return np.require(np.rint(x), dtype=original_type)
 
 
 @dataclass
