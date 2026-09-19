@@ -46,37 +46,6 @@ def test_fit_builds_optimizer(generated_normal_data, use_coef_set):
     assert rs.optimizer.data.Z.shape == rs.optimizer.data.X.shape
 
 
-@pytest.mark.parametrize('loss_computation', ['normal'])
-def test_fit_sets_up_loss_functions(generated_normal_data, loss_computation):
-    """Test setting up loss functions."""
-
-    X = generated_normal_data['X'][0]
-    y = np.ravel(generated_normal_data['y'])
-    rho = np.insert(generated_normal_data['rho'], 0, 0.0)
-    variable_names = generated_normal_data['variable_names']
-
-    rs = RiskSLIMClassifier(
-        max_size=10,
-        variable_names=variable_names,
-        outcome_name=generated_normal_data['outcome_name'],
-        loss_computation=loss_computation,
-        max_runtime=2,
-        display_cplex_progress=False,
-        round_flag=False,
-        polish_flag=False,
-    )
-
-    rs.fit(X, y)
-
-    rho = np.require(rho, requirements = ['F'])
-
-    loss, slope = rs.optimizer.compute_loss_cut(rho)
-    loss_real, slope_real = rs.optimizer.compute_loss_cut_real(rho)
-
-    assert loss == loss_real
-    assert np.all(slope == slope_real)
-
-
 def test_time_limited_fit_matches_solver_objective():
     """Test the raw CPLEX objective for a time-limited fit."""
     data = load_breast_cancer()

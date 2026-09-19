@@ -154,6 +154,10 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         if unknown:
             raise ValueError(f"Unknown RiskSLIM settings: {unknown}")
 
+        # calibration and cross-validation results belong to the previous fit
+        for name in ("calibrated_estimator_", "cv_", "cv_results_", "cv_calibrated_estimators_"):
+            self.__dict__.pop(name, None)
+
         X, y = validate_data(self, X, y, dtype=np.float64)
         check_classification_targets(y)
         y_type = type_of_target(y, input_name="y", raise_unknown=True)
@@ -291,6 +295,7 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
             Settings passed to each fold's ``fit``.
         """
         scoring = check_scoring(self, scoring)
+        self.__dict__.pop("cv_calibrated_estimators_", None)  # calibrated the previous folds
         self.cv_ = check_cv(cv=k, y=y, classifier=True)
         self.cv_results_ = cross_validate(
                 self,
