@@ -67,7 +67,8 @@ def pytest_addoption(parser):
     parser.addoption(
         "--report-dir",
         default=None,
-        help="Directory for report screenshots and HTML from `pytest -m browser`.",
+        help="Directory for report screenshots and HTML from `pytest -m browser`. Write it as "
+        "--report-dir=DIR: with a space, pytest reads an existing DIR as a test path.",
     )
 
 

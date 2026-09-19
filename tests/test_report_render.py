@@ -11,7 +11,8 @@ Dimensions:
 
 The browser test is opt-in (`pytest -m browser`): it opens each report in headless Chromium at
 1280 px and 375 px, requires no console or page errors, 2 rendered Plotly charts and one model
-row per item, and saves screenshots plus the HTML to tmp_path or --report-dir.
+row per item, and saves screenshots plus the HTML to tmp_path or --report-dir=DIR (write it
+with "=": with a space, pytest reads an existing DIR as a test path and misses the config).
 """
 
 import html
