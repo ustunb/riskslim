@@ -29,8 +29,8 @@ from riskslim.data import ClassificationDataset
 SCHEMA_VERSION = 2
 SYNTHETIC_RECORD_VERSION = 2
 ORACLE_ALGORITHM_VERSION = "integer-intercept-profile-v1"
-DATA_GENERATION_VERSION = "independent-bernoulli-logistic-randomstate-v2"
-REDUNDANT_DATA_GENERATION_VERSION = "redundant-features-randomstate-v2"
+DATA_GENERATION_VERSION = "independent-bernoulli-logistic-randomstate-rounded-v3"
+REDUNDANT_DATA_GENERATION_VERSION = "redundant-features-randomstate-rounded-v3"
 RANDOM_NUMBER_GENERATOR = "numpy.random.RandomState(MT19937)"
 TEST_CASE_PATH = Path(__file__).resolve().parent / "training_test_cases.pkl"
 N_SAMPLES = 10_000
@@ -50,6 +50,7 @@ FEATURE_DISTRIBUTIONS = ("binary", "continuous", "mixed")
 REDUNDANT_FEATURES = ("duplicates", "noisy_duplicates")
 BINARY_FEATURE_PROBABILITY = 0.5
 CONTINUOUS_FEATURE_STANDARD_DEVIATION = 2.0
+CONTINUOUS_DECIMAL_PLACES = 10
 LABEL_SEED_SEQUENCE = [SEED, 0, 1]
 CASE_LABEL_SEEDS = {"binary__shifted_fractional": [1, 0, 1]}
 NOISE_SEED_SEQUENCE = [SEED, 1, 2]
@@ -181,6 +182,7 @@ def build_data_generation_spec(case_id: str) -> dict:
     if feature_distribution in ("continuous", "mixed"):
         spec["continuous_feature_mean"] = 0.0
         spec["continuous_feature_standard_deviation"] = CONTINUOUS_FEATURE_STANDARD_DEVIATION
+        spec["continuous_decimal_places"] = CONTINUOUS_DECIMAL_PLACES
         spec["continuous_feature_count"] = (
             BASE_FEATURE_COUNT if feature_distribution == "continuous" else BASE_FEATURE_COUNT // 2
         )
@@ -211,6 +213,7 @@ def redundant_perturbation(redundant_features: str, feature_distribution: str) -
         "binary_bit_flip_probability": BIT_FLIP_PROBABILITY,
         "continuous_gaussian_mean": 0.0,
         "continuous_gaussian_standard_deviation": GAUSSIAN_NOISE_STANDARD_DEVIATION,
+        "continuous_decimal_places": CONTINUOUS_DECIMAL_PLACES,
         "binary_columns": binary_columns,
         "continuous_columns": continuous_columns,
     }
@@ -284,10 +287,13 @@ def generate_data(case_id: str, generation_spec: dict | None = None) -> dict:
             size=(spec["n_samples"], spec["binary_feature_count"]),
         ).astype(np.int8)
     elif feature_distribution == "continuous":
-        X = feature_rng.normal(
-            spec["continuous_feature_mean"],
-            spec["continuous_feature_standard_deviation"],
-            size=(spec["n_samples"], spec["continuous_feature_count"]),
+        X = np.round(
+            feature_rng.normal(
+                spec["continuous_feature_mean"],
+                spec["continuous_feature_standard_deviation"],
+                size=(spec["n_samples"], spec["continuous_feature_count"]),
+            ),
+            spec["continuous_decimal_places"],
         )
     elif feature_distribution == "mixed":
         binary = feature_rng.binomial(
@@ -295,10 +301,13 @@ def generate_data(case_id: str, generation_spec: dict | None = None) -> dict:
             spec["binary_feature_probability"],
             size=(spec["n_samples"], spec["binary_feature_count"]),
         )
-        continuous = feature_rng.normal(
-            spec["continuous_feature_mean"],
-            spec["continuous_feature_standard_deviation"],
-            size=(spec["n_samples"], spec["continuous_feature_count"]),
+        continuous = np.round(
+            feature_rng.normal(
+                spec["continuous_feature_mean"],
+                spec["continuous_feature_standard_deviation"],
+                size=(spec["n_samples"], spec["continuous_feature_count"]),
+            ),
+            spec["continuous_decimal_places"],
         )
         X = np.hstack((binary, continuous)).astype(np.float64)
     else:
@@ -359,6 +368,9 @@ def generate_redundant_data(
                 perturbation["continuous_gaussian_mean"],
                 perturbation["continuous_gaussian_standard_deviation"],
                 size=(spec["n_samples"], len(continuous_columns)),
+            )
+            copied_X[:, continuous_columns] = np.round(
+                copied_X[:, continuous_columns], perturbation["continuous_decimal_places"]
             )
         if feature_distribution == "binary":
             copied_X = copied_X.astype(np.int8)
