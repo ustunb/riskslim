@@ -396,6 +396,7 @@ dependencies = [
     { name = "cplex" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "packaging" },
     { name = "pandas" },
     { name = "plotly" },
     { name = "prettytable" },
@@ -414,6 +415,7 @@ dev = [
 requires-dist = [
     { name = "cplex", specifier = ">=22.1.2.1" },
     { name = "numpy", specifier = ">=1.26" },
+    { name = "packaging" },
     { name = "pandas" },
     { name = "plotly" },
     { name = "prettytable" },

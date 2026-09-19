@@ -45,7 +45,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --group dev
       - name: Check CPLEX
-        run: uv run pytest --noconftest tests/test_solver.py -q
+        run: uv run pytest --noconftest tests/test_solver.py -q -s
       # full suite on pushes; default suite on PRs
       - name: Run tests
         run: |

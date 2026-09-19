@@ -9,6 +9,8 @@ uv sync --group dev
 ```
 
 CPLEX is a required runtime dependency for solver work and the test suite.
+`riskslim.cplex_utils.check_cplex_installation()` validates the package version and native
+runtime with a tiny feasible solve.
 
 ## Tests
 
@@ -17,7 +19,9 @@ uv run pytest
 uv run pytest -m slow
 uv run pytest -m ""
 # Run the standalone CPLEX installation/runtime smoke check.
-uv run pytest --noconftest tests/test_solver.py -q
+uv run pytest --noconftest tests/test_solver.py -q -s
+# Run the same installation check directly and print both CPLEX versions.
+uv run python -c 'from riskslim.cplex_utils import check_cplex_installation; print(check_cplex_installation())'
 ```
 
 New behavior needs a test. Bug fixes need a test that fails before the fix.
