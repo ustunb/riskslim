@@ -44,24 +44,17 @@ class RiskScoreReporter:
             # For scikit-learn estimators
             self.rho = np.insert(np.squeeze(self.estimator.coef_), 0, self.estimator.intercept_)
 
-        if hasattr(estimator, "_variable_types"):
-            self._variable_types = estimator._variable_types
-        else:
-            # For scikit-learn estimators
-            self._variable_types = np.zeros(self.X.shape[1], dtype="str")
-            self._variable_types[:] = "C"
-            self._variable_types[np.all(self.X == np.require(self.X, dtype=np.int_), axis=0)] = "I"
-            self._variable_types[np.all(self.X == np.require(self.X, dtype=np.bool_), axis=0)] = "B"
+        self._variable_types = dataset.variable_types
 
         # Table
         if np.not_equal(estimator.coef_, 0.0).any():
-            self.table_str = print_model(
+            self.table_str = str(print_model(
                 self.rho,
                 self.variable_names,
                 self.outcome_name,
                 show_omitted_variables=False,
                 return_only=True
-            )
+            ))
             self.table = {}
             self._prepare_table()
 
@@ -318,21 +311,18 @@ class RiskScoreReporter:
             # Folds
             if getattr(self.estimator, "cv_results_", None) is not None:
 
-                for ind, (_, test) in enumerate(self.estimator.cv_.split(self.X[:, 1:], self.y)):
+                fold_models = (
+                    getattr(self.estimator, "cv_calibrated_estimators_", None)
+                    or self.estimator.cv_results_["estimator"]
+                )
+                for fold_model, test in zip(fold_models, self.estimator.cv_results_["indices"]["test"]):
 
                     # Calibration
-                    if getattr(self.estimator, "cv_calibrated_estimators_", None) is None:
-                        prob_pred, prob_true, fpr, tpr = self.compute_metrics(
-                            self.y[test],
-                            self.estimator.cv_results_["estimator"][ind].predict_proba(self.X[test, 1:])[:, 1],
-                            n_bins=n_bins
-                        )
-                    else:
-                        prob_pred, prob_true, fpr, tpr = self.compute_metrics(
-                            self.y[test],
-                            self.estimator.cv_calibrated_estimators_[ind].predict_proba(self.X[test, 1:])[:, 1],
-                            n_bins=n_bins
-                        )
+                    prob_pred, prob_true, fpr, tpr = self.compute_metrics(
+                        self.y[test],
+                        fold_model.predict_proba(self.X[test, 1:])[:, 1],
+                        n_bins=n_bins
+                    )
 
                     fig.add_trace(
                         go.Scattergl(

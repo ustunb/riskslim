@@ -20,11 +20,6 @@ from .data import ClassificationDataset
 from .defaults import DEFAULT_LCPA_SETTINGS, OUTCOME_NAME
 
 
-def is_settings_key(key):
-    """True if ``key`` names an LCPA, warmstart ('init_*'), or CPLEX ('cplex_*') setting."""
-    return key in DEFAULT_LCPA_SETTINGS or key.startswith(("init_", "cplex_"))
-
-
 class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
     """RiskSLIM classifier
 
@@ -96,7 +91,7 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         self.outcome_name = outcome_name
         self.c0_value = c0_value
         self.verbose = verbose
-        self._settings = dict(kwargs)
+        self._settings = kwargs
 
     def get_params(self, deep=True):
         """Get parameters, including settings passed as keyword arguments."""
@@ -117,17 +112,10 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         return tags
 
     def __getstate__(self):
-        # the optimizer (CPLEX model, closures) and the reporter (PrettyTable) do not pickle;
-        # the reporter is rebuilt on unpickling, the optimizer is not
+        # the optimizer holds the CPLEX model and closures, neither of which pickle
         state = dict(super().__getstate__())
         state.pop("optimizer_", None)
-        state.pop("reporter_", None)
         return state
-
-    def __setstate__(self, state):
-        super().__setstate__(state)
-        if hasattr(self, "coef_"):
-            self.reporter_ = RiskScoreReporter.from_model(estimator=self)
 
     def __repr__(self, N_CHAR_MAX=700):
         if hasattr(self, "reporter_"):
@@ -162,7 +150,7 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
             Settings that override those given at initialization for this fit only.
         """
         settings = {**self._settings, **kwargs}
-        unknown = sorted(key for key in settings if not is_settings_key(key))
+        unknown = sorted(set(settings) - set(DEFAULT_LCPA_SETTINGS))
         if unknown:
             raise ValueError(f"Unknown RiskSLIM settings: {unknown}")
 
@@ -173,13 +161,12 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
             raise ValueError(
                 f"Only binary classification is supported. The type of the target is {y_type}."
             )
-        classes = np.unique(y)
-        if len(classes) != 2:
+        self.classes_, y_index = np.unique(y, return_inverse=True)
+        if len(self.classes_) != 2:
             raise ValueError(
-                f"RiskSLIMClassifier needs y with exactly 2 classes; got {len(classes)} class(es)."
+                f"RiskSLIMClassifier needs y with exactly 2 classes; got {len(self.classes_)} class(es)."
             )
-        self.classes_ = classes
-        y_signed = np.where(y == classes[1], 1, -1)
+        y_signed = 2 * y_index - 1
 
         variable_names = self.variable_names
         if variable_names is None and hasattr(self, "feature_names_in_"):
@@ -206,7 +193,6 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         coefficients = self.optimizer_.coefficients
         self.coef_ = coefficients[1:]
         self.intercept_ = coefficients[0]
-        self._variable_types = self._data.variable_types
         self.reporter_ = RiskScoreReporter.from_model(estimator=self)
         return self
 
@@ -283,7 +269,7 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
             # one calibrator per fold, each on its own fold model
             X, y = np.asarray(X), np.ravel(y)
             self.cv_calibrated_estimators_ = []
-            for fold_estimator, (train, _) in zip(self.cv_results_["estimator"], self.cv_.split(X, y)):
+            for fold_estimator, train in zip(self.cv_results_["estimator"], self.cv_results_["indices"]["train"]):
                 calibrator = CalibratedClassifierCV(estimator = FrozenEstimator(fold_estimator), method = method)
                 self.cv_calibrated_estimators_.append(calibrator.fit(X[train], y[train]))
         return self
@@ -312,6 +298,7 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
                 y=y,
                 cv=self.cv_,
                 return_estimator=True,
+                return_indices=True,
                 scoring=scoring,
                 params=kwargs,
                 n_jobs=n_jobs
