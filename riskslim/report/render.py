@@ -2,6 +2,7 @@
 
 import html
 import json
+from functools import cache
 from importlib.resources import files
 from pathlib import Path
 
@@ -36,14 +37,9 @@ class Report:
     @property
     def html(self):
         """The report page as a string."""
-        env = Environment(autoescape=True)
-        shell = env.from_string((ASSETS / "shell.html").read_text(encoding="utf-8"))
-        return shell.render(
-            title=self.data["title"],
-            styles=Markup((ASSETS / "report.css").read_text(encoding="utf-8")),
-            scripts=Markup((ASSETS / "report.js").read_text(encoding="utf-8")),
-            data=Markup(json_for_script(self.data)),
-        )
+        shell, styles, scripts = load_assets()
+        return shell.render(title=self.data["title"], styles=styles, scripts=scripts,
+                            data=Markup(json_for_script(self.data)))
 
     def save(self, path):
         """Write the report to ``path`` (an ``.html`` file) and return the path."""
@@ -54,6 +50,15 @@ class Report:
     def _repr_html_(self):
         return (f'<iframe srcdoc="{html.escape(self.html, quote=True)}" '
                 f'style="width: 100%; height: 1000px; border: 0;"></iframe>')
+
+
+@cache
+def load_assets():
+    """The compiled shell template and the CSS/JS it inlines, read once per process."""
+    shell = Environment(autoescape=True).from_string((ASSETS / "shell.html").read_text(encoding="utf-8"))
+    styles = Markup((ASSETS / "report.css").read_text(encoding="utf-8"))
+    scripts = Markup((ASSETS / "report.js").read_text(encoding="utf-8"))
+    return shell, styles, scripts
 
 
 def json_for_script(data):

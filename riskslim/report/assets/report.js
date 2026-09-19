@@ -28,7 +28,8 @@
       };
       const itemName = (item) => item.binary ? item.name
         : `${item.name} (${item.value_range[0]}–${item.value_range[1]})`;
-      return { model, isChecklist, hasNegative, pointsLabel, itemName, pct };
+      const positive = (s) => isChecklist && s >= model.checklist_m;
+      return { model, isChecklist, hasNegative, pointsLabel, itemName, pct, positive };
     },
     template: `
       <Card :title="options.title">
@@ -58,12 +59,12 @@
             <tr>
               <th>{{ isChecklist ? "NET CHECKED" : "SCORE" }}</th>
               <td v-for="s in model.score_to_risk.scores"
-                  :class="{ 'rs-positive': isChecklist && s >= model.checklist_m }">{{ s }}</td>
+                  :class="{ 'rs-positive': positive(s) }">{{ s }}</td>
             </tr>
             <tr>
               <th>RISK</th>
               <td v-for="(r, j) in model.score_to_risk.risk"
-                  :class="{ 'rs-positive': isChecklist && model.score_to_risk.scores[j] >= model.checklist_m }">{{ pct(r) }}</td>
+                  :class="{ 'rs-positive': positive(model.score_to_risk.scores[j]) }">{{ pct(r) }}</td>
             </tr>
           </table>
         </div>

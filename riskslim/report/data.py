@@ -25,9 +25,11 @@ import math
 
 import numpy as np
 from scipy.special import expit
-from sklearn.metrics import roc_auc_score, roc_curve
+from sklearn.metrics import auc, roc_curve
 
 from ..defaults import INTERCEPT_NAME
+from ..loss_functions.log_loss import log_loss_value_from_scores
+from ..utils import is_integer
 from .layout import default_layout, layout_to_json
 
 SCHEMA_VERSION = 1
@@ -86,7 +88,7 @@ def build_report_data(rho, variable_names, outcome_name, samples, training=None,
     roc = {name: roc_section(samples[name][1], scores[name]) for name in samples}
     calibration = {name: calibration_section(samples[name][1], scores[name], intercept)
                    for name in samples}
-    log_loss = {name: float(np.mean(np.logaddexp(0.0, -(2 * y - 1) * (scores[name] + intercept))))
+    log_loss = {name: float(log_loss_value_from_scores((2 * y - 1) * (scores[name] + intercept)))
                 for name, (_, y) in samples.items()}
 
     return {
@@ -197,7 +199,7 @@ def achievable_totals(value_sets, max_totals=10_000):
     """Every sum of one value per set, when all values are integers; else None."""
     totals = {0}
     for values in value_sets:
-        if not np.all(values == np.round(values)):
+        if not is_integer(values) or len(totals) * len(values) > max_totals:
             return None
         totals = {t + int(v) for t in totals for v in values}
         if len(totals) > max_totals:
@@ -212,7 +214,7 @@ def roc_section(y, score):
         "fpr": [float(v) for v in fpr],
         "tpr": [float(v) for v in tpr],
         "thresholds": [None if not np.isfinite(t) else number(t) for t in thresholds],
-        "auc": float(roc_auc_score(y, score)),
+        "auc": float(auc(fpr, tpr)),
     }
 
 

@@ -118,10 +118,14 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         state.pop("optimizer_", None)
         return state
 
+    @property
+    def _rho(self):
+        """Intercept followed by the coefficients, the order print_model and reports expect."""
+        return np.concatenate([[self.intercept_], self.coef_])
+
     def __repr__(self, N_CHAR_MAX=700):
         if hasattr(self, "coef_"):
-            rho = np.concatenate([[self.intercept_], self.coef_])
-            table = print_model(rho, self._data.variable_names, self._data.outcome_name,
+            table = print_model(self._rho, self._data.variable_names, self._data.outcome_name,
                                 return_only=True)
             return str(table)
         return super().__repr__(N_CHAR_MAX=N_CHAR_MAX)
@@ -234,7 +238,7 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         features = [j for j, name in enumerate(self.coef_set_.variable_names) if name != INTERCEPT_NAME]
         variable_lb, variable_ub = self.coef_set_.lb[features], self.coef_set_.ub[features]
         data = build_report_data(
-            rho = np.concatenate([[self.intercept_], self.coef_]),
+            rho = self._rho,
             variable_names = self._data.variable_names,
             outcome_name = self._data.outcome_name,
             samples = samples,
