@@ -29,7 +29,7 @@ jobs:
       - run: >-
           uvx ruff format --check examples/quickstart.py tests/conftest.py
           tests/generate_training_test_cases.py tests/test_training.py
-          tests/test_training_known.py tests/test_cplex.py
+          tests/test_training_known.py tests/test_solver.py
 
   tests:
     name: tests (py${{ matrix.python-version }})
@@ -45,7 +45,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --group dev
       - name: Check CPLEX
-        run: uv run pytest --noconftest tests/test_cplex.py -q
+        run: uv run pytest --noconftest tests/test_solver.py -q
       # full suite on pushes; default suite on PRs
       - name: Run tests
         run: |

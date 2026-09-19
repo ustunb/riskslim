@@ -16,8 +16,8 @@ CPLEX is a required runtime dependency for solver work and the test suite.
 uv run pytest
 uv run pytest -m slow
 uv run pytest -m ""
-# Run the standalone CPLEX correctness check.
-uv run pytest --noconftest tests/test_cplex.py -q
+# Run the standalone CPLEX installation/runtime smoke check.
+uv run pytest --noconftest tests/test_solver.py -q
 ```
 
 New behavior needs a test. Bug fixes need a test that fails before the fix.
@@ -28,7 +28,7 @@ New behavior needs a test. Bug fixes need a test that fails before the fix.
 uv run ruff check riskslim tests
 uv run ruff format --check examples/quickstart.py tests/conftest.py \
   tests/generate_training_test_cases.py tests/test_training.py \
-  tests/test_training_known.py tests/test_cplex.py
+  tests/test_training_known.py tests/test_solver.py
 uv build && uvx twine check dist/*
 ```
 
