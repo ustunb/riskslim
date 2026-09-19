@@ -152,10 +152,6 @@ html_theme_options = {
 # -- Extension configuration -------------------------------------------------
 
 # Configurations for sphinx gallery
-from plotly.io._sg_scraper import plotly_sg_scraper
-import plotly.io as pio
-pio.renderers.default = 'sphinx_gallery_png'
-
 sphinx_gallery_conf = {
     'examples_dirs': ['../examples'],
     'within_subsection_order': FileNameSortKey,
@@ -173,7 +169,7 @@ sphinx_gallery_conf = {
     'remove_config_comments': True,
     'filename_pattern': '../examples/ex_',
     'ignore_pattern': 'training_script.py',
-    "image_scrapers": ('matplotlib', plotly_sg_scraper)
+    "image_scrapers": ('matplotlib',)
 }
 
 

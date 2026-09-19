@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+{#- Pinned CDN versions: change them here only. #}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.min.css" integrity="sha384-L1dWfspMTHU/ApYnFiMz2QID/PlP1xCW9visvBdbEkOLkSSWsP6ZJWhPw6apiXxU" crossorigin="anonymous">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.5.43/vue.global.prod.min.js" integrity="sha384-jpQley6yTEvoZeHVfCkBVqGK6kLbDxptME8BFcqX9FJiFhpNkdkUSs54xLMnxmuB" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-basic-dist-min@4.1.1/plotly-basic.min.js" integrity="sha384-N2HZsG+IG/3J8CwhGGYz/kmzZ0sprpPWwjhor9ZI4lxuf47i9DXK2/NDGxMaJiEb" crossorigin="anonymous"></script>
+<style>
+{{ styles }}
+</style>
+</head>
+<body>
+<main class="container" id="report"></main>
+<script type="application/json" id="report-data">{{ data }}</script>
+<script>
+{{ scripts }}
+</script>
+</body>
+</html>

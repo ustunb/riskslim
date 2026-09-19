@@ -11,6 +11,7 @@ recursive-include examples *.py
 recursive-include tests *.py
 include tests/training_test_cases.pkl
 recursive-include riskslim *.py *.html
+recursive-include riskslim/report/assets *
 
 prune scripts
 prune data

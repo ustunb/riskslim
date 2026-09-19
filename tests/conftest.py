@@ -62,6 +62,15 @@ REMOVED_ENUMERATION_FIELDS = {
 }
 
 
+def pytest_addoption(parser):
+    """Register --report-dir for the opt-in browser test's screenshots and HTML."""
+    parser.addoption(
+        "--report-dir",
+        default=None,
+        help="Directory for report screenshots and HTML from `pytest -m browser`.",
+    )
+
+
 def compute_training_data_digest(X, y, variable_names, outcome_name):
     """Compute the digest stored with a training-data record."""
     digest = hashlib.sha256()

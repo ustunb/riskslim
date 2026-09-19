@@ -17,10 +17,10 @@ dependencies = [
   "scipy",
   "pandas",
   "scikit-learn>=1.6",
-  "plotly",
   "prettytable",
   "cplex>=22.1.2.1",
   "packaging",
+  "jinja2>=3.1.6",
 ]
 
 classifiers = [
@@ -38,7 +38,8 @@ Homepage = "https://github.com/ustunb/riskslim"
 Paper = "https://jmlr.org/papers/v20/18-615.html"
 
 [dependency-groups]
-dev = ["pytest>=8.0", "ruff>=0.6"]
+dev = ["pytest>=8.0", "ruff>=0.6", "plotly"]
+browser = ["playwright"]
 
 [tool.setuptools.packages.find]
 include = ["riskslim*"]
@@ -48,14 +49,15 @@ namespaces = false
 include-package-data = false
 
 [tool.setuptools.package-data]
-riskslim = ["template.html"]
+riskslim = ["report/assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["tests"]
-addopts = "--import-mode=importlib"
+addopts = "--import-mode=importlib -m \"not browser\""
 markers = [
   "slow: correctness tests that take more than a few seconds",
+  "browser: opt-in headless-browser tests (run with `pytest -m browser`)",
 ]
 
 [tool.ruff]

@@ -14,10 +14,11 @@ from sklearn.utils.multiclass import check_classification_targets, type_of_targe
 from sklearn.utils.validation import check_is_fitted, validate_data
 
 from .optimizer import RiskSLIMOptimizer
-from .reporter import RiskScoreReporter
 from .coefficient_set import CoefficientSet
 from .data import ClassificationDataset
-from .defaults import DEFAULT_LCPA_SETTINGS, OUTCOME_NAME
+from .defaults import DEFAULT_LCPA_SETTINGS, INTERCEPT_NAME, OUTCOME_NAME
+from .report import Report, build_report_data
+from .utils import print_model
 
 
 class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
@@ -45,8 +46,8 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         Coefficient constraints used in the fit (a copy; ``coef_set`` is never modified).
     optimizer_ : riskslim.optimizer.RiskSLIMOptimizer
         The fitted optimizer (CPLEX model, bounds, stats, solution pool). Not pickled.
-    reporter_ : riskslim.reporter.RiskScoreReporter
-        Risk score table, derived metrics, and reports.
+    solution_info_ : dict
+        Solver statistics at the end of the fit (objective value, optimality gap, run time, ...).
     calibrated_estimator_ : sklearn.calibration.CalibratedClassifierCV
         Calibrator trained on all data. Set by ``recalibrate``.
     cv_ : sklearn cross-validation splitter
@@ -118,8 +119,11 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         return state
 
     def __repr__(self, N_CHAR_MAX=700):
-        if hasattr(self, "reporter_"):
-            return self.reporter_.__repr__()
+        if hasattr(self, "coef_"):
+            rho = np.concatenate([[self.intercept_], self.coef_])
+            table = print_model(rho, self._data.variable_names, self._data.outcome_name,
+                                return_only=True)
+            return str(table)
         return super().__repr__(N_CHAR_MAX=N_CHAR_MAX)
 
     @property
@@ -131,11 +135,6 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
     def optimizer(self):
         """The fitted optimizer, or None before fit (alias of ``optimizer_``)."""
         return getattr(self, "optimizer_", None)
-
-    @property
-    def reporter(self):
-        """The fitted reporter, or None before fit (alias of ``reporter_``)."""
-        return getattr(self, "reporter_", None)
 
     def fit(self, X, y, **kwargs):
         """Fit RiskSLIM classifier.
@@ -197,8 +196,54 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         coefficients = self.optimizer_.coefficients
         self.coef_ = coefficients[1:]
         self.intercept_ = coefficients[0]
-        self.reporter_ = RiskScoreReporter.from_model(estimator=self)
+        self.solution_info_ = {
+            k: v.tolist() if isinstance(v, (np.ndarray, np.generic)) else v
+            for k, v in self.optimizer_.solution_info.items()
+        }
         return self
+
+    def report(self, X_test=None, y_test=None, layout=None, model_type=None):
+        """HTML report of the fitted model: the model, a summary table, ROC and calibration.
+
+        Parameters
+        ----------
+        X_test, y_test : array-like, optional
+            A held-out sample, shown next to the training data passed to ``fit``.
+        layout : list of riskslim.report.Row, optional
+            Custom layout; defaults to the model, the summary table, ROC and calibration.
+        model_type : {"risk_score", "checklist"}, optional
+            How to show the model. Inferred from the coefficients when None: a checklist when
+            every nonzero coefficient is +1 or -1.
+
+        Returns
+        -------
+        report : riskslim.report.Report
+            Use ``report.save(path)`` to write an HTML file; notebooks display it inline.
+        """
+        check_is_fitted(self)
+        X_train = self._data.X[:, 1:]
+        samples = {"train": (X_train, self._data.y)}
+        if (X_test is None) != (y_test is None):
+            raise ValueError("report() needs both X_test and y_test, or neither")
+        if X_test is not None:
+            X_test = validate_data(self, X_test, dtype=np.float64, reset=False)
+            y_test = np.ravel(y_test)
+            if not np.isin(y_test, self.classes_).all():
+                raise ValueError(f"y_test has labels outside the classes seen in fit {self.classes_.tolist()}")
+            samples["test"] = (X_test, (y_test == self.classes_[1]).astype(int))
+        features = [j for j, name in enumerate(self.coef_set_.variable_names) if name != INTERCEPT_NAME]
+        variable_lb, variable_ub = self.coef_set_.lb[features], self.coef_set_.ub[features]
+        data = build_report_data(
+            rho = np.concatenate([[self.intercept_], self.coef_]),
+            variable_names = self._data.variable_names,
+            outcome_name = self._data.outcome_name,
+            samples = samples,
+            training = self.solution_info_,
+            constraints = {"max_size": self.max_size_,
+                           "point_range": (float(np.min(variable_lb)), float(np.max(variable_ub)))},
+            model_type = model_type,
+        )
+        return Report(data, layout=layout)
 
     def decision_function(self, X):
         """Risk score of each sample; > 0 predicts ``classes_[1]``.

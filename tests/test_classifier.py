@@ -63,3 +63,16 @@ def test_saved_classifier_loads_prints_and_predicts_the_same(tmp_path):
 
     assert str(loaded) == str(clf)
     np.testing.assert_array_equal(loaded.predict(X), clf.predict(X))
+
+
+def test_report_shows_training_data_and_labelled_test_sample():
+    X, y = make_binary_data()
+    labels = np.where(y == 1, 'yes', 'no')
+    clf = RiskSLIMClassifier(max_size=2, verbose=False, max_runtime=10, cplex_randomseed=0)
+    clf.fit(X, labels)
+
+    data = clf.report(X[:40], labels[:40]).data
+
+    assert data['samples'] == ['train', 'test']
+    assert data['summary'][0]['rows'] == [['n', '80', '40'], ['outcome rate', '62.5%', '62.5%']]
+    assert data['summary'][2]['key'] == 'training'

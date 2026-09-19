@@ -52,7 +52,7 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             uv run pytest
           else
-            uv run pytest -m ""
+            uv run pytest -m "not browser"
           fi
 
   install-check:
@@ -92,18 +92,18 @@ jobs:
         working-directory: ${{ runner.temp }}
         run: |
           uv run --isolated --no-project \
-            --with "$(ls "$GITHUB_WORKSPACE"/dist/*.whl)" --with pytest \
+            --with "$(ls "$GITHUB_WORKSPACE"/dist/*.whl)" --with pytest --with plotly \
             python "$GITHUB_WORKSPACE/examples/quickstart.py"
           uv run --isolated --no-project \
-            --with "$(ls "$GITHUB_WORKSPACE"/dist/*.whl)" --with pytest \
-            python -m pytest "$GITHUB_WORKSPACE/tests" --import-mode=importlib -m "not slow"
+            --with "$(ls "$GITHUB_WORKSPACE"/dist/*.whl)" --with pytest --with plotly \
+            python -m pytest "$GITHUB_WORKSPACE/tests" --import-mode=importlib -m "not slow and not browser"
 
       - name: Sdist - quickstart + tests
         working-directory: ${{ runner.temp }}
         run: |
           uv run --isolated --no-project \
-            --with "$(ls "$GITHUB_WORKSPACE"/dist/*.tar.gz)" --with pytest \
+            --with "$(ls "$GITHUB_WORKSPACE"/dist/*.tar.gz)" --with pytest --with plotly \
             python "$GITHUB_WORKSPACE/examples/quickstart.py"
           uv run --isolated --no-project \
-            --with "$(ls "$GITHUB_WORKSPACE"/dist/*.tar.gz)" --with pytest \
-            python -m pytest "$GITHUB_WORKSPACE/tests" --import-mode=importlib -m "not slow"
+            --with "$(ls "$GITHUB_WORKSPACE"/dist/*.tar.gz)" --with pytest --with plotly \
+            python -m pytest "$GITHUB_WORKSPACE/tests" --import-mode=importlib -m "not slow and not browser"

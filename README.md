@@ -50,7 +50,7 @@ print(clf)
 print("train accuracy:", clf.score(X.values, y.values))
 
 # save an HTML report of the model
-clf.reporter.create_report("riskslim_report.html")
+clf.report(model_type="risk_score").save("riskslim_report.html")
 ```
 
 The same code is in [`examples/quickstart.py`](examples/quickstart.py).
@@ -61,7 +61,7 @@ The same code is in [`examples/quickstart.py`](examples/quickstart.py).
 - `RiskSLIMOptimizer`: cutting-plane mixed-integer optimizer for a risk score.
 - `CoefficientSet`: integer coefficient bounds and sparsity penalties.
 - `ClassificationDataset`: binary data wrapper that adds the intercept and maps labels internally.
-- `RiskScoreReporter`: score tables and HTML reports for fitted models.
+- `RiskSLIMClassifier.report()`: an HTML report of a fitted model (model, summary table, ROC and calibration plots); `.save(path)` writes it.
 
 ## Paper
 
