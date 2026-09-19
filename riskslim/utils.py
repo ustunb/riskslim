@@ -47,8 +47,8 @@ def print_model(rho, variable_names, outcome_name, show_omitted_variables=False,
     else:
         total_string = "NO VARIABLES: SCORE IS 0"
 
-    max_name_col_length = max(len(predict_string), len(total_string), max([len(s) for s in rho_names], default=0)) + 2
-    max_value_col_length = max(7, max([len(s) for s in rho_values_string], default=0) + len("points")) + 2
+    max_name_col_length = max(map(len, [predict_string, total_string, *rho_names])) + 2
+    max_value_col_length = max(7, max(map(len, rho_values_string), default=0) + len("points")) + 2
 
     m = pt.PrettyTable()
     m.field_names = ["Variable", "Points", "Tally"]

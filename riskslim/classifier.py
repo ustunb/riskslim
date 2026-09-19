@@ -21,6 +21,10 @@ from .report import Report, build_report_data
 from .utils import print_model
 
 
+# fitted state that belongs to one fit and is dropped when fit runs again
+STATE_FROM_PREVIOUS_FIT = ("calibrated_estimator_", "cv_", "cv_results_", "cv_calibrated_estimators_")
+
+
 class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
     """RiskSLIM classifier
 
@@ -157,8 +161,7 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         if unknown:
             raise ValueError(f"Unknown RiskSLIM settings: {unknown}")
 
-        # calibration and cross-validation results belong to the previous fit
-        for name in ("calibrated_estimator_", "cv_", "cv_results_", "cv_calibrated_estimators_"):
+        for name in STATE_FROM_PREVIOUS_FIT:
             self.__dict__.pop(name, None)
 
         X, y = validate_data(self, X, y, dtype=np.float64)

@@ -16,23 +16,17 @@ def make_binary_data():
 
 
 def fit_classifier(max_size=2):
-    X, y = make_binary_data()
     clf = RiskSLIMClassifier(max_size=max_size, verbose=False, max_runtime=10, cplex_randomseed=0)
-    return clf.fit(X, y), X
+    return clf.fit(*make_binary_data())
 
 
 @pytest.mark.parametrize('init_coef', [True, False])
 def test_init_stores_parameters(init_coef):
-    """Test RiskSLIMClassifier initialization."""
-    variable_names = ['variable_' + str(i) for i in range(10)]
+    coef_set = CoefficientSet([f'variable_{i}' for i in range(10)]) if init_coef else None
 
-    coef_set = CoefficientSet(variable_names) if init_coef else None
+    rs = RiskSLIMClassifier(coef_set=coef_set, max_size=10)
 
-    max_size=10
-
-    rs = RiskSLIMClassifier(coef_set=coef_set, max_size=max_size)
-
-    assert rs.max_size == max_size
+    assert rs.max_size == 10
     assert rs.optimizer is None
     assert rs.coef_set is coef_set
     assert rs.variable_names is None
@@ -45,7 +39,7 @@ def test_init_stores_parameters(init_coef):
     (2, 'ADD POINTS FROM ROWS 1 to'),
 ])
 def test_print_shows_score_table(max_size, expected_row):
-    clf, _ = fit_classifier(max_size)
+    clf = fit_classifier(max_size)
 
     table = str(clf)
 
@@ -55,7 +49,8 @@ def test_print_shows_score_table(max_size, expected_row):
 
 
 def test_saved_classifier_loads_prints_and_predicts_the_same(tmp_path):
-    clf, X = fit_classifier()
+    clf = fit_classifier()
+    X, _ = make_binary_data()
     model_file = tmp_path / 'model.pkl'
 
     model_file.write_bytes(pickle.dumps(clf))
