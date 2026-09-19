@@ -3,6 +3,7 @@
 import pytest
 import numpy as np
 from cplex import Cplex
+from sklearn.datasets import load_breast_cancer
 from riskslim.coefficient_set import CoefficientSet
 from riskslim.utils import Stats
 from riskslim.bounds import Bounds
@@ -94,6 +95,34 @@ def test_RiskSLIMClassifier_init_loss(generated_normal_data, loss_computation):
 
     assert loss == loss_real
     assert np.all(slope == slope_real)
+
+
+def test_RiskSLIMClassifier_raw_objective_matches_returned_model():
+    """Test the raw CPLEX objective for a time-limited fit."""
+    data = load_breast_cancer()
+    X = (data.data > np.median(data.data, axis=0)).astype(float)
+    y = data.target
+    c0_value = 1e-6
+    rs = RiskSLIMClassifier(
+        max_coef=5,
+        max_size=5,
+        c0_value=c0_value,
+        variable_names=list(data.feature_names),
+        outcome_name="diagnosis",
+        max_runtime=2,
+        cplex_randomseed=0,
+        verbose=False,
+    )
+
+    rs.fit(X, y)
+
+    rho = np.r_[rs.intercept_, rs.coef_]
+    signed_scores = (1.0 - 2.0 * y) * (rho[0] + X @ rho[1:])
+    mean_logistic_loss = float(np.mean(np.logaddexp(0.0, signed_scores)))
+    expected_objective = mean_logistic_loss + c0_value * np.count_nonzero(rho[1:])
+    raw_objective = rs.optimizer.solution.get_objective_value()
+
+    np.testing.assert_allclose(raw_objective, expected_objective, rtol=0.0, atol=1e-6)
 
 
 @pytest.mark.parametrize('use_rounding', [True, False])

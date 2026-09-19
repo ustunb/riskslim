@@ -49,7 +49,7 @@ DEFAULT_CPLEX_SETTINGS = {
     'mipemphasis': 0,  # cplex MIP strategy
     'mipgap': np.finfo('float').eps,  #
     'absmipgap': np.finfo('float').eps,  #
-    'integrality_tolerance': np.finfo('float').eps,  #
+    'integrality_tolerance': 1e-6,  #
     'repairtries': 20,  # number of tries to repair user provided solutions
     'poolsize': 100,  # number of feasible solutions to keep in solution pool
     'poolrelgap': float('nan'),  # discard if solutions

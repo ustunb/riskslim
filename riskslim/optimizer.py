@@ -16,7 +16,7 @@ from riskslim.warmstart import (
     sequential_round_solution_pool,
     discrete_descent_solution_pool,
     )
-from riskslim.callbacks import LossCallback, LossIncumbentCallback, PolishAndRoundCallback
+from riskslim.callbacks import LossCallback, PolishAndRoundCallback
 
 
 class RiskSLIMOptimizer:
@@ -196,15 +196,6 @@ class RiskSLIMOptimizer:
                            verbose=self.verbose,
                            )
 
-        incumbent_cb = cpx.register_callback(LossIncumbentCallback)
-        incumbent_cb.initialize(
-                indices=indices,
-                compute_loss=self.compute_loss,
-                tolerance=settings["max_tolerance"],
-                )
-        # CPLEX requires primal-only presolve when an incumbent callback can reject solutions.
-        cpx.parameters.preprocessing.reduce.set(1)
-
         # add heuristic callback if rounding or polishing
         heuristic_cb = None
         if settings["round_flag"] or settings["polish_flag"]:
@@ -258,7 +249,6 @@ class RiskSLIMOptimizer:
         self.mip = set_cplex_mip_parameters(cpx, parsed['cplex'], display_cplex_progress=settings["display_cplex_progress"])
         self.mip_settings = mip_settings
         self.loss_callback = loss_cb
-        self.loss_incumbent_callback = incumbent_cb
         self.heuristic_cb = heuristic_cb
         self.settings = settings
 

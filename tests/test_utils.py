@@ -71,7 +71,14 @@ def test_is_integer():
 
 def test_cast_to_integer():
 
-    int_arr = cast_to_integer(np.array([0.01, 1.01]))
+    int_arr = cast_to_integer(np.array([
+        0.01, 1.01,
+        1.0 - 1e-8, 1.0 + 1e-8,
+        -1.0 - 1e-8, -1.0 + 1e-8,
+        0.0, 1.0, -1.0,
+    ]))
     assert int_arr.dtype == np.float64
-    assert int_arr[0] == 0.
-    assert int_arr[1] == 1.
+    np.testing.assert_array_equal(
+        int_arr,
+        np.array([0.0, 1.0, 1.0, 1.0, -1.0, -1.0, 0.0, 1.0, -1.0]),
+    )
