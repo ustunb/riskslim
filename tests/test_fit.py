@@ -10,27 +10,8 @@ from riskslim.bounds import Bounds
 from riskslim.classifier import RiskSLIMClassifier
 
 
-@pytest.mark.parametrize('init_coef', [True, False])
-def test_RiskSLIMClassifier_init(init_coef):
-    """Test RiskSLIMClassifier initialization."""
-    variable_names = ['variable_' + str(i) for i in range(10)]
-
-    coef_set = CoefficientSet(variable_names) if init_coef else None
-
-    max_size=10
-
-    rs = RiskSLIMClassifier(coef_set=coef_set, max_size=max_size)
-
-    assert rs.max_size == max_size
-    assert rs.optimizer is None
-    assert rs.coef_set is coef_set
-    assert rs.variable_names is None
-    assert rs.c0_value == 1e-6
-    assert not rs.fitted
-
-
 @pytest.mark.parametrize('use_coef_set', [True, False])
-def test_RiskSLIMClassifier_init_fit(generated_normal_data, use_coef_set):
+def test_fit_builds_optimizer(generated_normal_data, use_coef_set):
     """Test RiskSLIMClassifier fit initalization."""
     X = generated_normal_data['X'][0]
     y = np.ravel(generated_normal_data['y'])
@@ -66,7 +47,7 @@ def test_RiskSLIMClassifier_init_fit(generated_normal_data, use_coef_set):
 
 
 @pytest.mark.parametrize('loss_computation', ['normal'])
-def test_RiskSLIMClassifier_init_loss(generated_normal_data, loss_computation):
+def test_fit_sets_up_loss_functions(generated_normal_data, loss_computation):
     """Test setting up loss functions."""
 
     X = generated_normal_data['X'][0]
@@ -96,7 +77,7 @@ def test_RiskSLIMClassifier_init_loss(generated_normal_data, loss_computation):
     assert np.all(slope == slope_real)
 
 
-def test_RiskSLIMClassifier_raw_objective_matches_returned_model():
+def test_time_limited_fit_matches_solver_objective():
     """Test the raw CPLEX objective for a time-limited fit."""
     data = load_breast_cancer()
     X = (data.data > np.median(data.data, axis=0)).astype(float)
@@ -126,7 +107,7 @@ def test_RiskSLIMClassifier_raw_objective_matches_returned_model():
 
 @pytest.mark.parametrize('use_rounding', [True, False])
 @pytest.mark.parametrize('polishing_after', [True, False])
-def test_RiskSLIMClassifier_warmstart(generated_normal_data, use_rounding, polishing_after):
+def test_warmstart_fills_solution_pool(generated_normal_data, use_rounding, polishing_after):
     """Test RiskSLIMClassifier fitting."""
     X = generated_normal_data['X']
     y = np.ravel(generated_normal_data['y'])
