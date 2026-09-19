@@ -43,6 +43,7 @@
     "purge_loss_cuts": false, 
     "cplex_absmipgap": 2.2204460492503131e-16, 
     "cplex_integrality_tolerance": 1e-06,
+    "cplex_optimality_tolerance": 1e-09,
     "cplex_mipemphasis": 0, 
     "cplex_mipgap": 2.2204460492503131e-16, 
     "cplex_n_cores": 1, 

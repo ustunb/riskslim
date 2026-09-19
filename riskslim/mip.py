@@ -1,6 +1,7 @@
 import numpy as np
 from cplex import Cplex, SparsePair, infinity as CPX_INFINITY
 from .coefficient_set import CoefficientSet
+from .defaults import DEFAULT_CPLEX_SETTINGS
 from .utils import print_log
 
 #todo: add loss cut
@@ -330,6 +331,9 @@ def set_cplex_mip_parameters(mip, param, display_cplex_progress=False):
     if display_cplex_progress is (None or False):
         mip = set_cpx_display_options(mip, display_mip = False, display_lp = False, display_parameters = False)
 
+    p.simplex.tolerances.optimality.set(
+        param.get('optimality_tolerance', DEFAULT_CPLEX_SETTINGS['optimality_tolerance'])
+    )
     problem_type = mip.problem_type[mip.get_problem_type()]
 
     if problem_type == 'MILP':

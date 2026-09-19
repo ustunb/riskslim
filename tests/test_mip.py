@@ -58,7 +58,10 @@ def test_create_risk_slim(generated_normal_data, relax_integer_variables):
 
 
 @pytest.mark.parametrize("relax_integer_variables", [True, False])
-def test_set_cplex_mip_parameters(generated_normal_data, relax_integer_variables):
+@pytest.mark.parametrize("optimality_tolerance", [None, 1e-8], ids=["default", "override"])
+def test_set_cplex_mip_parameters(
+    generated_normal_data, relax_integer_variables, optimality_tolerance
+):
 
     variable_names = ['(Intercept)'] + generated_normal_data['variable_names'].copy()
 
@@ -82,11 +85,20 @@ def test_set_cplex_mip_parameters(generated_normal_data, relax_integer_variables
     mip, _ = create_risk_slim(coef_set, mip_settings)
 
     cplex_settings = DEFAULT_CPLEX_SETTINGS.copy()
+    expected_optimality_tolerance = DEFAULT_CPLEX_SETTINGS["optimality_tolerance"]
+    if optimality_tolerance is not None:
+        cplex_settings["optimality_tolerance"] = optimality_tolerance
+        expected_optimality_tolerance = optimality_tolerance
+    else:
+        cplex_settings.pop("optimality_tolerance")
 
     mip = set_cplex_mip_parameters(
         mip,
         cplex_settings,
         display_cplex_progress=False,
+    )
+    assert (
+        mip.parameters.simplex.tolerances.optimality.get() == expected_optimality_tolerance
     )
 
 
