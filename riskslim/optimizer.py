@@ -378,19 +378,8 @@ class RiskSLIMOptimizer:
 
         return cuts, pool, bounds
 
-    def optimize(self, X, y, sample_weights=None, max_runtime = 60.0):
-        """Optimize RiskSLIM.
-
-        Parameters
-        ----------
-        X : 2d-array
-            Observations (rows) and features (columns).
-            With an addtional column of 1s for the intercept.
-        y : 2d-array
-            Class labels (+1, -1) with shape (n_rows, 1).
-        sample_weights : 2d array, optional, default: None
-            Sample weights with shape (n_features, 1). Must all be positive.
-        """
+    def optimize(self):
+        """Solve the RiskSLIM MIP built at initialization, within the max_runtime setting."""
 
         # Set cplex parameters and runtime
         self.mip.parameters.timelimit.set(self.settings["max_runtime"])

@@ -174,3 +174,22 @@ def test_RiskSLIMClassifier_warmstart(generated_normal_data, use_rounding, polis
     rs.fit(X[0], y)
 
     assert len(rs.optimizer.pool) > 0
+
+
+@pytest.mark.parametrize('max_size, expected_row', [
+    (0, 'NO VARIABLES: SCORE IS 0'),
+    (2, 'ADD POINTS FROM ROWS 1 to'),
+])
+def test_RiskSLIMClassifier_prints_score_table(max_size, expected_row):
+    """Printing a fitted classifier shows its score table, including an intercept-only model."""
+    rng = np.random.default_rng(0)
+    X = rng.integers(0, 2, size=(80, 3)).astype(float)
+    y = (X[:, 0] + X[:, 1] + rng.random(80) > 1.2).astype(int)
+    rs = RiskSLIMClassifier(max_size=max_size, verbose=False, max_runtime=10, cplex_randomseed=0)
+
+    rs.fit(X, y)
+
+    table = str(rs)
+    assert table.startswith('+')
+    assert expected_row in table
+    assert repr(rs) == table

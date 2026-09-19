@@ -21,7 +21,6 @@ import riskslim
 # max_size      0, 1, >1
 # max_offset        0, 1, Inf
 # c0_value          eps, 1e-8, 0.01, C0_max
-# sample_weights    no, yes
 # w_pos             1.00, < 1.00, > 1.00
 # initialization    on, off
 # chained_updates   on, off
@@ -32,7 +31,6 @@ import riskslim
 data_name = "breastcancer"  # name of the data
 data_dir = Path(__file__).parents[1] / 'data'  # directory where datasets are stored
 data_csv_file = data_dir / (data_name + '_data.csv')  # csv file for the data
-sample_weights_csv_file = None  # csv file of sample weights for the data (optional)
 
 default_settings = {
     #

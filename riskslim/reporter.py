@@ -47,14 +47,14 @@ class RiskScoreReporter:
         self._variable_types = dataset.variable_types
 
         # Table
+        self.table_str = str(print_model(
+            self.rho,
+            self.variable_names,
+            self.outcome_name,
+            show_omitted_variables=False,
+            return_only=True
+        ))
         if np.not_equal(estimator.coef_, 0.0).any():
-            self.table_str = str(print_model(
-                self.rho,
-                self.variable_names,
-                self.outcome_name,
-                show_omitted_variables=False,
-                return_only=True
-            ))
             self.table = {}
             self._prepare_table()
 

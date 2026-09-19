@@ -188,7 +188,7 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
             verbose = self.verbose,
             **settings,
         )
-        self.optimizer_.optimize(self._data.X, self._data.y)
+        self.optimizer_.optimize()
 
         coefficients = self.optimizer_.coefficients
         self.coef_ = coefficients[1:]

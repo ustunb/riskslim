@@ -22,10 +22,8 @@ class ClassificationDataset:
         initalization. None defaults to generic variable names.
     outcome_name : str, optional, default: None
         Name of the output class.
-    sample_weights : 2d array, optional, default: None
-        Sample weights with shape (n_features, 1). Must all be positive.
     """
-    def __init__(self, X, y, variable_names = None, outcome_name=None, sample_weights=None):
+    def __init__(self, X, y, variable_names = None, outcome_name=None):
         y = np.ravel(y)
 
         # todo copy
@@ -45,7 +43,6 @@ class ClassificationDataset:
         self._classes, _ = np.unique(y, return_inverse=True)
         self._outcome_name = outcome_name
 
-        self._sample_weights = sample_weights
         assert self.__check_rep__()
         self._y = np.where(self._y == 0, -1, self._y)
 
@@ -74,10 +71,6 @@ class ClassificationDataset:
     @property
     def classes(self):
         return self._classes
-
-    @property
-    def sample_weights(self):
-        return self._sample_weights
 
     @property
     def variable_names(self):
@@ -121,8 +114,6 @@ class ClassificationDataset:
                 Names of each features.
             outcome_name : str, optional, default: None
                 Name of the output class.
-            sample_weights : 2d array.
-                Sample weights with shape (n_features, 1). Must all be positive.
 
             Returns
             -------
@@ -132,7 +123,6 @@ class ClassificationDataset:
         y = self._y
         variable_names = self._variable_names
         outcome_name = self._outcome_name
-        sample_weights =  self._sample_weights
 
         assert isinstance(X, np.ndarray), "X should be numpy array"
         assert isinstance(y, np.ndarray), "y should be numpy.ndarray"
@@ -153,11 +143,6 @@ class ClassificationDataset:
         classes = np.unique(y)
         assert len(classes) == 2, 'y should contain two classes'
         assert np.isin(classes,(0,1)).all() or np.isin(classes, (-1,1)).all(), 'y should consist of 0,1 or +1,-1 values'
-
-        if sample_weights is not None:
-            assert isinstance(sample_weights, np.ndarray), 'sample_weights should be an array'
-            assert len(sample_weights) == n, 'sample_weights should contain N elements'
-            assert np.greater(sample_weights, 0.0).all(), 'sample_weights[i] > 0 for all i '
 
         return True
 

@@ -42,10 +42,13 @@ def print_model(rho, variable_names, outcome_name, show_omitted_variables=False,
 
     rho_values_string = [str(int(i)) + " points" for i in rho_values]
     n_variable_rows = len(rho_values)
-    total_string = "ADD POINTS FROM ROWS %d to %d" % (1, n_variable_rows)
+    if n_variable_rows > 0:
+        total_string = "ADD POINTS FROM ROWS %d to %d" % (1, n_variable_rows)
+    else:
+        total_string = "NO VARIABLES: SCORE IS 0"
 
-    max_name_col_length = max(len(predict_string), len(total_string), max([len(s) for s in rho_names])) + 2
-    max_value_col_length = max(7, max([len(s) for s in rho_values_string]) + len("points")) + 2
+    max_name_col_length = max(len(predict_string), len(total_string), max([len(s) for s in rho_names], default=0)) + 2
+    max_value_col_length = max(7, max([len(s) for s in rho_values_string], default=0) + len("points")) + 2
 
     m = pt.PrettyTable()
     m.field_names = ["Variable", "Points", "Tally"]

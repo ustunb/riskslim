@@ -22,7 +22,6 @@ def test_ClassificationDataset():
     assert np.all(ds.X[:, 1:] == X)
     assert np.all(ds.y == y)
     assert ds.variable_names[1:] == variable_names
-    assert ds.sample_weights is None
     assert ds.outcome_name == 'outcome'
     assert isinstance(ds.df, pd.DataFrame)
     assert isinstance(ds.__str__(), str)
