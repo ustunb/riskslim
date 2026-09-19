@@ -8,11 +8,18 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from generate_training_test_cases import (
+    DATA_GENERATION_VERSION,
+    REDUNDANT_DATA_GENERATION_VERSION,
+    SCHEMA_VERSION,
+    SYNTHETIC_RECORD_VERSION,
+    identity_digest,
+    regenerate_case_data,
+)
 from utils import generate_random_normal
 
 
 TRAINING_TEST_CASES_PATH = Path(__file__).parent / "training_test_cases.pkl"
-TRAINING_TEST_CASES_SCHEMA_VERSION = 1
 KNOWN_REFERENCE_DATASETS = {"breastcancer", "mammo"}
 BASELINE_SYNTHETIC_CASE_IDS = {
     f"{feature_distribution}__{truth_name}"
@@ -26,6 +33,33 @@ SYNTHETIC_CASE_IDS = BASELINE_SYNTHETIC_CASE_IDS | {
     for redundant_features in REDUNDANT_FEATURES
 }
 SYNTHETIC_MODEL_TYPES = {"risk-score", "checklist"}
+REGENERATION_COMMAND = "uv run python tests/generate_training_test_cases.py --regenerate"
+BASELINE_QUERY_KEYS = {
+    (1e-6, 4),
+    (1e-6, 2),
+    (1e-6, 1),
+    (1e-6, 0),
+    (0.01, 4),
+    (0.1, 4),
+    (1.0, 4),
+}
+QUERY_FIELDS = {
+    "query_identity",
+    "query_identity_digest",
+    "representative_rho",
+    "pure_logistic_loss",
+    "objective",
+    "representative_tie_count",
+    "proven_complete",
+}
+REMOVED_SYNTHETIC_DATA_FIELDS = {"X", "y", "rho_true", "source_rho_true"}
+REMOVED_ENUMERATION_FIELDS = {
+    "feature_coefficients",
+    "optimal_intercepts",
+    "pure_logistic_losses",
+    "supports",
+    "intercept_tie_multiplicities",
+}
 
 
 def compute_training_data_digest(X, y, variable_names, outcome_name):
@@ -42,77 +76,57 @@ def compute_training_data_digest(X, y, variable_names, outcome_name):
 
 
 def validate_synthetic_oracles(synthetic_oracles):
-    """Check the identity and inputs needed by the synthetic solver tests."""
+    """Check the compact identities and answers needed by the synthetic tests."""
     if not isinstance(synthetic_oracles, dict) or set(synthetic_oracles) != SYNTHETIC_CASE_IDS:
         raise ValueError("synthetic oracle cases do not match the admitted registry")
     for case_id, record in synthetic_oracles.items():
-        if not isinstance(record, dict) or record.get("record_version") != 1:
+        if not isinstance(record, dict) or record.get("record_version") != SYNTHETIC_RECORD_VERSION:
             raise ValueError(f"{case_id} has an unsupported record version")
-        redundant_features = record.get("redundant_features")
+        removed_fields = REMOVED_SYNTHETIC_DATA_FIELDS.intersection(record)
+        if removed_fields:
+            raise ValueError(
+                f"{case_id} still contains removed data fields: {sorted(removed_fields)}"
+            )
+        generation_spec = record.get("generation_spec")
+        data_digest = record.get("data_digest")
+        data_identity = record.get("data_identity")
+        redundant_features = (
+            generation_spec.get("redundant_features") if isinstance(generation_spec, dict) else None
+        )
         n_features = 4 if redundant_features is None else 8
-        X = record.get("X")
-        y = record.get("y")
         variable_names = record.get("variable_names")
         outcome_name = record.get("outcome_name")
         if (
-            not isinstance(X, np.ndarray)
-            or X.shape != (10_000, n_features)
-            or not np.isfinite(X).all()
-            or not isinstance(y, np.ndarray)
-            or y.shape != (10_000,)
-            or not np.isin(y, (0, 1)).all()
+            record.get("case_id") != case_id
+            or not isinstance(generation_spec, dict)
+            or generation_spec.get("case_id") != case_id
+            or not isinstance(data_digest, str)
+            or len(data_digest) != 64
+            or data_identity != {"generation_spec": generation_spec, "data_digest": data_digest}
             or not isinstance(variable_names, tuple)
             or len(variable_names) != n_features
+            or generation_spec.get("variable_names") != variable_names
             or outcome_name != "y"
+            or generation_spec.get("outcome_name") != outcome_name
         ):
-            raise ValueError(f"{case_id} training data or metadata is invalid")
-        data_digest = compute_training_data_digest(X, y, variable_names, outcome_name)
-        data_identity = record.get("data_identity")
-        feature_distribution, _ = case_id.split("__", maxsplit=1)
-        if (
-            record.get("case_id") != case_id
-            or record.get("data_digest") != data_digest
-            or not isinstance(data_identity, dict)
-            or data_identity.get("case_id") != case_id
-            or data_identity.get("feature_distribution") != feature_distribution
-            or data_identity.get("n_samples") != 10_000
-            or data_identity.get("data_digest") != data_digest
-        ):
-            raise ValueError(f"{case_id} data identity or digest does not match")
+            raise ValueError(f"{case_id} generation metadata is invalid")
 
         if redundant_features is None:
             if (
                 case_id not in BASELINE_SYNTHETIC_CASE_IDS
-                or data_identity.get("generation_version") != "independent-bernoulli-logistic-v1"
-                or data_identity.get("seed") != 0
+                or generation_spec.get("generation_version") != DATA_GENERATION_VERSION
             ):
                 raise ValueError(f"{case_id} baseline metadata does not match")
         else:
-            source_case_id = record.get("source_case_id")
+            source_case_id = generation_spec.get("source_case_id")
             source = synthetic_oracles.get(source_case_id)
-            expected_perturbation = (
-                {"kind": "exact_copy"}
-                if redundant_features == "duplicates"
-                else {
-                    "kind": "distribution_specific_noise",
-                    "seed_sequence": [0, 1, 2],
-                    "binary_bit_flip_probability": 0.05,
-                    "continuous_gaussian_standard_deviation": 0.25,
-                }
-            )
             if (
-                redundant_features not in REDUNDANT_FEATURES
+                generation_spec.get("generation_version") != REDUNDANT_DATA_GENERATION_VERSION
+                or redundant_features not in REDUNDANT_FEATURES
                 or source_case_id not in BASELINE_SYNTHETIC_CASE_IDS
                 or case_id != f"{source_case_id}__{redundant_features}"
                 or not isinstance(source, dict)
-                or data_identity.get("generation_version") != "redundant-features-v1"
-                or data_identity.get("source_case_id") != source_case_id
-                or data_identity.get("source_data_digest") != source.get("data_digest")
-                or data_identity.get("redundant_features") != redundant_features
-                or data_identity.get("perturbation") != expected_perturbation
-                or data_identity.get("labels_from_clean_features") is not True
-                or not np.array_equal(y, source.get("y"))
-                or not np.array_equal(record.get("source_rho_true"), source.get("rho_true"))
+                or generation_spec.get("source_data_digest") != source.get("data_digest")
             ):
                 raise ValueError(f"{case_id} redundant-feature metadata does not match")
 
@@ -121,19 +135,18 @@ def validate_synthetic_oracles(synthetic_oracles):
         if not has_fractional_truth and continuous_reference is not None:
             raise ValueError(f"{case_id} should not have a continuous reference")
         if has_fractional_truth:
-            if not isinstance(continuous_reference, dict):
-                raise ValueError(f"{case_id} is missing its continuous reference")
-            continuous_rho = continuous_reference.get("rho")
-            continuous_loss = continuous_reference.get("pure_logistic_loss", np.nan)
-            gradient_norm = continuous_reference.get("gradient_infinity_norm", np.nan)
+            continuous_rho = (
+                continuous_reference.get("rho") if isinstance(continuous_reference, dict) else None
+            )
             if (
-                continuous_reference.get("converged") is not True
+                not isinstance(continuous_reference, dict)
+                or continuous_reference.get("converged") is not True
                 or not isinstance(continuous_rho, np.ndarray)
                 or continuous_rho.shape != (n_features + 1,)
                 or not np.isfinite(continuous_rho).all()
-                or not np.isfinite(continuous_loss)
-                or not np.isfinite(gradient_norm)
-                or gradient_norm > 1e-6
+                or not np.isfinite(continuous_reference.get("pure_logistic_loss", np.nan))
+                or not np.isfinite(continuous_reference.get("gradient_infinity_norm", np.nan))
+                or continuous_reference["gradient_infinity_norm"] > 1e-6
                 or continuous_reference.get("identity", {}).get("data_digest") != data_digest
             ):
                 raise ValueError(f"{case_id} continuous reference is invalid")
@@ -145,9 +158,13 @@ def validate_synthetic_oracles(synthetic_oracles):
         if not isinstance(tasks, dict) or set(tasks) != expected_models:
             raise ValueError(f"{case_id} task profiles do not match")
         for model_type, task in tasks.items():
-            loss_identity = task.get("loss_identity") if isinstance(task, dict) else None
+            if not isinstance(task, dict):
+                raise ValueError(f"{case_id} {model_type} oracle is invalid")
+            removed_fields = REMOVED_ENUMERATION_FIELDS.intersection(task)
+            loss_identity = task.get("loss_identity")
             if (
-                not isinstance(loss_identity, dict)
+                removed_fields
+                or not isinstance(loss_identity, dict)
                 or loss_identity.get("algorithm_version") != "integer-intercept-profile-v1"
                 or loss_identity.get("data_identity") != data_identity
                 or loss_identity.get("data_digest") != data_digest
@@ -156,31 +173,94 @@ def validate_synthetic_oracles(synthetic_oracles):
                 or not isinstance(task.get("queries"), dict)
             ):
                 raise ValueError(f"{case_id} {model_type} oracle identity is invalid")
+            queries = task["queries"]
+            if redundant_features is None and set(queries) != BASELINE_QUERY_KEYS:
+                raise ValueError(f"{case_id} {model_type} query keys are invalid")
             if redundant_features is not None:
-                evidence = task.get("redundancy_evidence")
-                certificate = (
-                    evidence.get("certifying_penalty") if isinstance(evidence, dict) else None
-                )
-                query = evidence.get("certifying_query") if isinstance(evidence, dict) else None
+                if len(queries) != 1:
+                    raise ValueError(f"{case_id} {model_type} query keys are invalid")
+                c0_value, max_size = next(iter(queries))
+                if not np.isfinite(c0_value) or c0_value <= 0.0 or max_size != n_features:
+                    raise ValueError(f"{case_id} {model_type} query keys are invalid")
+            for query_key, query in queries.items():
+                rho = query.get("representative_rho") if isinstance(query, dict) else None
                 query_identity = query.get("query_identity") if isinstance(query, dict) else None
+                expected_query_identity = {
+                    "loss_identity_digest": task.get("loss_identity_digest"),
+                    "c0": query_key[0],
+                    "max_size": query_key[1],
+                }
                 if (
-                    not isinstance(certificate, dict)
-                    or not isinstance(query_identity, dict)
-                    or query_identity.get("loss_identity_digest")
-                    != task.get("loss_identity_digest")
-                    or query_identity.get("c0") != certificate.get("c0")
-                    or query_identity.get("max_size") != certificate.get("max_size")
+                    not isinstance(query, dict)
+                    or set(query) != QUERY_FIELDS
+                    or query_identity != expected_query_identity
+                    or query.get("query_identity_digest")
+                    != identity_digest(expected_query_identity)
+                    or not isinstance(rho, np.ndarray)
+                    or rho.shape != (n_features + 1,)
+                    or not np.isfinite(rho).all()
+                    or not np.isfinite(query.get("pure_logistic_loss", np.nan))
+                    or not np.isfinite(query.get("objective", np.nan))
+                    or not isinstance(query.get("representative_tie_count"), (int, np.integer))
+                    or query["representative_tie_count"] < 1
                     or query.get("proven_complete") is not True
                 ):
-                    raise ValueError(f"{case_id} {model_type} redundancy evidence is invalid")
+                    raise ValueError(f"{case_id} {model_type} query {query_key} is invalid")
 
 
-def validate_training_test_cases(store):
-    """Reject a stale or malformed shared training test-case store."""
+def regenerate_and_verify_synthetic_data(case_id, record, source=None):
+    """Regenerate one dataset, verify its stored identity, and inject only X/y."""
+    generated = regenerate_case_data(record, source=source)
+    X = generated.get("X")
+    y = generated.get("y")
+    variable_names = generated.get("variable_names")
+    outcome_name = generated.get("outcome_name")
+    n_features = len(record["variable_names"])
+    if (
+        not isinstance(X, np.ndarray)
+        or X.shape != (10_000, n_features)
+        or not np.isfinite(X).all()
+        or not isinstance(y, np.ndarray)
+        or y.shape != (10_000,)
+        or not np.isin(y, (0, 1)).all()
+        or variable_names != record["variable_names"]
+        or outcome_name != record["outcome_name"]
+    ):
+        raise ValueError(f"{case_id} regenerated training data is invalid")
+    regenerated_digest = compute_training_data_digest(X, y, variable_names, outcome_name)
+    if (
+        generated.get("case_id") != case_id
+        or generated.get("data_digest") != regenerated_digest
+        or regenerated_digest != record["data_digest"]
+        or generated.get("data_identity") != record["data_identity"]
+    ):
+        raise ValueError(f"{case_id} regenerated data digest does not match the stored digest")
+    record["X"] = X
+    record["y"] = y
+
+
+def validate_and_hydrate_synthetic_oracles(store):
+    """Validate compact oracles and regenerate each synthetic dataset once."""
+    if store.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError(
+            f"all synthetic cases use unsupported schema version {store.get('schema_version')}"
+        )
+    synthetic_oracles = store.get("synthetic_oracles")
+    if not isinstance(synthetic_oracles, dict) or set(synthetic_oracles) != SYNTHETIC_CASE_IDS:
+        raise ValueError("all synthetic cases do not match the admitted registry")
+    validate_synthetic_oracles(synthetic_oracles)
+    for case_id in sorted(BASELINE_SYNTHETIC_CASE_IDS):
+        regenerate_and_verify_synthetic_data(case_id, synthetic_oracles[case_id])
+    for case_id in sorted(SYNTHETIC_CASE_IDS - BASELINE_SYNTHETIC_CASE_IDS):
+        record = synthetic_oracles[case_id]
+        source = synthetic_oracles[record["generation_spec"]["source_case_id"]]
+        regenerate_and_verify_synthetic_data(case_id, record, source=source)
+
+
+def validate_known_reference_results(store):
+    """Reject a malformed shared store or non-regenerable real-data records."""
     if not isinstance(store, dict):
         raise ValueError("top level is not a dictionary")
-    if store.get("schema_version") != TRAINING_TEST_CASES_SCHEMA_VERSION:
-        raise ValueError(f"schema_version must be {TRAINING_TEST_CASES_SCHEMA_VERSION}")
     known_results = store.get("known_reference_results")
     if not isinstance(known_results, dict):
         raise ValueError("known_reference_results is not a dictionary")
@@ -230,7 +310,7 @@ def training_test_cases():
     try:
         with TRAINING_TEST_CASES_PATH.open("rb") as file_handle:
             store = pickle.load(file_handle)
-        validate_training_test_cases(store)
+        validate_known_reference_results(store)
     except Exception as error:
         pytest.fail(
             f"Stale or malformed {TRAINING_TEST_CASES_PATH}: {error}. Restore the checked-in "
@@ -238,12 +318,11 @@ def training_test_cases():
             pytrace=False,
         )
     try:
-        validate_synthetic_oracles(store.get("synthetic_oracles"))
+        validate_and_hydrate_synthetic_oracles(store)
     except Exception as error:
-        regeneration_command = "uv run python tests/generate_training_test_cases.py --regenerate"
         pytest.fail(
             f"Stale or malformed synthetic records in {TRAINING_TEST_CASES_PATH}: {error}. "
-            f"Regenerate them with `{regeneration_command}`.",
+            f"Regenerate them with `{REGENERATION_COMMAND}`.",
             pytrace=False,
         )
     return store

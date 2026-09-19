@@ -26,11 +26,12 @@ from riskslim.coefficient_set import CoefficientSet
 from riskslim.data import ClassificationDataset
 
 
-SCHEMA_VERSION = 1
-SYNTHETIC_RECORD_VERSION = 1
+SCHEMA_VERSION = 2
+SYNTHETIC_RECORD_VERSION = 2
 ORACLE_ALGORITHM_VERSION = "integer-intercept-profile-v1"
-DATA_GENERATION_VERSION = "independent-bernoulli-logistic-v1"
-REDUNDANT_DATA_GENERATION_VERSION = "redundant-features-v1"
+DATA_GENERATION_VERSION = "independent-bernoulli-logistic-randomstate-v2"
+REDUNDANT_DATA_GENERATION_VERSION = "redundant-features-randomstate-v2"
+RANDOM_NUMBER_GENERATOR = "numpy.random.RandomState(MT19937)"
 TEST_CASE_PATH = Path(__file__).resolve().parent / "training_test_cases.pkl"
 N_SAMPLES = 10_000
 SEED = 0
@@ -50,6 +51,7 @@ REDUNDANT_FEATURES = ("duplicates", "noisy_duplicates")
 BINARY_FEATURE_PROBABILITY = 0.5
 CONTINUOUS_FEATURE_STANDARD_DEVIATION = 2.0
 LABEL_SEED_SEQUENCE = [SEED, 0, 1]
+CASE_LABEL_SEEDS = {"binary__shifted_fractional": [1, 0, 1]}
 NOISE_SEED_SEQUENCE = [SEED, 1, 2]
 BIT_FLIP_PROBABILITY = 0.05
 GAUSSIAN_NOISE_STANDARD_DEVIATION = 0.25
@@ -61,12 +63,17 @@ C0_VALUES = (1e-6, PROVISIONAL_REDUNDANCY_PENALTY, 0.1, 1.0)
 CERTIFICATE_GAP_TOLERANCE = 1e-6
 CONTINUOUS_GRADIENT_TOLERANCE = 1e-6
 QUERY_PATH_TOLERANCE = 5e-14
+QUERY_RECOMPUTATION_TOLERANCE = 1e-12
 PROFILE_COMPARISON_TOLERANCE = 2e-15
 BASE_FEATURE_COUNT = len(next(iter(TRUTHS.values()))) - 1
 REDUNDANT_FEATURE_COUNT = 2 * BASE_FEATURE_COUNT
 FIXED_SIZE_LIMITS = (2, 1, 0)
 MAX_SIZES = (BASE_FEATURE_COUNT, *FIXED_SIZE_LIMITS)
 REDUNDANT_MAX_SIZES = (REDUNDANT_FEATURE_COUNT, *FIXED_SIZE_LIMITS)
+BASELINE_QUERY_KEYS = (
+    *((1e-6, max_size) for max_size in MAX_SIZES),
+    *((c0_value, BASE_FEATURE_COUNT) for c0_value in C0_VALUES[1:]),
+)
 MODEL_GENERATION_ORDER = ("checklist", "risk-score")
 BASELINE_CASE_IDS = tuple(
     f"{feature_distribution}__{truth_name}"
@@ -89,7 +96,7 @@ OPERATION_ARGUMENTS.add_argument("--preflight", action="store_true")
 ARGUMENT_PARSER.add_argument("--case", choices=ALL_CASE_IDS)
 
 
-def load_store() -> dict:
+def load_store(allow_legacy_schema: bool = False) -> dict:
     """Load the shared store without altering known-reference records."""
     if not TEST_CASE_PATH.exists():
         raise FileNotFoundError(
@@ -98,8 +105,14 @@ def load_store() -> dict:
         )
     with TEST_CASE_PATH.open("rb") as file_handle:
         store = pickle.load(file_handle)
-    if not isinstance(store, dict) or store.get("schema_version") != SCHEMA_VERSION:
+    if not isinstance(store, dict):
         raise ValueError("unsupported training test-case store")
+    schema_version = store.get("schema_version")
+    if schema_version != SCHEMA_VERSION and not (allow_legacy_schema and schema_version == 1):
+        raise ValueError(
+            "unsupported training test-case store; migrate it with "
+            "`uv run python tests/generate_training_test_cases.py --regenerate`"
+        )
     if not isinstance(store.get("synthetic_oracles"), dict):
         raise ValueError("synthetic_oracles must be a dictionary")
     if not isinstance(store.get("known_reference_results"), dict):
@@ -139,47 +152,92 @@ def identity_digest(identity: dict) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def build_data_identity(case_id: str, data_digest: str) -> dict:
-    """Build the stable identity for one baseline dataset."""
+def build_data_generation_spec(case_id: str) -> dict:
+    """Build the complete deterministic specification for one baseline dataset."""
     feature_distribution, truth_name = case_id.split("__")
-    return {
+    variable_names = tuple(
+        f"{feature_distribution}_{index}" for index in range(1, BASE_FEATURE_COUNT + 1)
+    )
+    if feature_distribution == "mixed":
+        variable_names = ("binary_1", "binary_2", "continuous_1", "continuous_2")
+    spec = {
         "generation_version": DATA_GENERATION_VERSION,
+        "random_number_generator": RANDOM_NUMBER_GENERATOR,
         "case_id": case_id,
         "feature_distribution": feature_distribution,
         "rho_true": list(TRUTHS[truth_name]),
         "n_samples": N_SAMPLES,
-        "seed": SEED,
-        "label_seed_sequence": list(LABEL_SEED_SEQUENCE),
-        "data_digest": data_digest,
+        "feature_seed": SEED,
+        "label_seed": list(CASE_LABEL_SEEDS.get(case_id, LABEL_SEED_SEQUENCE)),
+        "variable_names": variable_names,
+        "outcome_name": "y",
+        "label_distribution": "bernoulli-logistic",
     }
+    if feature_distribution in ("binary", "mixed"):
+        spec["binary_feature_probability"] = BINARY_FEATURE_PROBABILITY
+        spec["binary_feature_count"] = (
+            BASE_FEATURE_COUNT if feature_distribution == "binary" else BASE_FEATURE_COUNT // 2
+        )
+    if feature_distribution in ("continuous", "mixed"):
+        spec["continuous_feature_mean"] = 0.0
+        spec["continuous_feature_standard_deviation"] = CONTINUOUS_FEATURE_STANDARD_DEVIATION
+        spec["continuous_feature_count"] = (
+            BASE_FEATURE_COUNT if feature_distribution == "continuous" else BASE_FEATURE_COUNT // 2
+        )
+    return spec
 
 
-def redundant_perturbation(redundant_features: str) -> dict:
+def build_data_identity(generation_spec: dict, data_digest: str) -> dict:
+    """Build the stable identity for a deterministically generated dataset."""
+    return {"generation_spec": generation_spec, "data_digest": data_digest}
+
+
+def redundant_perturbation(redundant_features: str, feature_distribution: str) -> dict:
     """Describe the deterministic duplicate transformation."""
     if redundant_features == "duplicates":
         return {"kind": "exact_copy"}
+    binary_columns = []
+    continuous_columns = []
+    if feature_distribution == "binary":
+        binary_columns = list(range(BASE_FEATURE_COUNT))
+    elif feature_distribution == "continuous":
+        continuous_columns = list(range(BASE_FEATURE_COUNT))
+    else:
+        binary_columns = list(range(BASE_FEATURE_COUNT // 2))
+        continuous_columns = list(range(BASE_FEATURE_COUNT // 2, BASE_FEATURE_COUNT))
     return {
         "kind": "distribution_specific_noise",
-        "seed_sequence": NOISE_SEED_SEQUENCE,
+        "noise_seed": list(NOISE_SEED_SEQUENCE),
         "binary_bit_flip_probability": BIT_FLIP_PROBABILITY,
+        "continuous_gaussian_mean": 0.0,
         "continuous_gaussian_standard_deviation": GAUSSIAN_NOISE_STANDARD_DEVIATION,
+        "binary_columns": binary_columns,
+        "continuous_columns": continuous_columns,
     }
 
 
-def build_redundant_data_identity(source: dict, redundant_features: str, data_digest: str) -> dict:
-    """Build the stable identity for one redundant-feature dataset."""
+def build_redundant_data_generation_spec(source: dict, redundant_features: str) -> dict:
+    """Build the complete deterministic specification for redundant features."""
+    source_spec = source["generation_spec"]
+    feature_distribution = source_spec["feature_distribution"]
+    suffix = "duplicate" if redundant_features == "duplicates" else "noisy_duplicate"
+    variable_names = tuple(source["variable_names"]) + tuple(
+        f"{name}_{suffix}" for name in source["variable_names"]
+    )
     return {
         "generation_version": REDUNDANT_DATA_GENERATION_VERSION,
+        "random_number_generator": RANDOM_NUMBER_GENERATOR,
         "case_id": f"{source['case_id']}__{redundant_features}",
         "source_case_id": source["case_id"],
         "source_data_digest": source["data_digest"],
-        "feature_distribution": source["data_identity"]["feature_distribution"],
-        "rho_true": source["rho_true"].tolist(),
+        "feature_distribution": feature_distribution,
+        "rho_true": list(source_spec["rho_true"]),
         "n_samples": N_SAMPLES,
         "redundant_features": redundant_features,
-        "perturbation": redundant_perturbation(redundant_features),
-        "labels_from_clean_features": True,
-        "data_digest": data_digest,
+        "perturbation": redundant_perturbation(redundant_features, feature_distribution),
+        "labels_from_source": True,
+        "variable_names": variable_names,
+        "outcome_name": source["outcome_name"],
     }
 
 
@@ -210,35 +268,49 @@ def values_match(left, right) -> bool:
     return bool(left == right)
 
 
-def generate_data(case_id: str) -> dict:
+def generate_data(case_id: str, generation_spec: dict | None = None) -> dict:
     """Generate one fixed-seed independent Bernoulli-logistic dataset."""
-    feature_distribution, truth_name = case_id.split("__")
-    truth = np.asarray(TRUTHS[truth_name], dtype=np.float64)
-    feature_rng = np.random.default_rng(SEED)
+    expected_spec = build_data_generation_spec(case_id)
+    spec = expected_spec if generation_spec is None else generation_spec
+    if not values_match(spec, expected_spec):
+        raise ValueError(f"{case_id} has an unsupported baseline generation specification")
+    feature_distribution = spec["feature_distribution"]
+    truth = np.asarray(spec["rho_true"], dtype=np.float64)
+    feature_rng = np.random.RandomState(spec["feature_seed"])
     if feature_distribution == "binary":
         X = feature_rng.binomial(
-            1, BINARY_FEATURE_PROBABILITY, size=(N_SAMPLES, BASE_FEATURE_COUNT)
+            1,
+            spec["binary_feature_probability"],
+            size=(spec["n_samples"], spec["binary_feature_count"]),
         ).astype(np.int8)
-        variable_names = tuple(f"binary_{index}" for index in range(1, BASE_FEATURE_COUNT + 1))
     elif feature_distribution == "continuous":
         X = feature_rng.normal(
-            0.0, CONTINUOUS_FEATURE_STANDARD_DEVIATION, size=(N_SAMPLES, BASE_FEATURE_COUNT)
+            spec["continuous_feature_mean"],
+            spec["continuous_feature_standard_deviation"],
+            size=(spec["n_samples"], spec["continuous_feature_count"]),
         )
-        variable_names = tuple(f"continuous_{index}" for index in range(1, BASE_FEATURE_COUNT + 1))
-    else:
-        binary = feature_rng.binomial(1, BINARY_FEATURE_PROBABILITY, size=(N_SAMPLES, 2))
+    elif feature_distribution == "mixed":
+        binary = feature_rng.binomial(
+            1,
+            spec["binary_feature_probability"],
+            size=(spec["n_samples"], spec["binary_feature_count"]),
+        )
         continuous = feature_rng.normal(
-            0.0, CONTINUOUS_FEATURE_STANDARD_DEVIATION, size=(N_SAMPLES, 2)
+            spec["continuous_feature_mean"],
+            spec["continuous_feature_standard_deviation"],
+            size=(spec["n_samples"], spec["continuous_feature_count"]),
         )
         X = np.hstack((binary, continuous)).astype(np.float64)
-        variable_names = ("binary_1", "binary_2", "continuous_1", "continuous_2")
+    else:
+        raise ValueError(f"unknown feature distribution: {feature_distribution}")
 
-    label_rng = np.random.default_rng(np.random.SeedSequence(LABEL_SEED_SEQUENCE))
+    label_rng = np.random.RandomState(spec["label_seed"])
     probabilities = expit(truth[0] + X @ truth[1:])
     y = label_rng.binomial(1, probabilities).astype(np.int8)
-    outcome_name = "y"
+    variable_names = tuple(spec["variable_names"])
+    outcome_name = spec["outcome_name"]
     data_digest = compute_data_digest(X, y, variable_names, outcome_name)
-    data_identity = build_data_identity(case_id, data_digest)
+    data_identity = build_data_identity(spec, data_digest)
     return {
         "case_id": case_id,
         "X": X,
@@ -247,52 +319,55 @@ def generate_data(case_id: str) -> dict:
         "outcome_name": outcome_name,
         "data_digest": data_digest,
         "data_identity": data_identity,
+        "generation_spec": spec,
         "rho_true": truth,
     }
 
 
-def generate_redundant_data(source: dict, redundant_features: str) -> dict:
+def generate_redundant_data(
+    source: dict, redundant_features: str, generation_spec: dict | None = None
+) -> dict:
     """Add deterministic copies while retaining labels from the clean features."""
     if redundant_features not in REDUNDANT_FEATURES:
         raise ValueError(f"unknown redundant-feature arrangement: {redundant_features}")
+    expected_spec = build_redundant_data_generation_spec(source, redundant_features)
+    spec = expected_spec if generation_spec is None else generation_spec
+    case_id = f"{source['case_id']}__{redundant_features}"
+    if not values_match(spec, expected_spec):
+        raise ValueError(f"{case_id} has an unsupported redundant generation specification")
     clean_X = source["X"]
+    perturbation = spec["perturbation"]
     if redundant_features == "duplicates":
+        if perturbation != {"kind": "exact_copy"}:
+            raise ValueError(f"{case_id} exact-copy specification does not match")
         copied_X = clean_X.copy()
     else:
-        feature_distribution = source["data_identity"]["feature_distribution"]
-        noise_rng = np.random.default_rng(np.random.SeedSequence(NOISE_SEED_SEQUENCE))
+        feature_distribution = spec["feature_distribution"]
+        noise_rng = np.random.RandomState(perturbation["noise_seed"])
         copied_X = clean_X.astype(np.float64, copy=True)
-        if feature_distribution == "binary":
-            binary_columns = range(BASE_FEATURE_COUNT)
-            continuous_columns = ()
-        elif feature_distribution == "continuous":
-            binary_columns = ()
-            continuous_columns = range(BASE_FEATURE_COUNT)
-        else:
-            binary_columns = range(2)
-            continuous_columns = range(BASE_FEATURE_COUNT // 2, BASE_FEATURE_COUNT)
+        binary_columns = perturbation["binary_columns"]
+        continuous_columns = perturbation["continuous_columns"]
         if binary_columns:
             flips = noise_rng.binomial(
-                1, BIT_FLIP_PROBABILITY, size=(N_SAMPLES, len(binary_columns))
+                1,
+                perturbation["binary_bit_flip_probability"],
+                size=(spec["n_samples"], len(binary_columns)),
             )
             copied_X[:, binary_columns] = np.abs(clean_X[:, binary_columns] - flips)
         if continuous_columns:
             copied_X[:, continuous_columns] += noise_rng.normal(
-                0.0,
-                GAUSSIAN_NOISE_STANDARD_DEVIATION,
-                size=(N_SAMPLES, len(continuous_columns)),
+                perturbation["continuous_gaussian_mean"],
+                perturbation["continuous_gaussian_standard_deviation"],
+                size=(spec["n_samples"], len(continuous_columns)),
             )
         if feature_distribution == "binary":
             copied_X = copied_X.astype(np.int8)
 
     X = np.hstack((clean_X, copied_X))
-    suffix = "duplicate" if redundant_features == "duplicates" else "noisy_duplicate"
-    variable_names = tuple(source["variable_names"]) + tuple(
-        f"{name}_{suffix}" for name in source["variable_names"]
-    )
-    case_id = f"{source['case_id']}__{redundant_features}"
-    data_digest = compute_data_digest(X, source["y"], variable_names, source["outcome_name"])
-    data_identity = build_redundant_data_identity(source, redundant_features, data_digest)
+    variable_names = tuple(spec["variable_names"])
+    outcome_name = spec["outcome_name"]
+    data_digest = compute_data_digest(X, source["y"], variable_names, outcome_name)
+    data_identity = build_data_identity(spec, data_digest)
     return {
         "case_id": case_id,
         "source_case_id": source["case_id"],
@@ -300,12 +375,29 @@ def generate_redundant_data(source: dict, redundant_features: str) -> dict:
         "X": X,
         "y": source["y"].copy(),
         "variable_names": variable_names,
-        "outcome_name": source["outcome_name"],
+        "outcome_name": outcome_name,
         "data_digest": data_digest,
         "data_identity": data_identity,
-        "rho_true": np.r_[source["rho_true"], np.zeros(BASE_FEATURE_COUNT)],
-        "source_rho_true": source["rho_true"].copy(),
+        "generation_spec": spec,
+        "rho_true": np.r_[spec["rho_true"], np.zeros(BASE_FEATURE_COUNT)],
+        "source_rho_true": np.asarray(spec["rho_true"], dtype=np.float64),
     }
+
+
+def regenerate_case_data(record: dict, source: dict | None = None) -> dict:
+    """Regenerate synthetic arrays from a stored specification without fitting or enumeration."""
+    case_id = record.get("case_id")
+    generation_spec = record.get("generation_spec")
+    if not isinstance(generation_spec, dict):
+        raise ValueError(f"{case_id} is missing its generation specification")
+    redundant_features = generation_spec.get("redundant_features")
+    if redundant_features is None:
+        if source is not None:
+            raise ValueError(f"{case_id} baseline regeneration does not accept a source")
+        return generate_data(case_id, generation_spec=generation_spec)
+    if source is None:
+        raise ValueError(f"{case_id} redundant regeneration requires its hydrated source")
+    return generate_redundant_data(source, redundant_features, generation_spec=generation_spec)
 
 
 def determine_coefficient_bounds(data: dict, feature_bounds: tuple[int, int]) -> dict:
@@ -440,7 +532,7 @@ def validate_intercept_profiler() -> dict:
             raise AssertionError(f"intercept profiler loss failed {name}")
         results[name] = sorted(minimizers)
 
-    rng = np.random.default_rng(9173)
+    rng = np.random.RandomState(9173)
     X = rng.normal(size=(37, 2))
     y = rng.binomial(1, expit(-0.3 + X @ np.array([0.7, -1.1]))).astype(np.int8)
     coefficients = np.asarray(list(itertools.product(range(-2, 3), repeat=2)))
@@ -464,7 +556,7 @@ def validate_intercept_profiler() -> dict:
 
 def validate_duplicate_grouping() -> dict:
     """Exhaustively compare grouped and direct duplicate grids at a small bound."""
-    rng = np.random.default_rng(3107)
+    rng = np.random.RandomState(3107)
     clean_X = rng.normal(size=(31, BASE_FEATURE_COUNT))
     X = np.hstack((clean_X, clean_X))
     y = rng.binomial(1, expit(-0.2 + clean_X @ np.array([0.8, -0.6, 0.4, 1.1])))
@@ -914,29 +1006,19 @@ def generate_task_record(data: dict, model_type: str, profile: dict) -> dict:
     return record
 
 
-def initialize_case_record(data: dict, diagnostics: dict) -> dict:
+def initialize_case_record(data: dict) -> dict:
     """Build the data and diagnostic fields shared by every case record."""
-    record = {
+    return {
         "record_version": SYNTHETIC_RECORD_VERSION,
         "case_id": data["case_id"],
-        "X": data["X"],
-        "y": data["y"],
+        "generation_spec": data["generation_spec"],
         "variable_names": data["variable_names"],
         "outcome_name": data["outcome_name"],
-        "rho_true": data["rho_true"],
         "data_digest": data["data_digest"],
         "data_identity": data["data_identity"],
         "continuous_reference": fit_continuous_reference(data),
         "tasks": {},
-        "profiler_diagnostics": diagnostics,
     }
-    if data.get("redundant_features"):
-        record.update(
-            source_case_id=data["source_case_id"],
-            redundant_features=data["redundant_features"],
-            source_rho_true=data["source_rho_true"],
-        )
-    return record
 
 
 def query_task(task: dict, c0_value: float, max_size: int) -> dict:
@@ -1010,9 +1092,9 @@ def build_redundancy_certificate(
     }
 
 
-def find_certifying_penalty(task: dict) -> dict | None:
-    """Choose the first reported alternative with a nonempty pair-removal certificate."""
-    for c0_value in ALTERNATIVE_REDUNDANCY_PENALTIES:
+def find_redundancy_certificate(task: dict) -> dict:
+    """Choose the first approved penalty that proves useful pair removal."""
+    for c0_value in (PROVISIONAL_REDUNDANCY_PENALTY, *ALTERNATIVE_REDUNDANCY_PENALTIES):
         certificate = build_redundancy_certificate(task, c0_value)
         if (
             certificate["nonempty_useful_support"]
@@ -1020,37 +1102,41 @@ def find_certifying_penalty(task: dict) -> dict | None:
             and certificate["at_most_one_selected_per_pair"]
             and certificate["all_optima_drop_unneeded_pair_members"]
         ):
-            certificate["selected_from_reported_candidate_penalties"] = True
             return certificate
-    return None
+    raise AssertionError("no approved penalty proves positive nonempty pair removal")
 
 
-def attach_redundancy_evidence(task: dict) -> None:
-    """Record the provisional result and a proved nonempty certifying query."""
-    provisional = build_redundancy_certificate(task)
-    certifying = provisional
-    if not (
-        provisional["nonempty_useful_support"]
-        and provisional["all_optima_nonempty"]
-        and provisional["at_most_one_selected_per_pair"]
-        and provisional["all_optima_drop_unneeded_pair_members"]
-    ):
-        certifying = find_certifying_penalty(task)
-    if certifying is None:
-        raise AssertionError("no positive nonempty pair-removal penalty exists")
-    c0_value = certifying["c0"]
-    task["redundancy_evidence"] = {
-        "provisional_c0_0.01": provisional,
-        "certifying_penalty": certifying,
-        "certifying_query": query_task(task, c0_value, REDUNDANT_FEATURE_COUNT),
+def compact_query(query: dict) -> dict:
+    """Keep only the exact optimum information consumed by solver tests."""
+    return {
+        "query_identity": query["query_identity"],
+        "query_identity_digest": query["query_identity_digest"],
+        "representative_rho": query["representative_rho"],
+        "pure_logistic_loss": query["pure_logistic_loss"],
+        "objective": query["objective"],
+        "representative_tie_count": query["representative_tie_count"],
+        "proven_complete": query["proven_complete"],
+    }
+
+
+def compact_task_record(task: dict, query_keys: tuple[tuple[float, int], ...]) -> dict:
+    """Discard enumeration arrays after retaining the exact answers used by tests."""
+    return {
+        "loss_identity": task["loss_identity"],
+        "loss_identity_digest": task["loss_identity_digest"],
+        "coefficient_set_lower_bounds": task["coefficient_set_lower_bounds"],
+        "coefficient_set_upper_bounds": task["coefficient_set_upper_bounds"],
+        "queries": {key: compact_query(query_task(task, key[0], key[1])) for key in query_keys},
+        "coverage": task["coverage"],
     }
 
 
 def generate_case_records(preflights: dict, diagnostics: dict) -> dict:
     """Generate records with every cheap checklist profile before risk-score work."""
-    started = {case_id: time.perf_counter() for case_id in preflights}
+    if not diagnostics.get("passed"):
+        raise AssertionError("profiler diagnostics did not pass")
     records = {
-        case_id: initialize_case_record(preflight["data"], diagnostics)
+        case_id: initialize_case_record(preflight["data"])
         for case_id, preflight in preflights.items()
     }
     for model_type in MODEL_GENERATION_ORDER:
@@ -1062,13 +1148,15 @@ def generate_case_records(preflights: dict, diagnostics: dict) -> dict:
             task = generate_task_record(preflight["data"], model_type, profile)
             redundant = bool(preflight["data"].get("redundant_features"))
             if redundant:
-                attach_redundancy_evidence(task)
-            records[case_id]["tasks"][model_type] = task
+                certificate = find_redundancy_certificate(task)
+                query_keys = ((certificate["c0"], REDUNDANT_FEATURE_COUNT),)
+            else:
+                query_keys = BASELINE_QUERY_KEYS
+            records[case_id]["tasks"][model_type] = compact_task_record(task, query_keys)
             certificate_message = ""
             if redundant:
-                certificate = task["redundancy_evidence"]["provisional_c0_0.01"]
                 certificate_message = (
-                    "; c0=.01 certificate "
+                    f"; c0={certificate['c0']:.6g} certificate "
                     f"nonempty={certificate['nonempty_useful_support']} "
                     "one-per-pair="
                     f"{certificate['all_optima_drop_unneeded_pair_members']} "
@@ -1079,49 +1167,34 @@ def generate_case_records(preflights: dict, diagnostics: dict) -> dict:
                 f"{time.perf_counter() - task_started:.1f}s{certificate_message}",
                 flush=True,
             )
-    for case_id, record in records.items():
-        record["generation_seconds"] = time.perf_counter() - started[case_id]
     return records
 
 
-def validate_stored_data(record: dict, source: dict | None = None) -> None:
-    """Validate one stored dataset and its continuous diagnostic."""
+def hydrate_stored_data(record: dict, source: dict | None = None) -> dict:
+    """Regenerate and validate one compact synthetic record without mutating it."""
     case_id = record.get("case_id")
     if record.get("record_version") != SYNTHETIC_RECORD_VERSION:
         raise ValueError(f"{case_id} has an unsupported record version")
-    if source is not None:
-        if case_id != f"{source['case_id']}__{record.get('redundant_features')}":
-            raise ValueError(f"{case_id} has inconsistent redundant-feature metadata")
-        expected = generate_redundant_data(source, record["redundant_features"])
-        for name in ("X", "y", "rho_true", "source_rho_true"):
-            if not np.array_equal(record.get(name), expected[name]):
-                raise ValueError(f"{case_id} {name} does not match deterministic generation")
-        for name in ("variable_names", "outcome_name", "data_digest", "data_identity"):
-            if record.get(name) != expected[name]:
-                raise ValueError(f"{case_id} {name} does not match deterministic generation")
-        validate_continuous_reference(record)
-        return
-    if case_id not in BASELINE_CASE_IDS:
-        raise ValueError(f"unknown baseline case: {case_id}")
-    X = record.get("X")
-    y = record.get("y")
-    variable_names = record.get("variable_names")
-    outcome_name = record.get("outcome_name")
-    if not isinstance(X, np.ndarray) or X.shape != (N_SAMPLES, BASE_FEATURE_COUNT):
-        raise ValueError(f"{case_id} X has the wrong shape")
-    if not isinstance(y, np.ndarray) or y.shape != (N_SAMPLES,):
-        raise ValueError(f"{case_id} y has the wrong shape")
-    if len(variable_names) != BASE_FEATURE_COUNT or outcome_name != "y":
-        raise ValueError(f"{case_id} feature or outcome metadata is invalid")
-    data_digest = compute_data_digest(X, y, variable_names, outcome_name)
-    if record.get("data_digest") != data_digest:
-        raise ValueError(f"{case_id} data digest does not match")
-    if record.get("data_identity") != build_data_identity(case_id, record["data_digest"]):
-        raise ValueError(f"{case_id} data identity does not match")
-    if not np.array_equal(record.get("rho_true"), record["data_identity"]["rho_true"]):
-        raise ValueError(f"{case_id} planted coefficients do not match")
-
-    validate_continuous_reference(record)
+    expected_fields = {
+        "record_version",
+        "case_id",
+        "generation_spec",
+        "variable_names",
+        "outcome_name",
+        "data_digest",
+        "data_identity",
+        "continuous_reference",
+        "tasks",
+    }
+    if set(record) != expected_fields:
+        raise ValueError(f"{case_id} compact record fields do not match")
+    generated = regenerate_case_data(record, source=source)
+    for name in ("variable_names", "outcome_name", "data_digest", "data_identity"):
+        if not values_match(record.get(name), generated[name]):
+            raise ValueError(f"{case_id} {name} does not match deterministic generation")
+    hydrated = {**record, **generated}
+    validate_continuous_reference(hydrated)
+    return hydrated
 
 
 def validate_continuous_reference(record: dict) -> None:
@@ -1146,143 +1219,192 @@ def validate_continuous_reference(record: dict) -> None:
         raise ValueError(f"{case_id} continuous diagnostic is invalid")
 
 
-def validate_stored_task(record: dict, model_type: str) -> dict:
-    """Validate cached bounds and every exact loss array without enumerating."""
-    case_id = record["case_id"]
-    task = record.get("tasks", {}).get(model_type)
+def expected_coverage(data: dict, model_type: str, bounds: dict) -> dict:
+    """Return exact enumeration counts without materializing coefficient grids."""
+    lower, upper = MODEL_FEATURE_BOUNDS[model_type]
+    n_features = data["X"].shape[1]
+    if data.get("redundant_features") == "duplicates":
+        profiled_vectors = (2 * (upper - lower) + 1) ** BASE_FEATURE_COUNT
+    else:
+        profiled_vectors = (upper - lower + 1) ** n_features
+    intercept_count = (
+        int(bounds["effective_integer_upper_bounds"][0])
+        - int(bounds["effective_integer_lower_bounds"][0])
+        + 1
+    )
+    return {
+        "proven_complete": True,
+        "profiled_feature_vectors": profiled_vectors,
+        "nominal_full_models": (upper - lower + 1) ** n_features * intercept_count,
+    }
+
+
+def validate_stored_query(data: dict, task: dict, key: tuple[float, int], query: dict) -> dict:
+    """Validate one compact query against its identity, bounds, and regenerated data."""
+    c0_value, max_size = key
+    expected_identity = {
+        "loss_identity_digest": task["loss_identity_digest"],
+        "c0": c0_value,
+        "max_size": max_size,
+    }
+    expected_fields = {
+        "query_identity",
+        "query_identity_digest",
+        "representative_rho",
+        "pure_logistic_loss",
+        "objective",
+        "representative_tie_count",
+        "proven_complete",
+    }
+    if not isinstance(query, dict) or set(query) != expected_fields:
+        raise ValueError(f"query {key} compact fields do not match")
+    if (
+        query["query_identity"] != expected_identity
+        or query["query_identity_digest"] != identity_digest(expected_identity)
+        or query["proven_complete"] is not True
+    ):
+        raise ValueError(f"query {key} identity does not match")
+    rho = query["representative_rho"]
+    lower = np.asarray(task["loss_identity"]["effective_integer_lower_bounds"])
+    upper = np.asarray(task["loss_identity"]["effective_integer_upper_bounds"])
+    if (
+        not isinstance(rho, np.ndarray)
+        or rho.shape != lower.shape
+        or not np.equal(rho, np.rint(rho)).all()
+        or np.any(rho < lower)
+        or np.any(rho > upper)
+    ):
+        raise ValueError(f"query {key} representative is outside its integer bounds")
+    cardinality = int(np.count_nonzero(rho[1:]))
+    if cardinality > max_size:
+        raise ValueError(f"query {key} representative exceeds its size limit")
+    signed_scores = (1.0 - 2.0 * data["y"]) * (rho[0] + data["X"] @ rho[1:])
+    loss = float(np.mean(np.logaddexp(0.0, signed_scores)))
+    objective = loss + c0_value * cardinality
+    if not np.isclose(
+        query["pure_logistic_loss"], loss, rtol=0.0, atol=QUERY_RECOMPUTATION_TOLERANCE
+    ):
+        raise ValueError(f"query {key} loss does not match its representative")
+    if not np.isclose(query["objective"], objective, rtol=0.0, atol=QUERY_RECOMPUTATION_TOLERANCE):
+        raise ValueError(f"query {key} objective does not match its representative")
+    if (
+        not isinstance(query["representative_tie_count"], int)
+        or query["representative_tie_count"] < 1
+    ):
+        raise ValueError(f"query {key} tie count is invalid")
+    return {"cardinality": cardinality, "loss": loss, "objective": objective}
+
+
+def validate_compact_query_paths(validated: dict) -> None:
+    """Check the two baseline paths represented in the compact cache."""
+    size_path = [validated[(1e-6, max_size)] for max_size in MAX_SIZES]
+    penalty_path = [validated[(c0_value, BASE_FEATURE_COUNT)] for c0_value in C0_VALUES]
+    if any(
+        right["objective"] + QUERY_PATH_TOLERANCE < left["objective"]
+        for left, right in zip(size_path, size_path[1:], strict=False)
+    ):
+        raise ValueError("objective decreased as max size shrank")
+    if any(
+        right["loss"] + QUERY_PATH_TOLERANCE < left["loss"]
+        for path in (size_path, penalty_path)
+        for left, right in zip(path, path[1:], strict=False)
+    ):
+        raise ValueError("stored query loss path is not monotone")
+    if any(
+        right["cardinality"] > left["cardinality"]
+        for left, right in zip(penalty_path, penalty_path[1:], strict=False)
+    ):
+        raise ValueError("stored query support increased with c0")
+    if penalty_path[-1]["cardinality"] != 0:
+        raise ValueError("c0=1 baseline optimum must have zero feature support")
+
+
+def validate_stored_task(data: dict, model_type: str) -> None:
+    """Validate compact bounds, identity, coverage, and exact query answers."""
+    case_id = data["case_id"]
+    task = data.get("tasks", {}).get(model_type)
     if not isinstance(task, dict):
         raise ValueError(f"{case_id} is missing {model_type}")
+    expected_fields = {
+        "loss_identity",
+        "loss_identity_digest",
+        "coefficient_set_lower_bounds",
+        "coefficient_set_upper_bounds",
+        "queries",
+        "coverage",
+    }
+    if set(task) != expected_fields:
+        raise ValueError(f"{case_id} {model_type} compact task fields do not match")
     feature_bounds = MODEL_FEATURE_BOUNDS[model_type]
-    if record.get("redundant_features") == "duplicates":
-        _, expected_coefficients, expected_supports = build_duplicate_group_coefficients(
-            feature_bounds
-        )
-    else:
-        expected_coefficients = build_feature_coefficients(
-            feature_bounds, n_features=record["X"].shape[1]
-        )
-        expected_supports = np.count_nonzero(expected_coefficients, axis=1).astype(np.uint8)
-    if not np.array_equal(task.get("feature_coefficients"), expected_coefficients):
-        raise ValueError(f"{case_id} {model_type} coefficient grid does not match")
-    if not np.array_equal(task.get("supports"), expected_supports):
-        raise ValueError(f"{case_id} {model_type} support grid does not match")
-    expected_bounds = determine_coefficient_bounds(record, feature_bounds)
-    for name, expected in expected_bounds.items():
+    expected_bounds = determine_coefficient_bounds(data, feature_bounds)
+    for name in ("coefficient_set_lower_bounds", "coefficient_set_upper_bounds"):
+        expected = expected_bounds[name]
         if not np.array_equal(task.get(name), expected):
             raise ValueError(f"{case_id} {model_type} {name} does not match")
-    validate_loss_arrays(
-        task["feature_coefficients"],
-        task["optimal_intercepts"],
-        task["pure_logistic_losses"],
-        task["supports"],
-        task["intercept_tie_multiplicities"],
-        task["effective_integer_lower_bounds"],
-        task["effective_integer_upper_bounds"],
-    )
-    strategy = exact_strategy_for(record, model_type) if record.get("redundant_features") else None
-    expected_identity = build_loss_identity(record, model_type, task, strategy)
+    strategy = exact_strategy_for(data, model_type) if data.get("redundant_features") else None
+    expected_identity = build_loss_identity(data, model_type, expected_bounds, strategy)
     stored_identity = task.get("loss_identity")
     if stored_identity != expected_identity:
         raise ValueError(f"{case_id} {model_type} loss identity does not match")
     stored_digest = task.get("loss_identity_digest")
     if stored_digest != identity_digest(stored_identity):
         raise ValueError(f"{case_id} {model_type} loss identity digest does not match")
-    if not task.get("coverage", {}).get("proven_complete"):
-        raise ValueError(f"{case_id} {model_type} is not marked complete")
-    if record.get("redundant_features"):
-        expected_strategy = exact_strategy_for(record, model_type)
-        if task.get("exact_strategy") != expected_strategy:
-            raise ValueError(f"{case_id} {model_type} exact strategy does not match")
-        if tuple(task.get("query_max_sizes", ())) != REDUNDANT_MAX_SIZES:
-            raise ValueError(f"{case_id} {model_type} query sizes do not match")
-    return expected_identity
-
-
-def validate_queries(task: dict) -> None:
-    """Compare stored queries with fresh queries over the cached loss arrays."""
-    max_sizes = tuple(task.get("query_max_sizes", MAX_SIZES))
-    expected = select_queries(
-        task["loss_identity_digest"],
-        task["feature_coefficients"],
-        task["optimal_intercepts"],
-        task["pure_logistic_losses"],
-        task["supports"],
-        max_sizes=max_sizes,
-    )
-    actual = task.get("queries")
-    if not isinstance(actual, dict) or set(actual) != set(expected):
-        raise ValueError("stored query grid does not match")
-    for key, expected_query in expected.items():
-        actual_query = actual[key]
-        if not np.array_equal(
-            actual_query.get("representative_rho"), expected_query["representative_rho"]
+    if task.get("coverage") != expected_coverage(data, model_type, expected_bounds):
+        raise ValueError(f"{case_id} {model_type} coverage does not match")
+    queries = task.get("queries")
+    if not isinstance(queries, dict):
+        raise ValueError(f"{case_id} {model_type} queries are invalid")
+    if data.get("redundant_features"):
+        if len(queries) != 1:
+            raise ValueError(f"{case_id} {model_type} must store one certifying query")
+        key = next(iter(queries))
+        if (
+            key[0]
+            not in (
+                PROVISIONAL_REDUNDANCY_PENALTY,
+                *ALTERNATIVE_REDUNDANCY_PENALTIES,
+            )
+            or key[1] != REDUNDANT_FEATURE_COUNT
         ):
-            raise ValueError(f"query {key} representative does not match")
-        for name, value in expected_query.items():
-            if name != "representative_rho" and actual_query.get(name) != value:
-                raise ValueError(f"query {key} {name} does not match")
-    validate_query_paths(actual, max_sizes=max_sizes)
+            raise ValueError(f"{case_id} {model_type} certifying query is not approved")
+        result = validate_stored_query(data, task, key, queries[key])
+        representative = queries[key]["representative_rho"][1:]
+        if result["cardinality"] == 0 or np.any(
+            (representative[:BASE_FEATURE_COUNT] != 0) & (representative[BASE_FEATURE_COUNT:] != 0)
+        ):
+            raise ValueError(f"{case_id} {model_type} representative does not remove redundancy")
+    else:
+        if set(queries) != set(BASELINE_QUERY_KEYS):
+            raise ValueError(f"{case_id} {model_type} baseline queries do not match")
+        validated = {
+            key: validate_stored_query(data, task, key, query) for key, query in queries.items()
+        }
+        validate_compact_query_paths(validated)
 
 
 def validate_synthetic_oracles(store: dict) -> None:
-    """Validate every admitted record, loss table, and query."""
+    """Validate compact records after regenerating each synthetic dataset once."""
     synthetic_oracles = store["synthetic_oracles"]
     if set(synthetic_oracles) != set(ALL_CASE_IDS):
         raise ValueError("stored synthetic cases do not match the admitted registry")
-    for case_id in ALL_CASE_IDS:
+    hydrated = {
+        case_id: hydrate_stored_data(synthetic_oracles[case_id]) for case_id in BASELINE_CASE_IDS
+    }
+    for case_id in REDUNDANT_CASE_IDS:
         record = synthetic_oracles[case_id]
-        redundant = bool(record.get("redundant_features"))
-        source = synthetic_oracles[record["source_case_id"]] if redundant else None
-        validate_stored_data(record, source)
-        if not record.get("profiler_diagnostics", {}).get("passed"):
-            raise ValueError(f"{case_id} profiler diagnostics did not pass")
+        source_case_id = record.get("generation_spec", {}).get("source_case_id")
+        hydrated[case_id] = hydrate_stored_data(record, hydrated.get(source_case_id))
+    for case_id in ALL_CASE_IDS:
+        data = hydrated[case_id]
         expected_models = (
             set(MODEL_FEATURE_BOUNDS)
-            if record.get("redundant_features") != "noisy_duplicates"
+            if data.get("redundant_features") != "noisy_duplicates"
             else {"checklist"}
         )
-        if set(record.get("tasks", {})) != expected_models:
+        if set(data.get("tasks", {})) != expected_models:
             raise ValueError(f"{case_id} task profiles do not match")
-        for model_type, task in record["tasks"].items():
-            validate_stored_task(record, model_type)
-            validate_queries(task)
-            if redundant:
-                expected_task = dict(task)
-                attach_redundancy_evidence(expected_task)
-                if not values_match(
-                    task.get("redundancy_evidence"), expected_task["redundancy_evidence"]
-                ):
-                    raise ValueError(f"{case_id} {model_type} redundancy evidence does not match")
-
-
-def refresh_queries(store: dict) -> None:
-    """Rebuild queries from validated cached losses."""
-    synthetic_oracles = store["synthetic_oracles"]
-    if set(synthetic_oracles) != set(ALL_CASE_IDS):
-        raise ValueError("stored synthetic cases do not match the admitted registry")
-    for case_id in ALL_CASE_IDS:
-        record = synthetic_oracles[case_id]
-        source = (
-            synthetic_oracles[record["source_case_id"]]
-            if record.get("redundant_features")
-            else None
-        )
-        validate_stored_data(record, source)
-        for model_type in record["tasks"]:
-            task = record["tasks"][model_type]
-            validate_stored_task(record, model_type)
-            task["queries"] = select_queries(
-                task["loss_identity_digest"],
-                task["feature_coefficients"],
-                task["optimal_intercepts"],
-                task["pure_logistic_losses"],
-                task["supports"],
-                max_sizes=tuple(task.get("query_max_sizes", MAX_SIZES)),
-            )
-            if record.get("redundant_features"):
-                task.pop("redundancy_certificate", None)
-                attach_redundancy_evidence(task)
-            validate_queries(task)
+        for model_type in data["tasks"]:
+            validate_stored_task(data, model_type)
 
 
 def build_profiler_diagnostics() -> dict:
@@ -1311,13 +1433,24 @@ def run_preflight(case_id: str | None) -> None:
     )
 
 
-def refresh_store_queries(store: dict) -> None:
-    """Refresh and persist queries while protecting known-reference records."""
+def refresh_store_queries(store: dict, case_id: str | None) -> None:
+    """Re-enumerate selected query answers while preserving other stored metadata."""
     started = time.perf_counter()
+    diagnostics = build_profiler_diagnostics()
+    selected_case_ids = (case_id,) if case_id else ALL_CASE_IDS
+    generated_records = generate_case_records(preflight_cases(selected_case_ids), diagnostics)
     known_reference_bytes = pickle.dumps(
         store["known_reference_results"], protocol=pickle.HIGHEST_PROTOCOL
     )
-    refresh_queries(store)
+    synthetic_oracles = dict(store["synthetic_oracles"])
+    for selected_case_id, generated_record in generated_records.items():
+        if selected_case_id in synthetic_oracles:
+            refreshed_record = dict(synthetic_oracles[selected_case_id])
+            refreshed_record["tasks"] = generated_record["tasks"]
+        else:
+            refreshed_record = generated_record
+        synthetic_oracles[selected_case_id] = refreshed_record
+    store["synthetic_oracles"] = synthetic_oracles
     if known_reference_bytes != pickle.dumps(
         store["known_reference_results"], protocol=pickle.HIGHEST_PROTOCOL
     ):
@@ -1325,8 +1458,8 @@ def refresh_store_queries(store: dict) -> None:
     validate_synthetic_oracles(store)
     write_store(store)
     print(
-        f"refreshed queries for {len(store['synthetic_oracles'])} records in "
-        f"{time.perf_counter() - started:.2f}s without loss enumeration"
+        f"re-enumerated queries for {len(selected_case_ids)} records in "
+        f"{time.perf_counter() - started:.2f}s"
     )
 
 
@@ -1338,24 +1471,24 @@ def regenerate_store(store: dict, case_id: str | None) -> None:
     known_reference_bytes = pickle.dumps(
         store["known_reference_results"], protocol=pickle.HIGHEST_PROTOCOL
     )
-    baseline_bytes = {
-        case_id: pickle.dumps(store["synthetic_oracles"][case_id], protocol=pickle.HIGHEST_PROTOCOL)
-        for case_id in BASELINE_CASE_IDS
+    unchanged_bytes = {
+        stored_case_id: pickle.dumps(record, protocol=pickle.HIGHEST_PROTOCOL)
+        for stored_case_id, record in store["synthetic_oracles"].items()
+        if stored_case_id not in selected_case_ids
     }
     synthetic_oracles = dict(store["synthetic_oracles"])
     synthetic_oracles.update(generate_case_records(preflights, diagnostics))
     store["synthetic_oracles"] = synthetic_oracles
+    store["schema_version"] = SCHEMA_VERSION
     if known_reference_bytes != pickle.dumps(
         store["known_reference_results"], protocol=pickle.HIGHEST_PROTOCOL
     ):
         raise AssertionError("known-reference records changed during synthetic regeneration")
-    for case_id, expected_bytes in baseline_bytes.items():
-        if case_id not in selected_case_ids and expected_bytes != pickle.dumps(
-            synthetic_oracles[case_id], protocol=pickle.HIGHEST_PROTOCOL
+    for stored_case_id, expected_bytes in unchanged_bytes.items():
+        if expected_bytes != pickle.dumps(
+            synthetic_oracles[stored_case_id], protocol=pickle.HIGHEST_PROTOCOL
         ):
-            raise AssertionError(
-                f"baseline record changed during redundancy regeneration: {case_id}"
-            )
+            raise AssertionError(f"unselected record changed during regeneration: {stored_case_id}")
     validate_synthetic_oracles(store)
     write_store(store)
     print(f"saved {TEST_CASE_PATH} with {len(synthetic_oracles)} synthetic records")
@@ -1363,19 +1496,23 @@ def regenerate_store(store: dict, case_id: str | None) -> None:
 
 if __name__ == "__main__":
     arguments = ARGUMENT_PARSER.parse_args()
-    training_case_store = load_store()
-    if arguments.case and not (arguments.regenerate or arguments.preflight):
-        raise ValueError("--case requires --regenerate or --preflight")
-    if arguments.refresh_queries:
-        refresh_store_queries(training_case_store)
-    elif arguments.preflight:
+    if arguments.case and not (
+        arguments.regenerate or arguments.refresh_queries or arguments.preflight
+    ):
+        raise ValueError("--case requires --regenerate, --refresh-queries, or --preflight")
+    if arguments.preflight:
         run_preflight(arguments.case)
-    elif arguments.regenerate:
-        regenerate_store(training_case_store, arguments.case)
     else:
-        validation_started = time.perf_counter()
-        validate_synthetic_oracles(training_case_store)
-        print(
-            f"validated {len(training_case_store['synthetic_oracles'])} synthetic records in "
-            f"{time.perf_counter() - validation_started:.2f}s"
-        )
+        full_regeneration = arguments.regenerate and arguments.case is None
+        training_case_store = load_store(allow_legacy_schema=full_regeneration)
+        if arguments.refresh_queries:
+            refresh_store_queries(training_case_store, arguments.case)
+        elif arguments.regenerate:
+            regenerate_store(training_case_store, arguments.case)
+        else:
+            validation_started = time.perf_counter()
+            validate_synthetic_oracles(training_case_store)
+            print(
+                f"validated {len(training_case_store['synthetic_oracles'])} synthetic records in "
+                f"{time.perf_counter() - validation_started:.2f}s"
+            )

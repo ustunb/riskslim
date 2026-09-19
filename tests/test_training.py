@@ -33,14 +33,12 @@ OPTIMAL_STATUSES = {"integer optimal solution", "integer optimal, tolerance"}
 OBJECTIVE_TOLERANCE = 1e-6
 
 
-def get_oracle(case, model_type, c0_value, max_size, exact_query=None):
+def get_oracle(case, model_type, c0_value, max_size):
     task = case["tasks"][model_type]
     regeneration_command = (
         f"uv run python tests/generate_training_test_cases.py --regenerate --case {case['case_id']}"
     )
-    query = exact_query
-    if query is None:
-        query = task["queries"].get((c0_value, max_size))
+    query = task["queries"].get((c0_value, max_size))
     assert query is not None, (
         f"Precondition: {case['case_id']} {model_type} query is missing. Run "
         f"`{regeneration_command}`."
@@ -59,6 +57,22 @@ def get_oracle(case, model_type, c0_value, max_size, exact_query=None):
     }, f"Precondition: {case['case_id']} {model_type} query is stale. Run `{regeneration_command}`."
     assert query["proven_complete"], (
         f"Precondition: {case['case_id']} {model_type} query is not exact. Run "
+        f"`{regeneration_command}`."
+    )
+    oracle_rho = query["representative_rho"]
+    oracle_support = int(np.count_nonzero(oracle_rho[1:]))
+    oracle_signed_scores = (1.0 - 2.0 * case["y"]) * (oracle_rho[0] + case["X"] @ oracle_rho[1:])
+    oracle_loss = float(np.mean(np.logaddexp(0.0, oracle_signed_scores)))
+    oracle_objective = oracle_loss + c0_value * oracle_support
+    assert np.isfinite(oracle_rho).all()
+    np.testing.assert_allclose(oracle_rho, np.rint(oracle_rho), rtol=0.0, atol=0.0)
+    assert np.all(oracle_rho >= task["coefficient_set_lower_bounds"])
+    assert np.all(oracle_rho <= task["coefficient_set_upper_bounds"])
+    assert oracle_support <= max_size
+    np.testing.assert_allclose(query["pure_logistic_loss"], oracle_loss, rtol=0.0, atol=1e-12)
+    np.testing.assert_allclose(query["objective"], oracle_objective, rtol=0.0, atol=1e-12)
+    assert query["representative_tie_count"] >= 1, (
+        f"Precondition: {case['case_id']} {model_type} query has no optimum. Run "
         f"`{regeneration_command}`."
     )
     return task, query
@@ -80,9 +94,9 @@ def assert_loss_does_not_decrease(earlier_result, later_result):
 
 
 def fit_and_assert_global_optimum(
-    case, model_type, warm_start, c0_value, max_size, oracle_max_size, exact_query=None
+    case, model_type, warm_start, c0_value, max_size, oracle_max_size
 ):
-    task, oracle = get_oracle(case, model_type, c0_value, oracle_max_size, exact_query=exact_query)
+    task, oracle = get_oracle(case, model_type, c0_value, oracle_max_size)
     classifier = RiskSLIMClassifier(
         initialization_flag=warm_start,
         max_coef=MODEL_COEFFICIENT_BOUNDS[model_type],
@@ -229,26 +243,12 @@ def test_solver_drops_redundant_features_at_global_optimum(
 
     redundant_case_id = f"{case_id}__{redundant_features}"
     case = training_test_cases["synthetic_oracles"][redundant_case_id]
-    evidence = case["tasks"][model_type]["redundancy_evidence"]
-    certificate = evidence["certifying_penalty"]
-    exact_query = evidence["certifying_query"]
-    c0_value = certificate["c0"]
-    max_size = certificate["max_size"]
-
-    assert certificate["empty_model_objective_gap"] > OBJECTIVE_TOLERANCE
-    assert certificate["pair_violation_objective_gap"] > OBJECTIVE_TOLERANCE
-    assert exact_query["cardinality"] > 0
-    assert exact_query["query_identity"]["c0"] == c0_value
-    assert exact_query["query_identity"]["max_size"] == max_size
-
+    task = case["tasks"][model_type]
+    c0_value, max_size = next(iter(task["queries"]))
+    oracle = task["queries"][(c0_value, max_size)]
+    assert np.count_nonzero(oracle["representative_rho"][1:]) > 0
     result = fit_and_assert_global_optimum(
-        case,
-        model_type,
-        warm_start,
-        c0_value,
-        max_size,
-        max_size,
-        exact_query=exact_query,
+        case, model_type, warm_start, c0_value, max_size, max_size
     )
     feature_coefficients = result["rho"][1:]
     assert result["support"] > 0
