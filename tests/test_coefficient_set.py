@@ -117,8 +117,7 @@ def test_coefficientset_properties():
 
 
 @pytest.mark.parametrize('lb',
-    [-1, -1., '-1', [-1], [-1]*11, np.array([-1]), np.array([-1]*11),
-     pytest.param(None, marks=pytest.mark.xfail(raises=ValueError))]
+    [-1, -1., '-1', [-1], [-1]*11, np.array([-1]), np.array([-1]*11)]
 )
 def test_coefficientset_expand_values(lb):
     variable_names = ["var_" + str(i) for i in range(10)]
@@ -132,6 +131,15 @@ def test_coefficientset_expand_values(lb):
         with pytest.raises(ValueError):
             cs = CoefficientSet(variable_names)
             values = cs._expand_values(lb[1:])
+
+
+def test_coefficientset_expand_values_rejects_none():
+    variable_names = ["var_" + str(i) for i in range(10)]
+    variable_names.insert(0, '(Intercept)')
+
+    cs = CoefficientSet(variable_names)
+    with pytest.raises(ValueError, match='unknown variable type'):
+        cs._expand_values(None)
 
 
 def test_coefficientelement():

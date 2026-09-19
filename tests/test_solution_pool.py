@@ -11,8 +11,6 @@ from riskslim.solution_pool import SolutionPool, FastSolutionPool
         'int',
         'dict0',
         'dict1',
-        pytest.param('dict2', marks=pytest.mark.xfail(raises=ValueError)),
-        pytest.param(None, marks=pytest.mark.xfail(raises=ValueError))
     ]
 )
 def test_solution_pool_init(init):
@@ -30,20 +28,22 @@ def test_solution_pool_init(init):
         solutions = np.zeros((2, 10)).T
         objval = np.random.rand(2)
         pool = SolutionPool({'solutions': solutions, 'objvals': objval})
-    elif init == 'dict2':
-        # Incorrect shape
-        solutions = np.zeros((1, 2, 10))
-        objval = np.random.rand(2)
-        pool = SolutionPool({'solutions': solutions, 'objvals': objval})
-    else:
-        # Expects error
-        pool = SolutionPool(None)
 
     assert pool._P == 10
     assert pool._solutions.shape[-1] == 10
     assert len(pool._objvals) in [0, 1, 2]
 
     assert len(pool) == len(pool._objvals)
+
+
+@pytest.mark.parametrize('value, message', [
+    ({'solutions': np.zeros((1, 2, 10)), 'objvals': np.array([0., 0.])},
+     'more than 2 dimensions'),
+    (None, 'cannot initialize SolutionPool'),
+])
+def test_solution_pool_init_rejects(value, message):
+    with pytest.raises(ValueError, match=message):
+        SolutionPool(value)
 
 
 def test_solution_pool_solution_string():
@@ -134,9 +134,7 @@ def test_solution_pool_append():
         ([0.], np.zeros(10)),
         ([0.], np.zeros((1, 10))),
         ([0.], np.zeros((10, 1))),
-        pytest.param(([0.], np.zeros((1, 2, 3))), marks=pytest.mark.xfail(raises=ValueError)),
         ([0.], np.zeros((1, 10)).tolist()),
-        pytest.param(([0.], None), marks=pytest.mark.xfail(raises=TypeError)),
         (0., np.zeros(10)),
         ([], np.zeros(10)),
     ]
@@ -148,6 +146,16 @@ def test_solution_pool_add(objval_solution):
     pool = SolutionPool(10)
     pool.add(objvals, solutions)
     assert len(pool) == 1 or len(pool) == 0
+
+
+@pytest.mark.parametrize('objvals, solutions, exception, message', [
+    ([0.], np.zeros((1, 2, 3)), ValueError, 'incorrect solution dimensions'),
+    ([0.], None, TypeError, 'incorrect solution type'),
+])
+def test_solution_pool_add_rejects(objvals, solutions, exception, message):
+    pool = SolutionPool(10)
+    with pytest.raises(exception, match=message):
+        pool.add(objvals, solutions)
 
 
 def test_solution_pool_filter():
@@ -191,7 +199,6 @@ def test_solution_pool_sort():
 @pytest.mark.parametrize('target',
     [
         'all', 'objvals', 'solutions',
-        pytest.param(None, marks=pytest.mark.xfail(raises=ValueError)),
     ]
 )
 def test_solution_pool_map(target):
@@ -208,6 +215,15 @@ def test_solution_pool_map(target):
     vals = pool.map(map_func, target)
     vals = np.array(vals)
     assert all(vals == 0)
+
+
+def test_solution_pool_map_rejects_invalid_target():
+    solutions = np.zeros((2, 10))
+    objval = np.array([1., 0.])
+    pool = SolutionPool({'solutions': solutions, 'objvals': objval})
+
+    with pytest.raises(ValueError, match='target must be either solutions, objvals, or all'):
+        pool.map(lambda i: 0, None)
 
 
 def test_solution_pool_remove_nonintegral():
