@@ -170,6 +170,10 @@ class CoefficientSet:
     #### coefficient element access ####
     def __getattr__(self, name):
 
+        # pickle and copy look up dunders before __dict__ is restored; they are not element attributes
+        if name.startswith("__") or "_coef_elements" not in self.__dict__:
+            raise AttributeError(name)
+
         # todo: remove
         if name == 'C_0j':
             name = 'c0'

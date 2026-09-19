@@ -23,9 +23,8 @@ def test_RiskSLIMClassifier_init(init_coef):
 
     assert rs.max_size == max_size
     assert rs.optimizer is None
-    assert rs._data is None
-    assert rs._coef_set is coef_set
-    assert rs._variable_names is None
+    assert rs.coef_set is coef_set
+    assert rs.variable_names is None
     assert rs.c0_value == 1e-6
     assert not rs.fitted
 

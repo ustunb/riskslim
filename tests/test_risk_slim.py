@@ -143,7 +143,8 @@ def test_risk_slim(max_coefficient, max_size, max_offset):
 
     assert rs.optimizer.min_size == rs.optimizer.bounds.min_size == 0
     assert rs.max_size == rs.optimizer.bounds.max_size == max_size
-    assert rs.optimizer.coef_set == coef_set
+    assert rs.optimizer.coef_set is rs.coef_set_
+    assert rs.coef_set is coef_set
 
     # Each column of X has a rho and alpha (except for intercept,
     #   which doesn't have an alpha). There are 3 additional parameters:

@@ -16,7 +16,7 @@ dependencies = [
   "numpy>=1.26",
   "scipy",
   "pandas",
-  "scikit-learn",
+  "scikit-learn>=1.6",
   "plotly",
   "prettytable",
   "cplex>=22.1.2.1",

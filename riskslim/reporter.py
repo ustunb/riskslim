@@ -66,10 +66,7 @@ class RiskScoreReporter:
             self._prepare_table()
 
         # Probability estimates
-        if not hasattr(self.estimator, "calibrated_estimator") or self.estimator.calibrated_estimator is None:
-            self.proba = estimator.predict_proba(self.X[:, 1:])
-        else:
-            self.proba = self.estimator.calibrated_estimator.predict_proba(self.X[:, 1:])[:, 1]
+        self.proba = estimator.predict_proba(self.X[:, 1:])[:, 1]
 
     @staticmethod
     def from_model(estimator):
@@ -87,8 +84,8 @@ class RiskScoreReporter:
 
     def print_coefs(self):
         """Print coefficient info."""
-        if hasattr(self.estimator, "_coef_set"):
-            print(self.estimator._coef_set)
+        if hasattr(self.estimator, "coef_set_"):
+            print(self.estimator.coef_set_)
         else:
             print(self.estimator.coef_)
 
@@ -319,21 +316,21 @@ class RiskScoreReporter:
             )
 
             # Folds
-            if hasattr(self.estimator, "cv_results") and self.estimator.cv_results is not None:
+            if getattr(self.estimator, "cv_results_", None) is not None:
 
-                for ind, (_, test) in enumerate(self.estimator.cv.split(self.X)):
+                for ind, (_, test) in enumerate(self.estimator.cv_.split(self.X[:, 1:], self.y)):
 
                     # Calibration
-                    if self.estimator.cv_calibrated_estimators_ is None:
+                    if getattr(self.estimator, "cv_calibrated_estimators_", None) is None:
                         prob_pred, prob_true, fpr, tpr = self.compute_metrics(
                             self.y[test],
-                            self.estimator.cv_results["estimator"][ind].predict_proba(self.X[test]),
+                            self.estimator.cv_results_["estimator"][ind].predict_proba(self.X[test, 1:])[:, 1],
                             n_bins=n_bins
                         )
                     else:
                         prob_pred, prob_true, fpr, tpr = self.compute_metrics(
                             self.y[test],
-                            self.estimator.cv_calibrated_estimators_[ind].predict_proba(self.X[test])[:, 1],
+                            self.estimator.cv_calibrated_estimators_[ind].predict_proba(self.X[test, 1:])[:, 1],
                             n_bins=n_bins
                         )
 
