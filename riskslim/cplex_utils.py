@@ -12,7 +12,7 @@ def check_cplex_installation() -> dict[str, str]:
     """Validate the installed CPLEX package and native runtime.
 
     Returns:
-        dict[str, str]: The Python package and native runtime versions.
+        dict[str, str]: Versions under the ``python`` and ``runtime`` keys.
 
     Raises:
         RuntimeError: If the package version is unsupported or the solver cannot
@@ -50,8 +50,8 @@ def check_cplex_installation() -> dict[str, str]:
             )
 
     return {
-        "package_version": package_version,
-        "runtime_version": runtime_version,
+        "python": package_version,
+        "runtime": runtime_version,
     }
 
 
