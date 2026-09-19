@@ -140,8 +140,18 @@ def fit_and_assert_global_optimum(
     np.testing.assert_allclose(
         recomputed_objective, oracle["objective"], rtol=0.0, atol=OBJECTIVE_TOLERANCE
     )
+    raw_rho = solution.get_values(optimizer.mip_indices["rho"])
+    native_alpha = solution.get_values(optimizer.mip_indices["alpha"])
+    native_loss = solution.get_values(optimizer.mip_indices["loss"])
     np.testing.assert_allclose(
-        raw_objective, recomputed_objective, rtol=0.0, atol=OBJECTIVE_TOLERANCE
+        raw_objective,
+        recomputed_objective,
+        rtol=0.0,
+        atol=OBJECTIVE_TOLERANCE,
+        err_msg=(
+            f"raw rho={raw_rho!r}; alpha={native_alpha!r}; "
+            f"loss={native_loss!r}; status={solution.get_status_string()!r}"
+        ),
     )
     np.testing.assert_allclose(
         solution_info["loss_value"], pure_logistic_loss, rtol=0.0, atol=OBJECTIVE_TOLERANCE
