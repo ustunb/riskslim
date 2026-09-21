@@ -2,7 +2,7 @@
 
 Test strategy
 -------------
-Fixture: the shared report sample in conftest (8 training rows, 4 test rows, three binary
+Fixture: the shared report sample in tests/utils.py (8 training rows, 4 test rows, three binary
 features, fixed coefficient vectors); expected values are literals worked out by hand, not
 recomputed. No solver is called.
 
@@ -23,11 +23,12 @@ import json
 
 import numpy as np
 import pytest
-from conftest import (
+from utils import (
     CHECKLIST_RHO,
     CONSTRAINTS,
     NAMES,
     RISK_SCORE_RHO,
+    SAMPLES,
     TRAINING,
     X_TEST,
     X_TRAIN,
@@ -38,12 +39,11 @@ from conftest import (
 from riskslim.report import build_report_data
 
 VALID_CALL = {"rho": RISK_SCORE_RHO, "variable_names": NAMES, "outcome_name": "y",
-              "samples": {"train": (X_TRAIN, Y_TRAIN), "test": (X_TEST, Y_TEST)}}
+              "samples": SAMPLES}
 
 
 def build(rho, samples=None, **kwargs):
-    samples = samples or {"train": (X_TRAIN, Y_TRAIN), "test": (X_TEST, Y_TEST)}
-    return build_report_data(rho, NAMES, "y", samples, **kwargs)
+    return build_report_data(rho, NAMES, "y", samples or SAMPLES, **kwargs)
 
 
 def test_risk_score_model_has_score_range_and_score_to_risk():

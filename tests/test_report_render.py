@@ -2,8 +2,8 @@
 
 Test strategy
 -------------
-Input: report data built from the shared report sample in conftest (fixed coefficients, no
-solver).
+Input: report data built from the shared report sample in tests/utils.py (fixed
+coefficients, no solver).
 
 Dimensions:
   figure:      roc, calibration            -- one trace per sample, plotted straight from the
@@ -16,9 +16,10 @@ Dimensions:
                                               escape, so it is not a separate case)
 
 Checks that need no browser: `plotly.graph_objects.Figure(fig)` rejects misspelled or invalid
-properties. The browser test is opt-in (`pytest -m browser`): it opens each report in headless
-Chromium at 1280 px and 375 px, requires no console or page errors, 2 rendered Plotly charts and
-one model row per item, and saves screenshots plus the HTML to tmp_path or --report-dir=DIR
+properties. The browser test is opt-in (`pytest -m browser`): each model type's page is built and
+saved once, then opened in headless Chromium at 1280 px and 375 px, requiring no console or page
+errors, 2 rendered Plotly charts and one model row per item; screenshots and the HTML go to a
+tmp_path or --report-dir=DIR
 (write it with "=": with a space, pytest reads an existing DIR as a test path and misses the
 config).
 """
@@ -30,17 +31,7 @@ from pathlib import Path
 
 import plotly.graph_objects as go
 import pytest
-from conftest import (
-    CHECKLIST_RHO,
-    CONSTRAINTS,
-    NAMES,
-    RISK_SCORE_RHO,
-    TRAINING,
-    X_TEST,
-    X_TRAIN,
-    Y_TEST,
-    Y_TRAIN,
-)
+from utils import CHECKLIST_RHO, CONSTRAINTS, NAMES, RISK_SCORE_RHO, SAMPLES, TRAINING
 
 from riskslim.report import CalibrationPlot, ModelCard, Report, RocPlot, Row, build_report_data
 
@@ -54,20 +45,20 @@ HOSTILE_NAMES = ["(Intercept)", "a</script><script>alert(1)</script>", "b<!-- c"
 
 
 def make_report(rho, names=NAMES, layout=None):
-    data = build_report_data(rho, names, "y",
-                             {"train": (X_TRAIN, Y_TRAIN), "test": (X_TEST, Y_TEST)},
-                             training=TRAINING, constraints=CONSTRAINTS)
-    return data, Report(data, layout=layout)
+    data = build_report_data(rho, names, "y", SAMPLES, training=TRAINING, constraints=CONSTRAINTS)
+    return Report(data, layout=layout)
 
 
 @pytest.fixture(scope="module")
 def report():
     """The default risk-score report (no layout override)."""
-    return make_report(RISK_SCORE_RHO)[1]
+    return make_report(RISK_SCORE_RHO)
 
 
 def test_html_holds_one_data_block_that_round_trips():
-    data, hostile_report = make_report(RISK_SCORE_RHO, names=HOSTILE_NAMES)
+    data = build_report_data(RISK_SCORE_RHO, HOSTILE_NAMES, "y", SAMPLES,
+                             training=TRAINING, constraints=CONSTRAINTS)
+    hostile_report = Report(data)
 
     blocks = DATA_BLOCK.findall(hostile_report.html)
 
@@ -79,8 +70,8 @@ def test_html_holds_one_data_block_that_round_trips():
 
 
 def test_custom_layout_replaces_default():
-    _, custom_report = make_report(RISK_SCORE_RHO, layout=[Row(RocPlot()),
-                                                           Row(CalibrationPlot(), ModelCard())])
+    custom_report = make_report(RISK_SCORE_RHO, layout=[Row(RocPlot()),
+                                                        Row(CalibrationPlot(), ModelCard())])
 
     assert custom_report.data["layout"] == [
         {"components": [{"component": "RocPlot", "options": {"title": "ROC"}}]},
@@ -109,8 +100,8 @@ def test_figure_plots_each_sample_section_with_a_top_left_metrics_box(report, ke
     x_field, y_field = coordinates
 
     go.Figure(figure)  # raises on invalid Plotly properties
-    assert [trace["name"] for trace in figure["data"]] == report.data["samples"]
-    for trace, name in zip(figure["data"], report.data["samples"]):
+    assert [trace["name"] for trace in figure["data"]] == ["train", "test"]
+    for trace, name in zip(figure["data"], ["train", "test"]):
         assert trace["x"] == report.data[key][name][x_field]
         assert trace["y"] == report.data[key][name][y_field]
     (box,) = figure["layout"]["annotations"]
@@ -139,13 +130,20 @@ def test_roc_points_carry_score_thresholds(report):
                                    "score ≥ 0", "score ≥ -1"]
 
 
-@pytest.fixture
-def report_dir(request, tmp_path):
+@pytest.fixture(scope="module")
+def report_dir(request, tmp_path_factory):
     directory = request.config.getoption("--report-dir")
     if directory is None:
-        return tmp_path
+        return tmp_path_factory.mktemp("report")
     Path(directory).mkdir(parents=True, exist_ok=True)
     return Path(directory)
+
+
+@pytest.fixture(scope="module", params=["risk_score", "checklist"])
+def saved_report(request, report_dir):
+    """One saved report page per model type, built and written once for all viewport widths."""
+    rho = {"risk_score": RISK_SCORE_RHO, "checklist": CHECKLIST_RHO}[request.param]
+    return make_report(rho).save(report_dir / f"{request.param}_report.html")
 
 
 @pytest.fixture(scope="module")
@@ -167,29 +165,27 @@ def chromium():
 
 
 @pytest.mark.browser
-@pytest.mark.parametrize("name, rho", [("risk_score", RISK_SCORE_RHO),
-                                       ("checklist", CHECKLIST_RHO)])
 @pytest.mark.parametrize("width", [1280, 375])
-def test_report_renders_in_browser_without_errors(chromium, report_dir, name, rho, width):
-    _, browser_report = make_report(rho)
-    html_path = browser_report.save(report_dir / f"{name}_report.html")
+def test_report_renders_in_browser_without_errors(chromium, saved_report, width):
+    (block,) = DATA_BLOCK.findall(saved_report.read_text(encoding="utf-8"))
+    items = json.loads(block)["model"]["items"]
     page = chromium.new_page(viewport={"width": width, "height": 900})
     errors = []
     page.on("console", lambda message: message.type == "error" and errors.append(message.text))
     page.on("pageerror", lambda error: errors.append(str(error)))
 
     try:
-        page.goto(html_path.as_uri(), wait_until="networkidle")
+        page.goto(saved_report.as_uri(), wait_until="networkidle")
         try:
             page.wait_for_function("document.querySelectorAll('.js-plotly-plot').length === 2",
                                    timeout=15_000)
         except Exception:
             pass  # the assertions below report what did render
-        page.screenshot(path=report_dir / f"{name}_report_{width}px.png", full_page=True)
+        page.screenshot(path=saved_report.with_name(f"{saved_report.stem}_{width}px.png"),
+                        full_page=True)
 
         assert errors == []
-        assert page.locator(".rs-model-table .rs-item-row").count() == len(
-            browser_report.data["model"]["items"])
+        assert page.locator(".rs-model-table .rs-item-row").count() == len(items)
         assert page.locator(".js-plotly-plot").count() == 2
     finally:
         page.close()

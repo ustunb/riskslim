@@ -9,6 +9,7 @@ import html
 import json
 import math
 from functools import cache
+from itertools import cycle
 from importlib.resources import files
 from pathlib import Path
 
@@ -95,8 +96,9 @@ def build_figures(data):
 
 def roc_figure(data):
     """One ROC curve per sample with a point at each score threshold; AUC box top-left."""
+    colors = [color for _, color in zip(data["samples"], cycle(STYLE["samples"]))]
     traces = []
-    for name, color in zip(data["samples"], sample_colors(data)):
+    for name, color in zip(data["samples"], colors):
         roc = data["roc"][name]
         labels = ["none" if t is None else f"score ≥ {t}" for t in roc["thresholds"]]
         traces.append({
@@ -107,17 +109,17 @@ def roc_figure(data):
                              f"<extra>{name}</extra>",
         })
     metrics = [(name, f"{data['roc'][name]['auc']:.3f}") for name in data["samples"]]
-    layout = base_layout("False positive rate", "True positive rate", "AUC", metrics, data)
+    layout = base_layout("False positive rate", "True positive rate", "AUC", metrics, colors)
     return {"data": traces, "layout": layout}
 
 
 def calibration_figure(data):
     """Bubbles per score, sized by n and labelled with the score; CAL box top-left."""
-    counts = [n for name in data["samples"] for n in data["calibration"][name]["n"]]
-    n_max = max(counts)
+    n_max = max(n for name in data["samples"] for n in data["calibration"][name]["n"])
     d_min, d_max = STYLE["bubble_px"]
+    colors = [color for _, color in zip(data["samples"], cycle(STYLE["samples"]))]
     traces = []
-    for name, color in zip(data["samples"], sample_colors(data)):
+    for name, color in zip(data["samples"], colors):
         cal = data["calibration"][name]
         traces.append({
             "type": "scatter", "mode": "markers+text", "name": name,
@@ -134,17 +136,12 @@ def calibration_figure(data):
                              f"<extra>{name}</extra>",
         })
     metrics = [(name, f"{data['calibration'][name]['error']:.1%}") for name in data["samples"]]
-    layout = base_layout("Predicted risk", "Observed risk", "CAL", metrics, data)
-    for axis in ("xaxis", "yaxis"):
-        layout[axis].update({"range": [-0.03, 1.03], "tickformat": ".0%"})
+    layout = base_layout("Predicted risk", "Observed risk", "CAL", metrics, colors,
+                         axis_overrides={"range": [-0.03, 1.03], "tickformat": ".0%"})
     return {"data": traces, "layout": layout}
 
 
-def sample_colors(data):
-    return [STYLE["samples"][i % len(STYLE["samples"])] for i in range(len(data["samples"]))]
-
-
-def base_layout(x_title, y_title, metric, metrics, data):
+def base_layout(x_title, y_title, metric, metrics, colors, axis_overrides=None):
     """Shared axes, fonts, diagonal and the top-left metrics box."""
     axis = {
         "showgrid": True, "gridcolor": STYLE["grid"], "zeroline": False, "showline": True,
@@ -152,10 +149,11 @@ def base_layout(x_title, y_title, metric, metrics, data):
         "tickfont": {"size": 11, "color": STYLE["muted"]},
         "title": {"font": {"size": 12, "color": STYLE["ink"]}},
         "range": [-0.02, 1.02], "dtick": 0.2,
+        **(axis_overrides or {}),
     }
     lines = [f"<b>{metric}</b>"] + [
         f'<span style="color:{color}">{name}</span> {value}'
-        for (name, value), color in zip(metrics, sample_colors(data))
+        for (name, value), color in zip(metrics, colors)
     ]
     return {
         "height": STYLE["height"], "autosize": True,
