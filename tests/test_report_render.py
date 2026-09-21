@@ -1,18 +1,26 @@
-"""Tests for riskslim.report.render (Report: HTML page, save, notebook display).
+"""Tests for riskslim.report.render (Report: Plotly figures, HTML page, save, notebook display).
 
 Test strategy
 -------------
-Input: report data from test_report_data's fixture (fixed coefficients, no solver).
+Input: report data built from the shared report sample in conftest (fixed coefficients, no
+solver).
 
 Dimensions:
-  model type:  risk_score, checklist        -- only the browser test; the HTML shell is the same
-  layout:      default, custom              -- a custom layout replaces the data block's layout
-  label text:  plain, contains "</script>"  -- must not end the JSON data block early
+  figure:      roc, calibration            -- one trace per sample, plotted straight from the
+                                              data block's roc / calibration sections, plus a
+                                              top-left metrics box (AUC / calibration error)
+  model type:  risk_score, checklist       -- only the browser test; the HTML shell is the same
+  layout:      default, custom             -- a custom layout replaces the data block's layout
+  label text:  contains "</script>" and "<!--"  -- must not end the JSON data block early
+                                              (a plain label is the same path with nothing to
+                                              escape, so it is not a separate case)
 
-The browser test is opt-in (`pytest -m browser`): it opens each report in headless Chromium at
-1280 px and 375 px, requires no console or page errors, 2 rendered Plotly charts and one model
-row per item, and saves screenshots plus the HTML to tmp_path or --report-dir=DIR (write it
-with "=": with a space, pytest reads an existing DIR as a test path and misses the config).
+Checks that need no browser: `plotly.graph_objects.Figure(fig)` rejects misspelled or invalid
+properties. The browser test is opt-in (`pytest -m browser`): it opens each report in headless
+Chromium at 1280 px and 375 px, requires no console or page errors, 2 rendered Plotly charts and
+one model row per item, and saves screenshots plus the HTML to tmp_path or --report-dir=DIR
+(write it with "=": with a space, pytest reads an existing DIR as a test path and misses the
+config).
 """
 
 import html
@@ -20,10 +28,9 @@ import json
 import re
 from pathlib import Path
 
+import plotly.graph_objects as go
 import pytest
-
-from riskslim.report import CalibrationPlot, ModelCard, Report, RocPlot, Row, build_report_data
-from test_report_data import (
+from conftest import (
     CHECKLIST_RHO,
     CONSTRAINTS,
     NAMES,
@@ -35,12 +42,15 @@ from test_report_data import (
     Y_TRAIN,
 )
 
+from riskslim.report import CalibrationPlot, ModelCard, Report, RocPlot, Row, build_report_data
+
 CDN_URLS = [
     "https://cdnjs.cloudflare.com/ajax/libs/vue/3.5.43/vue.global.prod.min.js",
     "https://cdn.jsdelivr.net/npm/plotly.js-basic-dist-min@4.1.1/plotly-basic.min.js",
     "https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.min.css",
 ]
 DATA_BLOCK = re.compile(r'<script type="application/json" id="report-data">(.*?)</script>', re.S)
+HOSTILE_NAMES = ["(Intercept)", "a</script><script>alert(1)</script>", "b<!-- c", "c"]
 
 
 def make_report(rho, names=NAMES, layout=None):
@@ -50,43 +60,83 @@ def make_report(rho, names=NAMES, layout=None):
     return data, Report(data, layout=layout)
 
 
-@pytest.mark.parametrize("names", [
-    pytest.param(NAMES, id="plain"),
-    pytest.param(["(Intercept)", "a</script><script>alert(1)</script>", "b", "c"],
-                 id="script-tag-in-label"),
-])
-def test_html_holds_one_data_block_that_round_trips(names):
-    data, report = make_report(RISK_SCORE_RHO, names=names)
+@pytest.fixture(scope="module")
+def report():
+    """The default risk-score report (no layout override)."""
+    return make_report(RISK_SCORE_RHO)[1]
 
-    blocks = DATA_BLOCK.findall(report.html)
+
+def test_html_holds_one_data_block_that_round_trips():
+    data, hostile_report = make_report(RISK_SCORE_RHO, names=HOSTILE_NAMES)
+
+    blocks = DATA_BLOCK.findall(hostile_report.html)
 
     assert len(blocks) == 1
-    assert json.loads(blocks[0]) == report.data
-    assert {key: report.data[key] for key in data} == data
-    assert set(report.data["figures"]) == {"roc", "calibration"}
-    assert all(url in report.html for url in CDN_URLS)
+    assert json.loads(blocks[0]) == hostile_report.data
+    assert {key: hostile_report.data[key] for key in data} == data
+    assert set(hostile_report.data["figures"]) == {"roc", "calibration"}
+    assert all(url in hostile_report.html for url in CDN_URLS)
 
 
 def test_custom_layout_replaces_default():
-    _, report = make_report(RISK_SCORE_RHO, layout=[Row(RocPlot()), Row(CalibrationPlot(),
-                                                                        ModelCard())])
+    _, custom_report = make_report(RISK_SCORE_RHO, layout=[Row(RocPlot()),
+                                                           Row(CalibrationPlot(), ModelCard())])
 
-    assert report.data["layout"] == [
+    assert custom_report.data["layout"] == [
         {"components": [{"component": "RocPlot", "options": {"title": "ROC"}}]},
         {"components": [{"component": "CalibrationPlot", "options": {"title": "Calibration"}},
                         {"component": "ModelCard", "options": {"title": "Model"}}]},
     ]
 
 
-def test_save_and_notebook_display_carry_the_same_html(tmp_path):
-    _, report = make_report(RISK_SCORE_RHO)
-
+def test_save_and_notebook_display_carry_the_same_html(report, tmp_path):
     path = report.save(tmp_path / "report.html")
     iframe = report._repr_html_()
     (srcdoc,) = re.findall(r'<iframe srcdoc="([^"]*)"', iframe)
 
     assert path.read_text(encoding="utf-8") == report.html
     assert html.unescape(srcdoc) == report.html
+
+
+@pytest.mark.parametrize("key, coordinates, metrics_text", [
+    ("roc", ("fpr", "tpr"), ["AUC", "train</span> 0.844", "test</span> 1.000"]),
+    ("calibration", ("predicted", "observed"), ["CAL", "train</span> 32.7%",
+                                                "test</span> 23.4%"]),
+])
+def test_figure_plots_each_sample_section_with_a_top_left_metrics_box(report, key, coordinates,
+                                                                     metrics_text):
+    figure = report.data["figures"][key]
+    x_field, y_field = coordinates
+
+    go.Figure(figure)  # raises on invalid Plotly properties
+    assert [trace["name"] for trace in figure["data"]] == report.data["samples"]
+    for trace, name in zip(figure["data"], report.data["samples"]):
+        assert trace["x"] == report.data[key][name][x_field]
+        assert trace["y"] == report.data[key][name][y_field]
+    (box,) = figure["layout"]["annotations"]
+    assert (box["xref"], box["yref"], box["xanchor"], box["yanchor"]) == (
+        "paper", "paper", "left", "top")
+    assert box["x"] <= 0.05 and box["y"] >= 0.95
+    assert all(text in box["text"] for text in metrics_text), box["text"]
+
+
+def test_calibration_bubbles_are_labelled_with_scores_and_sized_by_n(report):
+    train, test = report.data["figures"]["calibration"]["data"]
+
+    assert train["text"] == ["-1", "0", "1", "2", "3"]
+    assert test["text"] == ["-1", "0", "2", "3"]
+    # train n = [1, 2, 2, 2, 1]; test n = [1, 1, 1, 1]
+    small, large = train["marker"]["size"][0], train["marker"]["size"][1]
+    assert small < large
+    assert train["marker"]["size"] == [small, large, large, large, small]
+    assert test["marker"]["size"] == [small] * 4
+
+
+def test_roc_points_carry_score_thresholds(report):
+    train = report.data["figures"]["roc"]["data"][0]
+
+    assert train["customdata"] == ["none", "score ≥ 3", "score ≥ 2", "score ≥ 1",
+                                   "score ≥ 0", "score ≥ -1"]
 
 
 @pytest.fixture
@@ -121,23 +171,25 @@ def chromium():
                                        ("checklist", CHECKLIST_RHO)])
 @pytest.mark.parametrize("width", [1280, 375])
 def test_report_renders_in_browser_without_errors(chromium, report_dir, name, rho, width):
-    _, report = make_report(rho)
-    html_path = report.save(report_dir / f"{name}_report.html")
+    _, browser_report = make_report(rho)
+    html_path = browser_report.save(report_dir / f"{name}_report.html")
     page = chromium.new_page(viewport={"width": width, "height": 900})
     errors = []
     page.on("console", lambda message: message.type == "error" and errors.append(message.text))
     page.on("pageerror", lambda error: errors.append(str(error)))
 
-    page.goto(html_path.as_uri(), wait_until="networkidle")
     try:
-        page.wait_for_function("document.querySelectorAll('.js-plotly-plot').length === 2",
-                               timeout=15_000)
-    except Exception:
-        pass  # the assertions below report what did render
-    page.screenshot(path=report_dir / f"{name}_report_{width}px.png", full_page=True)
+        page.goto(html_path.as_uri(), wait_until="networkidle")
+        try:
+            page.wait_for_function("document.querySelectorAll('.js-plotly-plot').length === 2",
+                                   timeout=15_000)
+        except Exception:
+            pass  # the assertions below report what did render
+        page.screenshot(path=report_dir / f"{name}_report_{width}px.png", full_page=True)
 
-    assert errors == []
-    assert page.locator(".rs-model-table .rs-item-row").count() == len(
-        report.data["model"]["items"])
-    assert page.locator(".js-plotly-plot").count() == 2
-    page.close()
+        assert errors == []
+        assert page.locator(".rs-model-table .rs-item-row").count() == len(
+            browser_report.data["model"]["items"])
+        assert page.locator(".js-plotly-plot").count() == 2
+    finally:
+        page.close()

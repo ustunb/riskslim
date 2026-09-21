@@ -102,7 +102,7 @@
       </Card>`,
   };
 
-  // One Plotly component per figure key in data.figures (built in figures.py).
+  // One Plotly component per figure key in data.figures (built in render.py).
   const PlotlyChart = (figureKey) => ({
     components: { Card },
     props: ["data", "options"],

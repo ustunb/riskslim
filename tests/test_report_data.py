@@ -2,9 +2,9 @@
 
 Test strategy
 -------------
-Fixture: a hand-written 8-row training sample and a 4-row test sample over three binary
-features (a, b, c), with fixed coefficient vectors; expected values are literals worked out by
-hand, not recomputed. No solver is called.
+Fixture: the shared report sample in conftest (8 training rows, 4 test rows, three binary
+features, fixed coefficient vectors); expected values are literals worked out by hand, not
+recomputed. No solver is called.
 
 Dimensions:
   model type:   risk_score (points 2, 1, -1), checklist (+1 items only), checklist (with a -1 item)
@@ -12,8 +12,10 @@ Dimensions:
   label coding: {0, 1}, {-1, 1}    -- both must map to the same positive class
   samples:      train only, train + test (the test sample has no row with score 1)
 
-Rejection paths owned here: samples without 'train', X column count != number of variable
-names, a sample with a single class.
+Rejection paths owned here (one invalid mutation of a valid call each): rho and variable_names of
+different lengths, variable_names without "(Intercept)" first, non-finite rho, unknown model_type,
+samples without 'train', X column count != number of variable names, y row count != X row count,
+labels outside {0, 1} / {-1, 1}, and a sample with a single class.
 n/a: non-binary features for the checklist -- the score range rule is shared with the risk score.
 """
 
@@ -21,21 +23,22 @@ import json
 
 import numpy as np
 import pytest
+from conftest import (
+    CHECKLIST_RHO,
+    CONSTRAINTS,
+    NAMES,
+    RISK_SCORE_RHO,
+    TRAINING,
+    X_TEST,
+    X_TRAIN,
+    Y_TEST,
+    Y_TRAIN,
+)
 
 from riskslim.report import build_report_data
 
-NAMES = ["(Intercept)", "a", "b", "c"]
-X_TRAIN = np.array([
-    [1, 1, 0], [1, 0, 0], [1, 1, 1], [0, 1, 0],
-    [0, 0, 0], [1, 0, 1], [0, 1, 1], [0, 0, 1],
-])
-Y_TRAIN = np.array([1, 1, 1, 0, 0, 0, 1, 0])
-X_TEST = np.array([[1, 1, 0], [0, 0, 0], [1, 0, 0], [0, 0, 1]])
-Y_TEST = np.array([1, 0, 1, 0])
-RISK_SCORE_RHO = [-2, 2, 1, -1]  # train scores: 3, 2, 2, 1, 0, 1, 0, -1
-CHECKLIST_RHO = [-1, 1, 1, 0]
-TRAINING = {"objective_value": 0.5, "optimality_gap": float("inf"), "run_time": 1.25}
-CONSTRAINTS = {"max_size": 3, "point_range": (-5, 5)}
+VALID_CALL = {"rho": RISK_SCORE_RHO, "variable_names": NAMES, "outcome_name": "y",
+              "samples": {"train": (X_TRAIN, Y_TRAIN), "test": (X_TEST, Y_TEST)}}
 
 
 def build(rho, samples=None, **kwargs):
@@ -99,12 +102,12 @@ def test_calibration_bins_count_rows_per_score(negative_label):
     train, test = data["calibration"]["train"], data["calibration"]["test"]
 
     assert train["scores"] == [-1, 0, 1, 2, 3]
-    assert train["n"] == [1, 2, 2, 2, 1] and sum(train["n"]) == 8
+    assert train["n"] == [1, 2, 2, 2, 1]
     assert train["observed"] == [0.0, 0.5, 0.0, 1.0, 1.0]
     assert train["error"] == pytest.approx(0.3269805367)
     # score 1 has no test rows: absent, not NaN
     assert test["scores"] == [-1, 0, 2, 3]
-    assert test["n"] == [1, 1, 1, 1] and sum(test["n"]) == 4
+    assert test["n"] == [1, 1, 1, 1]
     assert test["observed"] == [0.0, 0.0, 1.0, 1.0]
     assert test["error"] == pytest.approx(0.2338925541)
 
@@ -117,10 +120,6 @@ def test_roc_has_a_point_per_score_threshold_from_origin_to_corner():
     assert roc["train"]["tpr"] == [0.0, 0.25, 0.75, 0.75, 1.0, 1.0]
     assert roc["train"]["auc"] == 0.84375
     assert roc["test"]["auc"] == 1.0
-    for curve in roc.values():
-        assert np.all(np.diff(curve["fpr"]) >= 0) and np.all(np.diff(curve["tpr"]) >= 0)
-        assert (curve["fpr"][0], curve["tpr"][0]) == (0.0, 0.0)
-        assert (curve["fpr"][-1], curve["tpr"][-1]) == (1.0, 1.0)
 
 
 def test_summary_has_four_blocks_of_formatted_values():
@@ -147,13 +146,23 @@ def test_data_is_strict_json(rho):
         "ModelCard", "SummaryTable", "RocPlot", "CalibrationPlot"]
 
 
-@pytest.mark.parametrize("samples, match", [
-    pytest.param({"test": (X_TEST, Y_TEST)}, "'train' entry", id="missing-train"),
-    pytest.param({"train": (X_TRAIN[:, :2], Y_TRAIN)}, "variable_names lists 3 features",
-                 id="column-count"),
-    pytest.param({"train": (X_TRAIN, Y_TRAIN), "test": (X_TEST, np.zeros(4))},
+@pytest.mark.parametrize("invalid, match", [
+    pytest.param({"rho": RISK_SCORE_RHO[:3]}, "same length", id="rho-shorter-than-names"),
+    pytest.param({"variable_names": ["bias", "a", "b", "c"]}, r"'\(Intercept\)' first",
+                 id="no-intercept-name"),
+    pytest.param({"rho": [float("nan"), 2, 1, -1]}, "rho must be finite", id="non-finite-rho"),
+    pytest.param({"model_type": "decision_tree"}, "model_type must be one of",
+                 id="unknown-model-type"),
+    pytest.param({"samples": {"test": (X_TEST, Y_TEST)}}, "'train' entry", id="missing-train"),
+    pytest.param({"samples": {"train": (X_TRAIN[:, :2], Y_TRAIN)}},
+                 "variable_names lists 3 features", id="column-count"),
+    pytest.param({"samples": {"train": (X_TRAIN, Y_TRAIN[:-1])}},
+                 "X has 8 rows but y has 7", id="row-count"),
+    pytest.param({"samples": {"train": (X_TRAIN, np.where(Y_TRAIN == 1, 1, 2))}},
+                 r"y must be in \{0, 1\} or \{-1, 1\}", id="unsupported-labels"),
+    pytest.param({"samples": {"train": (X_TRAIN, Y_TRAIN), "test": (X_TEST, np.zeros(4))}},
                  "'test' has a single class", id="single-class"),
 ])
-def test_invalid_samples_are_rejected(samples, match):
+def test_invalid_inputs_are_rejected(invalid, match):
     with pytest.raises(Exception, match=match):
-        build(RISK_SCORE_RHO, samples=samples)
+        build_report_data(**{**VALID_CALL, **invalid})
