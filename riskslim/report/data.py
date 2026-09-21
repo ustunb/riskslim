@@ -256,7 +256,8 @@ def summary_section(samples, model, roc, calibration, log_loss, training, constr
     if training is not None:
         rows = [["objective value", fmt(training.get("objective_value"), "{:.4f}")],
                 ["optimality gap", fmt(training.get("optimality_gap"), "{:.1%}")],
-                ["run time", fmt(training.get("run_time"), "{:.1f} s")]]
+                ["run time", fmt(training.get("run_time"),
+                               "{:.2f} s" if (training.get("run_time") or 0) < 1 else "{:.1f} s")]]
         blocks.append({"key": "training", "title": "Training", "columns": ["", "value"],
                        "rows": rows})
 

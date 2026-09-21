@@ -29,7 +29,9 @@
       const itemName = (item) => item.binary ? item.name
         : `${item.name} (${item.value_range[0]}–${item.value_range[1]})`;
       const positive = (s) => isChecklist && s >= model.checklist_m;
-      return { model, isChecklist, hasNegative, pointsLabel, itemName, pct, positive };
+      // a single row only fits a dozen scores; wider ranges wrap into a grid
+      const wrapScores = model.score_to_risk.scores.length > 12;
+      return { model, isChecklist, hasNegative, pointsLabel, itemName, pct, positive, wrapScores };
     },
     template: `
       <Card :title="options.title">
@@ -54,7 +56,15 @@
           </tfoot>
         </table>
         <p v-if="isChecklist" class="rs-rule">{{ model.rule }}</p>
-        <div class="rs-score-risk">
+        <div v-if="wrapScores" class="rs-score-grid">
+          <div v-for="(r, j) in model.score_to_risk.risk"
+               class="rs-score-cell"
+               :class="{ 'rs-positive': positive(model.score_to_risk.scores[j]) }">
+            <span class="rs-score-label">{{ isChecklist ? "≥" : "" }}{{ model.score_to_risk.scores[j] }}</span>
+            <span class="rs-score-value">{{ pct(r) }}</span>
+          </div>
+        </div>
+        <div v-else class="rs-score-risk">
           <table>
             <tr>
               <th>{{ isChecklist ? "NET CHECKED" : "SCORE" }}</th>

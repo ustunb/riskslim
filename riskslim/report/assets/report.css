@@ -57,6 +57,19 @@
 .rs-model-table .rs-box { width: 2em; font-size: 1.2rem; line-height: 1; }
 .rs-rule { font-weight: 600; margin-bottom: 0.75rem; }
 
+/* score-to-risk grid: used when a single row would not fit */
+.rs-score-grid {
+  display: grid; gap: 1px;
+  grid-template-columns: repeat(auto-fill, minmax(4.2em, 1fr));
+  border: 1px solid var(--rs-grid); background: var(--rs-grid);
+}
+.rs-score-cell {
+  display: grid; padding: 0.3rem 0.2rem; text-align: center;
+  background: var(--rs-bg); font-variant-numeric: tabular-nums;
+}
+.rs-score-label { font-size: 0.75rem; color: var(--rs-muted); }
+.rs-score-value { font-size: 0.9rem; }
+
 /* score-to-risk row: scrolls sideways when there are many scores */
 .rs-score-risk { overflow-x: auto; }
 .rs-score-risk table { width: auto; border-collapse: collapse; }
