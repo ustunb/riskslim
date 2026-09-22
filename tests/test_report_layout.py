@@ -1,4 +1,4 @@
-"""Tests for riskslim.report.layout (component specs and the layout JSON).
+"""Tests for riskslim.report.report_layout_components (component specs and the layout JSON).
 
 Test strategy
 -------------
@@ -11,13 +11,13 @@ is the rejection paths this module owns, each one invalid mutation of a valid la
   layout_to_json:  a bare Row instead of a list, and a list entry that is not a Row
 
 n/a: default_layout's model_type check -- build_report_data rejects an unknown model_type before
-it reaches layout.py, so it has no separately observable behavior.
+it reaches report_layout_components.py, so it has no separately observable behavior.
 """
 
 import pytest
 
 from riskslim.report import CalibrationPlot, ModelCard, RocPlot, Row, SummaryTable
-from riskslim.report.layout import layout_to_json
+from riskslim.report.report_layout_components import layout_to_json
 
 
 @pytest.mark.parametrize("build_layout, match", [

@@ -1,7 +1,7 @@
 """Report layout: rows of components, set in Python and drawn by one generic renderer in JS.
 
-Adding a component means one dataclass here, one entry in the ``report.js`` registry and, if it
-needs data, one function in ``data.py``.
+Adding a component means one dataclass here, one entry in the ``draw_report_components.js``
+registry and, if it needs data, one function in ``build_report_data.py``.
 """
 
 from dataclasses import asdict, dataclass

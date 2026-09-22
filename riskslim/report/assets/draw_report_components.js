@@ -112,7 +112,7 @@
       </Card>`,
   };
 
-  // One Plotly component per figure key in data.figures (built in render.py).
+  // One Plotly component per figure key in data.figures (built in build_plot_figures.py).
   const PlotlyChart = (figureKey) => ({
     components: { Card },
     props: ["data", "options"],
@@ -127,7 +127,7 @@
       </Card>`,
   });
 
-  // Component registry: a layout.py dataclass name -> a Vue component.
+  // Component registry: a report_layout_components.py dataclass name -> a Vue component.
   const REGISTRY = {
     ModelCard,
     SummaryTable,

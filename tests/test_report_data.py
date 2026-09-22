@@ -1,4 +1,4 @@
-"""Tests for riskslim.report.data (build_report_data).
+"""Tests for riskslim.report.build_report_data (build_report_data).
 
 Test strategy
 -------------

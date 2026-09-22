@@ -30,7 +30,7 @@ from sklearn.metrics import auc, roc_curve
 from ..defaults import INTERCEPT_NAME
 from ..loss_functions.log_loss import log_loss_value_from_scores
 from ..utils import is_integer
-from .layout import default_layout, layout_to_json
+from .report_layout_components import default_layout, layout_to_json
 
 SCHEMA_VERSION = 1
 MODEL_TYPES = ("risk_score", "checklist")

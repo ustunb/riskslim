@@ -1,4 +1,5 @@
-"""Tests for riskslim.report.render (Report: Plotly figures, HTML page, save, notebook display).
+"""Tests for riskslim.report.render_report_html and build_plot_figures (Report: Plotly figures,
+HTML page, save, notebook display).
 
 Test strategy
 -------------
