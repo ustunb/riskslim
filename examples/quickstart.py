@@ -9,30 +9,32 @@ data_file = Path(__file__).resolve().parents[1] / "data" / "breastcancer_data.cs
 df = pd.read_csv(data_file)
 y, X = df.iloc[:, 0], df.iloc[:, 1:]
 
-# fit a risk score with at most 5 variables and coefficients in -5,...,5
+# binarize: each item is a feature at 5 or above (features are 1-10)
+X_items = (X >= 5).astype(int).add_suffix(" >= 5")
+items = list(X_items.columns)
+
+# fit a risk score with at most 5 items and coefficients in -5,...,5
 clf = RiskSLIMClassifier(
     max_size=5,
     max_coef=5,
-    variable_names=list(X.columns),
+    variable_names=items,
     outcome_name=df.columns[0],
     cplex_randomseed=0,
     verbose=False,
 )
-clf.fit(X.values, y.values, max_runtime=30.0)
+clf.fit(X_items.values, y.values, max_runtime=30.0)
 
 # print the score table
 print(clf)
 
 # predict and score
-print("train accuracy:", clf.score(X.values, y.values))
+print("train accuracy:", clf.score(X_items.values, y.values))
 
 # save an HTML report of the model
 clf.report(model_type="risk_score").save("riskslim_report.html")
 
-# fit a checklist: binary items with coefficients in {0, 1}, i.e. "predict the outcome if at
-# least M of these items are checked". Each item is a feature at 5 or above (features are 1-10).
-X_items = (X >= 5).astype(int).add_suffix(" >= 5")
-items = list(X_items.columns)
+# fit a checklist on the same items with coefficients in {0, 1}, i.e. "predict the outcome if at
+# least M of these items are checked"
 coef_set = CoefficientSet(
     ["(Intercept)"] + items,
     lb=[-5] + [0] * len(items),  # the intercept keeps the default bounds
