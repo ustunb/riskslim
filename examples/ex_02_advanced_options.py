@@ -10,9 +10,9 @@ Advanced settings for riskslim.
 from pathlib import Path
 
 import numpy as np
-from plotly.io import show
 
-from riskslim import RiskSLIMClassifier, load_data_from_csv
+from riskslim import RiskSLIMClassifier
+from riskslim.data import BinaryClassificationDataset
 
 ###################################################################################################
 # Load Data
@@ -22,15 +22,17 @@ from riskslim import RiskSLIMClassifier, load_data_from_csv
 # malignant.
 #
 
-# Load Data
+# Load Data (outcome in the first column)
 data_name = "breastcancer"
-data = load_data_from_csv(dataset_csv_file = Path(f'data/{data_name}_data.csv'))
+data = BinaryClassificationDataset.read_csv(
+    Path(__file__).resolve().parents[1] / "data" / f"{data_name}_data.csv"
+)
 
 # Unpack data
-X = data["X"]
-y = data["y"]
-variable_names = data["variable_names"]
-outcome_name = data["outcome_name"]
+X = data.X
+y = data.y
+variable_names = list(data.names.X)
+outcome_name = data.names.y
 
 ###################################################################################################
 # Settings
@@ -149,9 +151,6 @@ max_coefficient = 5
 # Maximum model size (number of non-zero coefficients; default set as float(inf))
 max_size = 5
 
-# Maximum value of offset (intercept) parameter (optional)
-max_offset = 50
-
 # L0-penalty parameter
 #   c0_value > 0
 #   larger values -> sparser models
@@ -162,17 +161,19 @@ c0_value = 1e-6
 # Initialize & Cross-Validate
 # ---------------------------
 #
-# The ``RiskSLIM`` model is first initalized using the coefficient set, bounds on the number of
-# non-zero coefficients (``L0_min`` and ``L0_max``), and the settings defined in the previous
-# cell. Fitting the model object is performed using ``.fit(X, y)``, where ``X`` is a 2d-array of
-# features and ``y`` is an array of class labels. Alternatively, the ``.cross_validate`` method
-# can be used to fit the object using cross-validation methods support by scikit-learn.
+# The ``RiskSLIMClassifier`` is first initalized using the bound on coefficients (``max_coef``),
+# the bound on the number of non-zero coefficients (``max_size``), and the settings defined in the
+# previous cell. Fitting the model object is performed using ``.fit(X, y)``, where ``X`` is a
+# 2d-array of features and ``y`` is an array of class labels. The ``.fit_cv`` method then
+# cross-validates the model using scikit-learn's ``cv`` options.
 #
 
 rs = RiskSLIMClassifier(max_coef = max_coefficient, max_size = max_size,
                         variable_names = variable_names, c0_value = c0_value,
                         verbose = False, outcome_name = outcome_name,
                         **settings)
+
+rs.fit(X, y)
 
 rs.fit_cv(
     X,
@@ -181,17 +182,16 @@ rs.fit_cv(
     scoring="roc_auc"
 )
 
+print(rs)
+
 ###################################################################################################
 # Results
 # -------
 #
-# The CPLEX object and dictionary of solution is store in the ``.solution`` and ``.solution_info``
-# attributes, respectively. Optimized risk scores are accessible from the ``.scores`` attribute.
-# Reports may be generated using the ``.report()`` method.
+# The solver's solution and a dictionary of solution info are stored in the ``.optimizer.solution``
+# and ``.solution_info_`` attributes, respectively. The fitted coefficients are in ``.coef_`` and
+# ``.intercept_``, and ``print(rs)`` shows the score table. Reports may be generated using the
+# ``.report()`` method.
 #
 
-rs.create_report()
-
-# sphinx_gallery_start_ignore
-show(rs.create_report())
-# sphinx_gallery_end_ignore
+rs.report(model_type="risk_score", data=data)

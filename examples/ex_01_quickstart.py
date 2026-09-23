@@ -7,14 +7,12 @@ A minimial example for learning risk scores.
 
 ###################################################################################################
 
-import os
 from pathlib import Path
 
 import numpy as np
-from IPython.display import IFrame
-from plotly.io import show
 
-from riskslim import RiskSLIMClassifier, load_data_from_csv
+from riskslim import RiskSLIMClassifier
+from riskslim.data import BinaryClassificationDataset
 
 ###################################################################################################
 # Load Data
@@ -24,15 +22,16 @@ from riskslim import RiskSLIMClassifier, load_data_from_csv
 # malignant.
 #
 
-# Load Data
+# Load Data (outcome in the first column)
 data_name = "breastcancer"
-data = load_data_from_csv(dataset_csv_file = Path(f'data/{data_name}_data.csv'))
+data_file = Path(__file__).resolve().parents[1] / "data" / f"{data_name}_data.csv"
+data = BinaryClassificationDataset.read_csv(data_file)
 
 # Unpack data
-X = data["X"]
-y = data["y"]
-variable_names = data["variable_names"]
-outcome_name = data["outcome_name"]
+X = data.X
+y = data.y
+variable_names = list(data.names.X)
+outcome_name = data.names.y
 
 ###################################################################################################
 # Settings
@@ -84,7 +83,7 @@ settings = {
 #
 # These parameters determine the sparisty and constraints of the model. The bounds on magnitiude of
 # coefficients and number of non-zero coefficents are set below. Pass these parameters to a
-# ``RiskSLIM`` object during initialization.
+# ``RiskSLIMClassifier`` object during initialization.
 #
 
 # Value of largest/smallest coefficient
@@ -92,9 +91,6 @@ max_coefficient = 5
 
 # Maximum model size (number of non-zero coefficients; default set as float(inf))
 max_size = 5
-
-# Maximum value of offset (intercept) parameter (optional)
-max_offset = 50
 
 # L0-penalty parameter
 #   c0_value > 0
@@ -107,10 +103,10 @@ c0_value = 1e-6
 # Initialize & Fit
 # ----------------
 #
-# The ``RiskSLIM`` model is first initalized using the coefficient set, bounds on the number of
-# non-zero coefficients (``L0_min`` and ``L0_max``), and the settings defined in the previous
-# cell. Fitting the model object is performed using ``.fit(X, y)``, where ``X`` is a 2d-array of
-# features and ``y`` is an array of class labels.
+# The ``RiskSLIMClassifier`` is first initalized using the bound on the magnitude of coefficients
+# (``max_coef``), the maximum number of non-zero coefficients (``max_size``), and the settings
+# defined in the previous cells. Fitting the model object is performed using ``.fit(X, y)``,
+# where ``X`` is a 2d-array of features and ``y`` is an array of class labels.
 #
 
 rs = RiskSLIMClassifier(max_coef = max_coefficient, max_size = max_size,
@@ -124,29 +120,27 @@ rs.fit(X, y)
 # Results
 # -------
 #
-# The CPLEX object and dictionary of solution is store in the ``.solution`` and ``.solution_info``
-# attributes, respectively. Optimized risk scores are accessible from the ``.scores`` attribute.
+# The fitted optimizer (with the CPLEX model) and a dictionary of solver statistics are stored in
+# the ``.optimizer_`` and ``.solution_info_`` attributes, respectively. The optimized coefficients
+# are in ``.coef_`` and ``.intercept_``, and printing the classifier shows the risk score.
 # Reports may be generated using the ``.report()`` method.
 #
 
-rs.scores  # noqa: B018 (sphinx-gallery shows the last expression)
+print(rs)
 
 
 ###################################################################################################
 # Interactive Reports
 # -------------------
 #
-# Interactive reports may be create by passing an html extension to the file_name kwarg of
-# ``create_report``.
+# ``.report()`` returns an interactive report of the model, with a summary table and ROC and
+# calibration plots. Save it as an html file with ``.save``; notebooks display it inline.
 #
 
-# Create interactive html table
-rs.create_report("example_report.html", only_table=True)
+# Create interactive html report
+report = rs.report(model_type = "risk_score", data = data)
+report.save("example_report.html")
 
-# Display table
-IFrame(src=f"{os.getcwd()}/example_report.html", width=1200, height=350)
-
-# sphinx_gallery_start_ignore
-show(rs.create_report())
-# sphinx_gallery_end_ignore
+# Display report
+report  # noqa: B018 (sphinx-gallery shows the last expression)
 

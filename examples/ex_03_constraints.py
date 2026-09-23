@@ -9,10 +9,10 @@ Adding constraints to the MIP.
 
 from pathlib import Path
 
-from plotly.io import show
 from sklearn import clone
 
-from riskslim import RiskSLIMClassifier, load_data_from_csv
+from riskslim import RiskSLIMClassifier
+from riskslim.data import BinaryClassificationDataset
 
 ###################################################################################################
 # Load Data
@@ -22,15 +22,15 @@ from riskslim import RiskSLIMClassifier, load_data_from_csv
 # malignant.
 #
 
-# Load Data
+# Load Data (outcome in the first column)
 data_name = "breastcancer"
-data = load_data_from_csv(dataset_csv_file = Path(f'data/{data_name}_data.csv'))
+data_file = Path(__file__).resolve().parents[1] / "data" / f"{data_name}_data.csv"
+data = BinaryClassificationDataset.read_csv(data_file)
 
 # Unpack data
-X = data["X"]
-y = data["y"]
-variable_names = data["variable_names"]
-outcome_name = data["outcome_name"]
+X, y = data.X, data.y
+variable_names = list(data.names.X)
+outcome_name = data.names.y
 
 # Procedures and improvement settings
 settings = {}
@@ -49,14 +49,14 @@ settings['chained_updates_flag'] = False
 #
 
 rs_base = RiskSLIMClassifier(max_coef = 5, max_size = 5,
-                             variable_names = data["variable_names"],
-                             verbose = False, settings = settings)
+                             variable_names = variable_names, outcome_name = outcome_name,
+                             verbose = False, **settings)
 
 # Fit
 rs = clone(rs_base)
 rs.fit(X, y)
 
-rs.scores  # noqa: B018 (sphinx-gallery shows the last expression)
+print(rs)
 
 
 ###################################################################################################
@@ -90,7 +90,7 @@ rs_constrained.add_constraint(
 
 rs_constrained.fit(X, y)
 
-rs_constrained.scores  # noqa: B018 (sphinx-gallery shows the last expression)
+print(rs_constrained)
 
 ###################################################################################################
 #
@@ -101,7 +101,7 @@ rs_constrained.scores  # noqa: B018 (sphinx-gallery shows the last expression)
 rs_constrained.add_constraint(
     # Variable names
     ['ClumpThickness'],
-    # Variable type ("rho" or "alpha")
+    # Variable type ("rho" or "alpha"); "rho" is the MIP's name for the coefficient variables
     "rho",
     # Constraint coefficients
     [1.],
@@ -115,8 +115,8 @@ rs_constrained.add_constraint(
 
 rs_constrained.fit(X, y)
 
-rs_constrained.scores  # noqa: B018 (sphinx-gallery shows the last expression)
+print(rs_constrained)
 
 # sphinx_gallery_start_ignore
-show(rs_constrained.create_report(only_table=True, show=False))
+rs_constrained.report(model_type="risk_score", data=data)  # noqa: B018 (sphinx-gallery shows the last expression)
 # sphinx_gallery_end_ignore
