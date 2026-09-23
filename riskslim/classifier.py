@@ -17,7 +17,7 @@ from .optimizer import RiskSLIMOptimizer
 from .coefficient_set import CoefficientSet
 from .data import ClassificationDataset
 from .defaults import DEFAULT_LCPA_SETTINGS, INTERCEPT_NAME, OUTCOME_NAME
-from .report import Report, build_report_data
+from .report import ModelReport
 from .utils import print_model
 
 
@@ -213,22 +213,20 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         }
         return self
 
-    def report(self, X_test=None, y_test=None, layout=None, model_type=None):
+    def report(self, X_test=None, y_test=None, model_type=None):
         """HTML report of the fitted model: the model, a summary table, ROC and calibration.
 
         Parameters
         ----------
         X_test, y_test : array-like, optional
             A held-out sample, shown next to the training data passed to ``fit``.
-        layout : list of riskslim.report.Row, optional
-            Custom layout; defaults to the model, the summary table, ROC and calibration.
         model_type : {"risk_score", "checklist"}, optional
             How to show the model. Inferred from the coefficients when None: a checklist when
             every nonzero coefficient is +1 or -1.
 
         Returns
         -------
-        report : riskslim.report.Report
+        report : riskslim.report.ModelReport
             Use ``report.save(path)`` to write an HTML file; notebooks display it inline.
         """
         check_is_fitted(self)
@@ -244,7 +242,7 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
             samples["test"] = (X_test, (y_test == self.classes_[1]).astype(int))
         features = [j for j, name in enumerate(self.coef_set_.variable_names) if name != INTERCEPT_NAME]
         variable_lb, variable_ub = self.coef_set_.lb[features], self.coef_set_.ub[features]
-        data = build_report_data(
+        return ModelReport(
             rho = self._rho,
             variable_names = self._data.variable_names,
             outcome_name = self._data.outcome_name,
@@ -254,7 +252,6 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
                            "point_range": (float(np.min(variable_lb)), float(np.max(variable_ub)))},
             model_type = model_type,
         )
-        return Report(data, layout=layout)
 
     def decision_function(self, X):
         """Risk score of each sample; > 0 predicts ``classes_[1]``.

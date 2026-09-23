@@ -1,0 +1,329 @@
+"""Tests for riskslim.report.model_report (ModelReport: data block, Plotly figures, HTML page).
+
+Test strategy
+-------------
+Fixture: the shared report sample in tests/utils.py (8 training rows, 4 test rows, three binary
+features, fixed coefficient vectors); expected values are literals worked out by hand, not
+recomputed. No solver is called.
+
+Dimensions:
+  model type:   risk_score (points 2, 1, -1), checklist (+1 items only), checklist (with a -1 item)
+                -- inferred from the coefficients; model_type="risk_score" overrides a checklist
+  label coding: {0, 1}, {-1, 1}    -- both must map to the same positive class
+  samples:      train only, train + test (the test sample has no row with score 1)
+  figure:       roc, calibration   -- one trace per sample, plotted straight from the data block's
+                                      roc / calibration sections, plus a top-left metrics box
+                                      (AUC / calibration error)
+  label text:   contains "</script>" and "<!--"  -- must not end the JSON data block early (a
+                                      plain label is the same path with nothing to escape, so it
+                                      is not a separate case)
+
+Rejection paths owned here (one invalid mutation of a valid call each): rho and variable_names of
+different lengths, variable_names without "(Intercept)" first, non-finite rho, unknown model_type,
+samples without 'train', X column count != number of variable names, y row count != X row count,
+labels outside {0, 1} / {-1, 1}, and a sample with a single class.
+n/a: non-binary features for the checklist -- the score range rule is shared with the risk score.
+
+Checks that need no browser: `plotly.graph_objects.Figure(fig)` rejects misspelled or invalid
+properties. The browser test is opt-in (`pytest -m browser`): each model type's page is built and
+saved once, then opened in headless Chromium at 1280 px and 375 px, requiring no console or page
+errors, 2 rendered Plotly charts and one model row per item; screenshots and the HTML go to a
+tmp_path or --report-dir=DIR
+(write it with "=": with a space, pytest reads an existing DIR as a test path and misses the
+config).
+"""
+
+import html
+import json
+import re
+from pathlib import Path
+
+import numpy as np
+import plotly.graph_objects as go
+import pytest
+from utils import (
+    CHECKLIST_RHO,
+    CONSTRAINTS,
+    NAMES,
+    RISK_SCORE_RHO,
+    SAMPLES,
+    TRAINING,
+    X_TEST,
+    X_TRAIN,
+    Y_TEST,
+    Y_TRAIN,
+)
+
+from riskslim.report import ModelReport
+
+VALID_CALL = {"rho": RISK_SCORE_RHO, "variable_names": NAMES, "outcome_name": "y",
+              "samples": SAMPLES}
+DATA_KEYS = {"schema_version", "title", "outcome_name", "samples", "model", "summary", "roc",
+             "calibration", "figures"}
+CDN_URLS = [
+    "https://cdnjs.cloudflare.com/ajax/libs/vue/3.5.43/vue.global.prod.min.js",
+    "https://cdn.jsdelivr.net/npm/plotly.js-basic-dist-min@4.1.1/plotly-basic.min.js",
+    "https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.min.css",
+]
+DATA_BLOCK = re.compile(r'<script type="application/json" id="report-data">(.*?)</script>', re.S)
+HOSTILE_NAMES = ["(Intercept)", "a</script><script>alert(1)</script>", "b<!-- c", "c"]
+
+
+def make_report(rho, names=NAMES, samples=None, **kwargs):
+    """A report over the shared sample, with the solver statistics and constraints filled in."""
+    return ModelReport(rho, names, "y", samples or SAMPLES, training=TRAINING,
+                       constraints=CONSTRAINTS, **kwargs)
+
+
+def build(rho, samples=None, **kwargs):
+    """The data block of a report built without solver statistics or constraints."""
+    return ModelReport(rho, NAMES, "y", samples or SAMPLES, **kwargs).data
+
+
+@pytest.fixture(scope="module")
+def report():
+    """The default risk-score report."""
+    return make_report(RISK_SCORE_RHO)
+
+
+def test_risk_score_model_has_score_range_and_score_to_risk():
+    model = build(RISK_SCORE_RHO)["model"]
+
+    assert model["type"] == "risk_score"
+    assert [(item["name"], item["points"]) for item in model["items"]] == [
+        ("a", 2), ("b", 1), ("c", -1)]
+    assert model["score_range"] == [-1, 3]
+    assert model["score_to_risk"]["scores"] == [-1, 0, 1, 2, 3]
+    assert model["score_to_risk"]["risk"] == pytest.approx(
+        [0.0474258732, 0.1192029220, 0.2689414214, 0.5, 0.7310585786])
+    assert model["checklist_m"] is None
+
+
+def test_non_binary_feature_score_range_spans_points_times_value_range():
+    X = np.column_stack([np.arange(1, 9), X_TRAIN[:, 1:]])  # a takes values 1..8
+
+    model = build(RISK_SCORE_RHO, samples={"train": (X, Y_TRAIN)})["model"]
+
+    assert model["items"][0] == {"name": "a", "points": 2, "binary": False,
+                                 "value_range": [1, 8]}
+    assert model["score_range"] == [1, 17]
+    assert model["score_to_risk"]["scores"] == list(range(1, 18))
+
+
+@pytest.mark.parametrize("rho, expected_m, expected_rule", [
+    pytest.param(CHECKLIST_RHO, 2, "Predict y if at least 2 of 2 items are checked",
+                 id="positive-items"),
+    pytest.param([0, 1, 1, -1], 1,
+                 "Predict y if the number of checked (+) items minus the number of checked "
+                 "(−) items is at least 1", id="with-negative-item"),
+    pytest.param([-3, 1, 1, 0], 4,
+                 "Never predict y (no set of checked items reaches the threshold)",
+                 id="threshold-out-of-reach"),
+])
+def test_checklist_m_is_smallest_net_count_with_positive_prediction(rho, expected_m,
+                                                                    expected_rule):
+    model = build(rho)["model"]
+
+    assert model["type"] == "checklist"
+    assert model["checklist_m"] == expected_m
+    assert model["rule"] == expected_rule
+
+
+def test_risk_score_type_can_be_forced_for_unit_coefficients():
+    assert build(CHECKLIST_RHO, model_type="risk_score")["model"]["type"] == "risk_score"
+
+
+@pytest.mark.parametrize("negative_label", [0, -1], ids=["labels-01", "labels-pm1"])
+def test_calibration_bins_count_rows_per_score(negative_label):
+    y_train = np.where(Y_TRAIN == 1, 1, negative_label)
+    y_test = np.where(Y_TEST == 1, 1, negative_label)
+
+    data = build(RISK_SCORE_RHO, samples={"train": (X_TRAIN, y_train), "test": (X_TEST, y_test)})
+    train, test = data["calibration"]["train"], data["calibration"]["test"]
+
+    assert train["scores"] == [-1, 0, 1, 2, 3]
+    assert train["n"] == [1, 2, 2, 2, 1]
+    assert train["observed"] == [0.0, 0.5, 0.0, 1.0, 1.0]
+    assert train["error"] == pytest.approx(0.3269805367)
+    # score 1 has no test rows: absent, not NaN
+    assert test["scores"] == [-1, 0, 2, 3]
+    assert test["n"] == [1, 1, 1, 1]
+    assert test["observed"] == [0.0, 0.0, 1.0, 1.0]
+    assert test["error"] == pytest.approx(0.2338925541)
+
+
+def test_roc_has_a_point_per_score_threshold_from_origin_to_corner():
+    roc = build(RISK_SCORE_RHO)["roc"]
+
+    assert roc["train"]["thresholds"] == [None, 3, 2, 1, 0, -1]
+    assert roc["train"]["fpr"] == [0.0, 0.0, 0.0, 0.5, 0.75, 1.0]
+    assert roc["train"]["tpr"] == [0.0, 0.25, 0.75, 0.75, 1.0, 1.0]
+    assert roc["train"]["auc"] == 0.84375
+    assert roc["test"]["auc"] == 1.0
+
+
+def test_summary_has_four_blocks_of_formatted_values():
+    data = build(RISK_SCORE_RHO, training=TRAINING, constraints=CONSTRAINTS)
+
+    assert data["samples"] == ["train", "test"]
+    assert {block["key"]: block["rows"] for block in data["summary"]} == {
+        "dataset": [["n", "8", "4"], ["outcome rate", "50.0%", "50.0%"]],
+        "constraints": [["model size", "3 (max 3)"], ["point range", "-5 to 5"]],
+        "training": [["objective value", "0.5000"], ["optimality gap", "n/a"],
+                     ["run time", "1.2 s"]],
+        "performance": [["AUC", "0.844", "1.000"], ["calibration error", "32.7%", "23.4%"],
+                        ["log loss", "0.579", "0.295"]],
+    }
+
+
+@pytest.mark.parametrize("rho", [RISK_SCORE_RHO, CHECKLIST_RHO], ids=["risk-score", "checklist"])
+def test_data_is_strict_json(rho):
+    data = build(rho, training=TRAINING, constraints=CONSTRAINTS)
+
+    assert json.loads(json.dumps(data, allow_nan=False)) == data
+    assert data["schema_version"] == 1
+
+
+@pytest.mark.parametrize("invalid, match", [
+    pytest.param({"rho": RISK_SCORE_RHO[:3]}, "same length", id="rho-shorter-than-names"),
+    pytest.param({"variable_names": ["bias", "a", "b", "c"]}, r"'\(Intercept\)' first",
+                 id="no-intercept-name"),
+    pytest.param({"rho": [float("nan"), 2, 1, -1]}, "rho must be finite", id="non-finite-rho"),
+    pytest.param({"model_type": "decision_tree"}, "model_type must be one of",
+                 id="unknown-model-type"),
+    pytest.param({"samples": {"test": (X_TEST, Y_TEST)}}, "'train' entry", id="missing-train"),
+    pytest.param({"samples": {"train": (X_TRAIN[:, :2], Y_TRAIN)}},
+                 "variable_names lists 3 features", id="column-count"),
+    pytest.param({"samples": {"train": (X_TRAIN, Y_TRAIN[:-1])}},
+                 "X has 8 rows but y has 7", id="row-count"),
+    pytest.param({"samples": {"train": (X_TRAIN, np.where(Y_TRAIN == 1, 1, 2))}},
+                 r"y must be in \{0, 1\} or \{-1, 1\}", id="unsupported-labels"),
+    pytest.param({"samples": {"train": (X_TRAIN, Y_TRAIN), "test": (X_TEST, np.zeros(4))}},
+                 "'test' has a single class", id="single-class"),
+])
+def test_invalid_inputs_are_rejected(invalid, match):
+    with pytest.raises(Exception, match=match):
+        ModelReport(**{**VALID_CALL, **invalid})
+
+
+def test_html_holds_one_data_block_that_round_trips():
+    hostile_report = make_report(RISK_SCORE_RHO, names=HOSTILE_NAMES)
+
+    blocks = DATA_BLOCK.findall(hostile_report.html)
+
+    assert len(blocks) == 1
+    assert json.loads(blocks[0]) == hostile_report.data
+    assert set(hostile_report.data) == DATA_KEYS
+    assert set(hostile_report.data["figures"]) == {"roc", "calibration"}
+    assert all(url in hostile_report.html for url in CDN_URLS)
+
+
+def test_save_and_notebook_display_carry_the_same_html(report, tmp_path):
+    path = report.save(tmp_path / "report.html")
+    iframe = report._repr_html_()
+    (srcdoc,) = re.findall(r'<iframe srcdoc="([^"]*)"', iframe)
+
+    assert path.read_text(encoding="utf-8") == report.html
+    assert html.unescape(srcdoc) == report.html
+
+
+@pytest.mark.parametrize("key, coordinates, metrics_text", [
+    ("roc", ("fpr", "tpr"), ["AUC", "train</span> 0.844", "test</span> 1.000"]),
+    ("calibration", ("predicted", "observed"), ["CAL", "train</span> 32.7%",
+                                                "test</span> 23.4%"]),
+])
+def test_figure_plots_each_sample_section_with_a_top_left_metrics_box(report, key, coordinates,
+                                                                     metrics_text):
+    figure = report.data["figures"][key]
+    x_field, y_field = coordinates
+
+    go.Figure(figure)  # raises on invalid Plotly properties
+    assert [trace["name"] for trace in figure["data"]] == ["train", "test"]
+    for trace, name in zip(figure["data"], ["train", "test"]):
+        assert trace["x"] == report.data[key][name][x_field]
+        assert trace["y"] == report.data[key][name][y_field]
+    (box,) = figure["layout"]["annotations"]
+    assert (box["xref"], box["yref"], box["xanchor"], box["yanchor"]) == (
+        "paper", "paper", "left", "top")
+    assert box["x"] <= 0.05 and box["y"] >= 0.95
+    assert all(text in box["text"] for text in metrics_text), box["text"]
+
+
+def test_calibration_bubbles_are_labelled_with_scores_and_sized_by_n(report):
+    train, test = report.data["figures"]["calibration"]["data"]
+
+    assert train["text"] == ["-1", "0", "1", "2", "3"]
+    assert test["text"] == ["-1", "0", "2", "3"]
+    # train n = [1, 2, 2, 2, 1]; test n = [1, 1, 1, 1]
+    small, large = train["marker"]["size"][0], train["marker"]["size"][1]
+    assert small < large
+    assert train["marker"]["size"] == [small, large, large, large, small]
+    assert test["marker"]["size"] == [small] * 4
+
+
+def test_roc_points_carry_score_thresholds(report):
+    train = report.data["figures"]["roc"]["data"][0]
+
+    assert train["customdata"] == ["none", "score ≥ 3", "score ≥ 2", "score ≥ 1",
+                                   "score ≥ 0", "score ≥ -1"]
+
+
+@pytest.fixture(scope="module")
+def report_dir(request, tmp_path_factory):
+    directory = request.config.getoption("--report-dir")
+    if directory is None:
+        return tmp_path_factory.mktemp("report")
+    Path(directory).mkdir(parents=True, exist_ok=True)
+    return Path(directory)
+
+
+@pytest.fixture(scope="module", params=["risk_score", "checklist"])
+def saved_report(request, report_dir):
+    """One saved report page per model type, built and written once for all viewport widths."""
+    rho = {"risk_score": RISK_SCORE_RHO, "checklist": CHECKLIST_RHO}[request.param]
+    return make_report(rho).save(report_dir / f"{request.param}_report.html")
+
+
+@pytest.fixture(scope="module")
+def chromium():
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        pytest.fail("Playwright is not installed. Run: "
+                    "uv sync --group browser && uv run playwright install chromium",
+                    pytrace=False)
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch()
+        except Exception as error:
+            pytest.fail(f"Chromium failed to launch ({error}). Run: "
+                        "uv run playwright install chromium", pytrace=False)
+        yield browser
+        browser.close()
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("width", [1280, 375])
+def test_report_renders_in_browser_without_errors(chromium, saved_report, width):
+    (block,) = DATA_BLOCK.findall(saved_report.read_text(encoding="utf-8"))
+    items = json.loads(block)["model"]["items"]
+    page = chromium.new_page(viewport={"width": width, "height": 900})
+    errors = []
+    page.on("console", lambda message: message.type == "error" and errors.append(message.text))
+    page.on("pageerror", lambda error: errors.append(str(error)))
+
+    try:
+        page.goto(saved_report.as_uri(), wait_until="networkidle")
+        try:
+            page.wait_for_function("document.querySelectorAll('.js-plotly-plot').length === 2",
+                                   timeout=15_000)
+        except Exception:
+            pass  # the assertions below report what did render
+        page.screenshot(path=saved_report.with_name(f"{saved_report.stem}_{width}px.png"),
+                        full_page=True)
+
+        assert errors == []
+        assert page.locator(".rs-model-table .rs-item-row").count() == len(items)
+        assert page.locator(".js-plotly-plot").count() == 2
+    finally:
+        page.close()

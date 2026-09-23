@@ -43,6 +43,8 @@
   border-bottom: 1px solid var(--rs-grid);
 }
 .rs-card h3 { margin: 0; font-size: 1rem; }
+/* a component slot generates no box: its component lays out as a direct child of the card */
+.rs-slot { display: contents; }
 
 .rs-card table { margin-bottom: 0.75rem; font-size: 0.9rem; }
 .rs-card th, .rs-card td { padding: 0.3rem 0.5rem; }

@@ -2,7 +2,7 @@
 
 import numpy as np
 
-# Report test data, shared by tests/test_report_*.py: a hand-written 8-row training sample and a
+# Report test data, used by tests/test_model_report.py: a hand-written 8-row training sample and a
 # 4-row test sample over three binary features (a, b, c), with fixed coefficients (no solver).
 NAMES = ["(Intercept)", "a", "b", "c"]
 X_TRAIN = np.array([

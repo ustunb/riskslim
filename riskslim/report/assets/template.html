@@ -13,7 +13,31 @@
 </style>
 </head>
 <body>
-<main class="container" id="report"></main>
+{#- The page structure: a 2x2 grid of cards, each with one component slot that mount_report.js
+    fills. A slot is display:contents, so the component renders as a direct child of its card. #}
+<main class="container" id="report">
+<header class="rs-head"><h2>{{ title }}</h2></header>
+<section class="rs-row">
+<article class="rs-card">
+<header><h3>Model</h3></header>
+<div class="rs-slot" data-component="model-card"></div>
+</article>
+<article class="rs-card">
+<header><h3>Summary</h3></header>
+<div class="rs-slot" data-component="summary-table"></div>
+</article>
+</section>
+<section class="rs-row">
+<article class="rs-card">
+<header><h3>ROC</h3></header>
+<div class="rs-slot" data-component="plotly-chart" data-figure="roc"></div>
+</article>
+<article class="rs-card">
+<header><h3>Calibration</h3></header>
+<div class="rs-slot" data-component="plotly-chart" data-figure="calibration"></div>
+</article>
+</section>
+</main>
 <script type="application/json" id="report-data">{{ data }}</script>
 <script>
 {{ scripts }}
