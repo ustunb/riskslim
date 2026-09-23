@@ -22,8 +22,6 @@ class RiskSLIMOptimizer:
 
     Attributes
     ----------
-    data : riskslim.data.BinaryClassificationDataset
-        Training data, without an intercept column.
     Z : 2d array of shape (n, n_variables)
         Signed design matrix ``y_i * [1, x_i]``: the intercept column first, then the
         features, each row multiplied by its label in {-1, +1}. C-contiguous float64.
@@ -99,7 +97,6 @@ class RiskSLIMOptimizer:
         self.mip_class = load(solver)
 
         # attach main inputs
-        self.data = data
         self.coef_set = coef_set
         assert np.greater(c0_value, 0.0), "c0_value should be positive"
         self.c0_value = c0_value
@@ -150,7 +147,7 @@ class RiskSLIMOptimizer:
         self.C_0_nnz = self.C_0[self.L0_reg_ind]
 
         # loss functions
-        handles = get_loss_functions(self.Z, coef_set, loss_computation = settings["loss_computation"], max_size = self.max_size)
+        handles = get_loss_functions(self.Z, loss_computation = settings["loss_computation"])
         for name, handle in handles.items():
             self.__setattr__(f"compute_{name}", handle)
 

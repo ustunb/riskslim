@@ -9,7 +9,7 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.frozen import FrozenEstimator
 from sklearn.metrics import check_scoring
-from sklearn.model_selection import cross_validate, check_cv
+from sklearn.model_selection import PredefinedSplit, check_cv, cross_validate
 from sklearn.utils.multiclass import check_classification_targets, type_of_target
 from sklearn.utils.validation import check_is_fitted, validate_data
 
@@ -333,7 +333,8 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         X : array-like of shape (n_samples, n_features)
         y : array-like of shape (n_samples,)
         k : int, sklearn cross-validation generator or an iterable, default: 5
-            Determines the cross-validation splitting strategy. Ignored when ``data`` is given.
+            Determines the cross-validation splitting strategy. With ``data`` and no ``fold_id``,
+            only the fold count is used: the folds are ``data.cv`` with ``k`` folds, replicate 1.
         scoring : str or callable, default: "roc_auc"
             Strategy to evaluate the cross-validated model on each test fold.
         n_jobs : int, optional, default: 1
@@ -366,7 +367,7 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
 
 
 def dataset_folds(data, fold_id, n_samples):
-    """``(train, test)`` index pairs for each fold of ``fold_id``, read without splitting ``data``."""
+    """The folds ``fold_id`` of ``data`` as a CV splitter, read without splitting ``data``."""
     if not isinstance(data, BinaryClassificationDataset):
         raise TypeError(f"data must be a BinaryClassificationDataset; got {type(data).__name__}")
     if data.n != n_samples:
@@ -374,9 +375,4 @@ def dataset_folds(data, fold_id, n_samples):
     if fold_id not in data.cv:
         raise ValueError(f"data.cv has no folds {fold_id!r}; build the dataset with those folds "
                          f"(e.g. n_folds=(5,) for 'K05N01')")
-    n_folds = int(data.cv[fold_id].max())
-    pairs = []
-    for fold in range(1, n_folds + 1):
-        masks = data.cv.get_split_masks(fold_id, test=fold)
-        pairs.append((np.flatnonzero(masks["training"]), np.flatnonzero(masks["test"])))
-    return pairs
+    return PredefinedSplit(np.asarray(data.cv[fold_id]))

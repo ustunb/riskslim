@@ -1,8 +1,7 @@
-def get_loss_functions(Z, coef_set, loss_computation, max_size = None):
+def get_loss_functions(Z, loss_computation):
     """Initalize loss functions on the signed design matrix Z (C-contiguous float64)."""
 
     assert loss_computation in ("normal",)
-    max_size = Z.shape[1] if max_size is None else max_size
 
     if loss_computation == "normal":
         from .loss_functions import log_loss as lf

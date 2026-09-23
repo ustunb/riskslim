@@ -240,7 +240,7 @@ def checked_dataset(data, classifier):
 
 def checked_coefficients(classifier, dataset):
     """The coefficients, intercept first, and their names from the dataset."""
-    rho = np.concatenate([[classifier.intercept_], classifier.coef_]).astype(float)
+    rho = np.asarray(classifier._rho, dtype=float)
     if not np.all(np.isfinite(rho)):
         raise ValueError(f"rho must be finite; got {rho.tolist()}")
     return rho, [INTERCEPT_NAME, *dataset.names.X]
