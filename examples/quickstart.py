@@ -3,9 +3,9 @@ from pathlib import Path
 from riskslim import CoefficientSet, RiskSLIMClassifier
 from riskslim.data import BinaryClassificationDataset, NumericBinarizer
 
-# import data (683 x 9, integer features, outcome in the first column) with 5 CV folds
+# import data (683 x 9, integer features, outcome in the first column)
 data_file = Path(__file__).resolve().parents[1] / "data" / "breastcancer_data.csv"
-data = BinaryClassificationDataset.read_csv(data_file, n_folds=(5,))
+data = BinaryClassificationDataset.read_csv(data_file)
 
 # binarize: each item is a feature at 5 or above (features are 1-10), named "<feature>_geq_5"
 data.processor.update({name: NumericBinarizer(thresholds=[5]) for name in data.names.X})
@@ -29,8 +29,8 @@ print(clf)
 # predict and score
 print("train accuracy:", clf.score(X, y))
 
-# cross-validate on the dataset's 5 folds, so the report shows a 5-CV sample next to training
-clf.fit_cv(X, y, data=data, max_runtime=30.0)
+# cross-validate (5 folds), so the report shows a 5-CV sample next to training
+clf.fit_cv(X, y, max_runtime=30.0)
 
 # save an HTML report of the model
 clf.report(model_type="risk_score", data=data).save("riskslim_report.html")
@@ -54,5 +54,5 @@ checklist = RiskSLIMClassifier(
 checklist.fit(X, y, max_runtime=30.0)
 print(checklist)
 print("checklist train accuracy:", checklist.score(X, y))
-checklist.fit_cv(X, y, data=data, max_runtime=30.0)
+checklist.fit_cv(X, y, max_runtime=30.0)
 checklist.report(model_type="checklist", data=data).save("checklist_report.html")

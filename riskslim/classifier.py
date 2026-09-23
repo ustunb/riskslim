@@ -9,13 +9,13 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.frozen import FrozenEstimator
 from sklearn.metrics import check_scoring
-from sklearn.model_selection import PredefinedSplit, check_cv, cross_validate
+from sklearn.model_selection import check_cv, cross_validate
 from sklearn.utils.multiclass import check_classification_targets, type_of_target
 from sklearn.utils.validation import check_is_fitted, validate_data
 
 from .optimizer import RiskSLIMOptimizer
 from .coefficient_set import CoefficientSet
-from .data import BinaryClassificationDataset, CVFolds
+from .data import BinaryClassificationDataset
 from .defaults import DEFAULT_LCPA_SETTINGS, INTERCEPT_NAME, OUTCOME_NAME
 from .report import ModelReport
 from .utils import print_model
@@ -220,7 +220,7 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         }
         return self
 
-    def report(self, X_test=None, y_test=None, model_type=None, *, data=None, folds=None):
+    def report(self, X_test=None, y_test=None, model_type=None, *, data=None, cv_models=None):
         """HTML report of the fitted model: the model, a summary table, ROC and calibration.
 
         Parameters
@@ -235,7 +235,7 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
             The dataset the model was fit on: its names label the page, and when it has splits
             (``data.split(...)``) each split is a sample; otherwise the training sample is the
             data passed to ``fit``.
-        folds : list of RiskSLIMClassifier, optional
+        cv_models : list of RiskSLIMClassifier, optional
             Fitted per-fold models for the CV sample, scoring the test rows of ``fit_cv``. None
             uses ``cv_results_["estimator"]`` after ``fit_cv``.
 
@@ -244,7 +244,7 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         report : riskslim.report.ModelReport
             Use ``report.save(path)`` to write an HTML file; notebooks display it inline.
         """
-        return ModelReport(self, data=data, folds=folds, model_type=model_type,
+        return ModelReport(self, data=data, cv_models=cv_models, model_type=model_type,
                            X_test=X_test, y_test=y_test)
 
     def decision_function(self, X):
@@ -325,32 +325,26 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
                 self.cv_calibrated_estimators_.append(calibrator.fit(X[train], y[train]))
         return self
 
-    def fit_cv(self, X, y, k=5, scoring="roc_auc", n_jobs=1, *, data=None, fold_id=None, **kwargs):
+    def fit_cv(self, X, y, cv=5, scoring="roc_auc", n_jobs=1, **kwargs):
         """Cross-validate RiskSLIM; stores ``cv_`` and ``cv_results_``.
 
         Parameters
         ----------
         X : array-like of shape (n_samples, n_features)
         y : array-like of shape (n_samples,)
-        k : int, sklearn cross-validation generator or an iterable, default: 5
-            Determines the cross-validation splitting strategy. With ``data`` and no ``fold_id``,
-            only the fold count is used: the folds are ``data.cv`` with ``k`` folds, replicate 1.
+        cv : int, sklearn cross-validation generator or an iterable, default: 5
+            Determines the cross-validation splitting strategy, as in
+            ``sklearn.model_selection.cross_validate``. To use a dataset's own folds, pass
+            ``PredefinedSplit(data.cv["K05N01"])``.
         scoring : str or callable, default: "roc_auc"
             Strategy to evaluate the cross-validated model on each test fold.
         n_jobs : int, optional, default: 1
             Number of jobs to run in parallel. -1 defaults to max cores or threads.
-        data : riskslim.data.BinaryClassificationDataset, optional
-            Dataset whose rows are ``X`` and ``y``; its folds ``fold_id`` are the CV folds.
-        fold_id : str, optional
-            Fold id in ``data.cv``, e.g. ``"K05N01"`` (5 folds, replicate 1). None uses
-            ``k`` folds, replicate 1.
         **kwargs
             Settings passed to each fold's ``fit``.
         """
         scoring = check_scoring(self, scoring)
         self.__dict__.pop("cv_calibrated_estimators_", None)  # calibrated the previous folds
-        cv = k if data is None else dataset_folds(data, CVFolds.get_fold_id(k) if fold_id is None else fold_id,
-                                                  n_samples=len(y))
         self.cv_ = check_cv(cv=cv, y=y, classifier=True)
         self.cv_results_ = cross_validate(
                 self,
@@ -365,14 +359,3 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
                 )
         return self
 
-
-def dataset_folds(data, fold_id, n_samples):
-    """The folds ``fold_id`` of ``data`` as a CV splitter, read without splitting ``data``."""
-    if not isinstance(data, BinaryClassificationDataset):
-        raise TypeError(f"data must be a BinaryClassificationDataset; got {type(data).__name__}")
-    if data.n != n_samples:
-        raise ValueError(f"data has {data.n} rows but y has {n_samples}; pass data.X and data.y")
-    if fold_id not in data.cv:
-        raise ValueError(f"data.cv has no folds {fold_id!r}; build the dataset with those folds "
-                         f"(e.g. n_folds=(5,) for 'K05N01')")
-    return PredefinedSplit(np.asarray(data.cv[fold_id]))

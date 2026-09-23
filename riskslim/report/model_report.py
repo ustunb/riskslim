@@ -143,7 +143,7 @@ class ModelReport:
         The dataset the model was fit on. Its feature and outcome names label the page, and when
         it has splits (``data.split(...)``) each split is a sample. Without it, or without
         splits, the training sample is the data passed to ``fit``.
-    folds : list of RiskSLIMClassifier, optional
+    cv_models : list of RiskSLIMClassifier, optional
         Fitted per-fold models for the CV sample, one per fold of ``classifier.fit_cv``; each
         scores its own test rows, ``classifier.cv_results_["indices"]["test"]``. None uses
         ``cv_results_["estimator"]``; without ``fit_cv`` there is no CV sample.
@@ -155,7 +155,7 @@ class ModelReport:
         a test split.
     """
 
-    def __init__(self, classifier, data=None, folds=None, model_type=None, X_test=None,
+    def __init__(self, classifier, data=None, cv_models=None, model_type=None, X_test=None,
                  y_test=None):
         check_is_fitted(classifier)
         dataset = checked_dataset(data, classifier)
@@ -176,7 +176,7 @@ class ModelReport:
         model = model_section(points, intercept, self.variable_names[1:], self.outcome_name,
                               self.model_type, samples[TRAINING][0],
                               {name: score for name, (_, score, _) in scored.items()})
-        cv = cv_sample(classifier, folds)
+        cv = cv_sample(classifier, cv_models)
         if cv is not None:
             cv_name, cv_scored = cv
             scored = {TRAINING: scored.pop(TRAINING), cv_name: cv_scored, **scored}
@@ -303,42 +303,42 @@ def split_samples(classifier, data, X_test, y_test):
     return samples
 
 
-def cv_sample(classifier, folds):
+def cv_sample(classifier, cv_models):
     """``(name, (y, score, intercept))`` of the fold models' out-of-fold predictions, or None.
 
-    The fold models are ``folds``, else ``cv_results_["estimator"]``. Each scores its own test
+    The fold models are ``cv_models``, else ``cv_results_["estimator"]``. Each scores its own test
     rows of the data passed to fit, read from ``cv_results_["indices"]["test"]`` and never
     re-derived, so the report and ``fit_cv`` cannot disagree about which rows a fold held out.
     """
     cv_results = getattr(classifier, "cv_results_", None)
-    if folds is None:
+    if cv_models is None:
         if cv_results is None:
             return None
-        folds = list(cv_results["estimator"])
+        cv_models = list(cv_results["estimator"])
     else:
-        folds = list(folds)
-        for fold_model in folds:
+        cv_models = list(cv_models)
+        for fold_model in cv_models:
             check_is_fitted(fold_model)
             if fold_model.n_features_in_ != classifier.n_features_in_:
                 raise ValueError(f"a fold model was fit on {fold_model.n_features_in_} features; "
                                  f"this model on {classifier.n_features_in_}")
-    if not folds:
+    if not cv_models:
         return None
 
     fit_data = classifier._data
     test_rows = [] if cv_results is None else [np.asarray(rows) for rows in
                                                cv_results["indices"]["test"]]
-    if len(test_rows) != len(folds) or any(rows.max(initial=-1) >= fit_data.n
+    if len(test_rows) != len(cv_models) or any(rows.max(initial=-1) >= fit_data.n
                                            for rows in test_rows):
-        warnings.warn(f"report() shows no CV sample: {len(folds)} fold models need their test "
+        warnings.warn(f"report() shows no CV sample: {len(cv_models)} fold models need their test "
                       f"rows from fit_cv on the data passed to fit, and cv_results_ has "
                       f"{len(test_rows)} folds", UserWarning, stacklevel=4)
         return None
     X, y = fit_data.X, (fit_data.y == fit_data.classes[1]).astype(int)
-    score = np.concatenate([X[rows] @ fold.coef_ for fold, rows in zip(folds, test_rows)])
+    score = np.concatenate([X[rows] @ fold.coef_ for fold, rows in zip(cv_models, test_rows)])
     intercept = np.concatenate([np.full(len(rows), float(fold.intercept_))
-                                for fold, rows in zip(folds, test_rows)])
-    return f"{len(folds)}-CV", (y[np.concatenate(test_rows)], score, intercept)
+                                for fold, rows in zip(cv_models, test_rows)])
+    return f"{len(cv_models)}-CV", (y[np.concatenate(test_rows)], score, intercept)
 
 
 def checked_classes(scored):

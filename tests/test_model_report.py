@@ -9,10 +9,9 @@ vector and fixed solver statistics, with the test rows passed as X_test / y_test
 values are literals worked out by hand, not recomputed.
 
 One end-to-end test skips the fixture: it reads data/breastcancer_data.csv into a
-BinaryClassificationDataset, fits a small model and its 5 fold models (fit, then fit_cv on the
-dataset's folds), and checks only that clf.report(data=...) builds a page holding every component
-(model card, summary table, ROC, calibration) and both samples (Training, 5-CV). It asserts
-presence, not values or appearance.
+BinaryClassificationDataset, fits a small model and its 5 fold models (fit, then fit_cv), and
+checks only that clf.report(data=...) builds a page holding every component (model card,
+summary table, ROC, calibration) and both samples (Training, 5-CV). It asserts presence, not values or appearance.
 
 Dimensions:
   model type:   risk_score (points 2, 1, -1), checklist (+1 items only), checklist (with a -1 item)
@@ -269,11 +268,11 @@ def test_html_holds_one_data_block_that_round_trips(fitted):
 
 
 def test_report_of_a_classifier_fit_on_a_dataset_holds_every_component():
-    dataset = BinaryClassificationDataset.read_csv(BREASTCANCER_FILE, n_folds=(5,))
+    dataset = BinaryClassificationDataset.read_csv(BREASTCANCER_FILE)
     X, y = dataset.X, dataset.y
     classifier = RiskSLIMClassifier(max_size=3, max_coef=5, verbose=False, max_runtime=5,
                                     cplex_randomseed=0)
-    classifier.fit(X, y).fit_cv(X, y, data=dataset)
+    classifier.fit(X, y).fit_cv(X, y)
 
     page = classifier.report(data=dataset).html
     (block,) = DATA_BLOCK.findall(page)

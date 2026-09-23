@@ -177,7 +177,7 @@ rs = RiskSLIMClassifier(max_coef = max_coefficient, max_size = max_size,
 rs.fit_cv(
     X,
     y,
-    k=5,
+    cv=5,
     scoring="roc_auc"
 )
 

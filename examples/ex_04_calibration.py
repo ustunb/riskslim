@@ -86,12 +86,12 @@ rs_base = RiskSLIMClassifier(max_coef = 5, max_size = 10,
 
 # Calibrated model
 rs_cal = clone(rs_base)
-rs_cal.fitcv(X, y, k=5)
+rs_cal.fit_cv(X, y, cv=5)
 rs_cal.calibrate(X, y, method="isotonic")
 
 # Un calibrated model
 rs = clone(rs_base)
-rs.fitcv(X, y, k=5)
+rs.fit_cv(X, y, cv=5)
 
 ###################################################################################################
 # Plot Results
