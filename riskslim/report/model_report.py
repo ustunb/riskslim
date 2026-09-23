@@ -57,7 +57,7 @@ from ..defaults import INTERCEPT_NAME
 from ..loss_functions.log_loss import log_loss_value_from_scores
 from ..utils import is_integer
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_TOTALS = 10_000  # score totals to enumerate before falling back to observed scores
 MODEL_TYPES = {"risk_score": "Risk score", "checklist": "Checklist"}
 
@@ -200,9 +200,11 @@ class ModelReport:
             "roc": roc,
             "calibration": calibration,
         }
-        labels = sample_labels(summary, names)
-        self.data["figures"] = {"roc": roc_figure(names, roc, labels),
-                                "calibration": calibration_figure(names, calibration, labels)}
+        self.data["figures"] = {
+            "roc": roc_figure(names, roc, sample_labels(summary, names, "auc")),
+            "calibration": calibration_figure(names, calibration,
+                                              sample_labels(summary, names, "ece")),
+        }
 
     @property
     def html(self):
@@ -383,11 +385,11 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, s
             vmin, vmax, values = 0.0, 1.0, np.array([0.0, 1.0])
         p = float(points[j])
         value_sets.append(p * values)
-        items.append({"name": display_name(str(names[j])), "points": number(p), "binary": binary,
-                      "value_range": [number(vmin), number(vmax)],
-                      "name_label": display_name(str(names[j])) if binary else
-                      f"{display_name(str(names[j]))} ({number(vmin)}–{number(vmax)})",
-                      "points_label": point_label(number(p), binary, model_type)})
+        name, p, vmin, vmax = display_name(str(names[j])), number(p), number(vmin), number(vmax)
+        items.append({"name": name, "points": p, "binary": binary,
+                      "value_range": [vmin, vmax],
+                      "name_label": name if binary else f"{name} ({vmin}–{vmax})",
+                      "points_label": point_label(p, binary, model_type)})
     # order items as print_model does: most positive points first
     items.sort(key=lambda item: -item["points"])
 
@@ -405,6 +407,7 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, s
         "intercept": number(intercept),
         "items": items,
         "points_header": "Points" if shows_points else None,
+        "box": "☐" if checklist else None,
         "score_header": "NET CHECKED" if checklist else "SCORE",
         "risk_header": "RISK",
         "score_range": [number(lo), number(hi)],
@@ -451,8 +454,10 @@ def tail_groups(risks):
     and the calibration points in ``collapse.calibration.df`` (``ibid.:1310-1352``) -- and a tail
     holding a single risk is left alone by both.
     """
-    n, low = len(risks), sum(r < LOW_RISK for r in risks)
-    high = sum(r > HIGH_RISK for r in risks)
+    risks = np.asarray(risks, dtype=float)
+    n = len(risks)
+    low = int(np.searchsorted(risks, LOW_RISK))  # risks are ascending, so the tails are prefixes
+    high = n - int(np.searchsorted(risks, HIGH_RISK, side="right"))
     groups = [(i, i) for i in range(n)]
     if high > 1:
         groups[n - high:] = [(n - high, n - 1)]
@@ -468,7 +473,7 @@ def score_to_risk_cells(scores, intercept, checklist_m):
     covers (``"0 to 1"``) and with the threshold it stays under (``"< 1.0%"``), as in the R's
     ``get.risk.xtable``; every other cell shows its own score and risk.
     """
-    risks = [float(expit(s + intercept)) for s in scores]
+    risks = expit(np.asarray(scores, dtype=float) + intercept)
     cells = []
     for first, last in tail_groups(risks):
         risk = (percent(risks[first]) if first == last
@@ -552,13 +557,10 @@ def expected_calibration_error(y, risk):
     return float(np.sum(n * np.abs(risk - observed)) / len(y))
 
 
-def summary_row(key, label, values):
-    """One row of the summary table: a stable key, its leftmost-column label, and its values.
-
-    A row with one value where there are several samples is not a per-sample statistic; the page
-    stretches it across the sample columns.
-    """
-    return {"key": key, "label": label, "values": values}
+def summary_row(key, label, values, span=1):
+    """One row of the summary table: a stable key, its leftmost-column label, its values, and
+    how many sample columns each value spans (a row that is not per-sample spans them all)."""
+    return {"key": key, "label": label, "values": values, "span": span}
 
 
 def summary_section(labels, model, roc, calibration, log_loss, training, constraints):
@@ -573,28 +575,30 @@ def summary_section(labels, model, roc, calibration, log_loss, training, constra
     names = list(labels)
     rows = [summary_row("n", "N", [f"{len(labels[s]):,}" for s in names]),
             summary_row("outcome_rate", "Outcome rate",
-                        [f"{labels[s].mean():.1%}" for s in names])]
+                        [percent(labels[s].mean()) for s in names])]
 
     size = str(len(model["items"]))
     if constraints.get("max_size") is not None:
         size += f" (max {int(constraints['max_size'])})"
-    rows.append(summary_row("model_size", "Model size", [size]))
+    rows.append(summary_row("model_size", "Model size", [size], span=len(names)))
     if constraints.get("point_range") is not None:
         lb, ub = constraints["point_range"]
-        rows.append(summary_row("point_range", "Point range", [f"{number(lb)} to {number(ub)}"]))
+        rows.append(summary_row("point_range", "Point range", [f"{number(lb)} to {number(ub)}"],
+                                span=len(names)))
 
     if training is not None:
         run_time = "{:.2f} s" if (training.get("run_time") or 0) < 1 else "{:.1f} s"
         rows += [
             summary_row("objective_value", "Objective value",
-                        [fmt(training.get("objective_value"), "{:.4f}")]),
+                        [fmt(training.get("objective_value"), "{:.4f}")], span=len(names)),
             summary_row("optimality_gap", "Optimality gap",
-                        [fmt(training.get("optimality_gap"), "{:.1%}")]),
-            summary_row("run_time", "Run time", [fmt(training.get("run_time"), run_time)]),
+                        [fmt(training.get("optimality_gap"), "{:.1%}")], span=len(names)),
+            summary_row("run_time", "Run time", [fmt(training.get("run_time"), run_time)],
+                        span=len(names)),
         ]
 
     rows += [summary_row("auc", "AUC", [f"{roc[s]['auc']:.3f}" for s in names]),
-             summary_row("ece", "ECE", [f"{calibration[s]['ece']:.1%}" for s in names]),
+             summary_row("ece", "ECE", [percent(calibration[s]["ece"]) for s in names]),
              summary_row("log_loss", "Log loss", [f"{log_loss[s]:.3f}" for s in names])]
     return {"columns": ["", *names], "rows": rows}
 
@@ -617,15 +621,18 @@ def fmt(value, template):
 # serialized to the plain JSON the data block carries to ``Plotly.newPlot``.
 # ---------------------------------------------------------------------------
 
-def sample_labels(summary, names):
-    """``{sample: "Training<br>(n = 8,815 p = 12.4%)"}``: the legend's first two lines.
+def sample_labels(summary, names, metric):
+    """``{sample: "Training<br>(n = 8,815 p = 12.4%)<br>AUC = 0.950"}``: a legend entry.
 
-    n and the outcome rate are the strings the summary table already shows, so the legend and the
-    table cannot round the same number two ways.
+    Every number is the string the summary table already shows, so the legend and the table
+    cannot round the same number two ways. ``metric`` names the summary row of the figure's own
+    headline statistic (``auc`` or ``ece``).
     """
     values = {row["key"]: row["values"] for row in summary["rows"]}
-    return {name: f"{name}<br>(n = {n} p = {p})"
-            for name, n, p in zip(names, values["n"], values["outcome_rate"])}
+    label = {"auc": "AUC", "ece": "ECE"}[metric]
+    return {name: f"{name}<br>(n = {n} p = {p})<br>{label} = {value}"
+            for name, n, p, value in zip(names, values["n"], values["outcome_rate"],
+                                         values[metric])}
 
 
 def roc_figure(names, sections, labels):
@@ -636,7 +643,7 @@ def roc_figure(names, sections, labels):
         thresholds = ["none" if i == 0 else "scores differ by fold" if t is None else f"score ≥ {t}"
                       for i, t in enumerate(roc["thresholds"])]
         traces.append(go.Scatter(
-            mode="lines+markers", name=f"{labels[name]}<br>AUC = {roc['auc']:.3f}",
+            mode="lines+markers", name=labels[name],
             x=roc["fpr"], y=roc["tpr"], customdata=thresholds,
             line={"width": 2}, marker={"size": 12},
             hovertemplate="%{customdata}<br>FPR %{x:.1%} · TPR %{y:.1%}"
@@ -683,7 +690,7 @@ def calibration_figure(names, sections, labels):
     for name in names:
         cal = points[name]
         traces.append(go.Scatter(
-            mode="markers+text", name=f"{labels[name]}<br>ECE = {sections[name]['ece']:.1%}",
+            mode="markers+text", name=labels[name],
             x=cal["predicted"], y=cal["observed"],
             text=cal["scores"],
             customdata=[[n, e] for n, e in zip(cal["n"], cal["local_error"])],

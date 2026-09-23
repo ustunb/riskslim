@@ -26,24 +26,24 @@
 <article class="rs-card">
 <header><h3>Model</h3></header>
 <div class="rs-slot" data-component="model-card">{% raw %}
-  <table class="rs-model-table" :class="isChecklist ? 'rs-checklist' : 'rs-risk-score'">
+  <table class="rs-model-table">
     <thead v-if="model.points_header">
       <tr>
-        <th v-if="isChecklist"></th>
+        <th v-if="model.box"></th>
         <th></th>
         <th class="rs-points">{{ model.points_header }}</th>
       </tr>
     </thead>
     <tbody>
       <tr v-for="item in model.items" class="rs-item-row">
-        <td v-if="isChecklist" class="rs-box" aria-hidden="true">☐</td>
+        <td v-if="model.box" class="rs-box" aria-hidden="true">{{ model.box }}</td>
         <td class="rs-name">{{ item.name_label }}</td>
         <td v-if="model.points_header" class="rs-points">{{ item.points_label }}</td>
       </tr>
       <tr v-if="model.items.length === 0"><td colspan="3">No items: every row gets the same score.</td></tr>
     </tbody>
   </table>
-  <p v-if="isChecklist" class="rs-rule">{{ model.rule }}</p>
+  <p v-if="model.rule" class="rs-rule">{{ model.rule }}</p>
   <div class="rs-score-grid">
     <div class="rs-score-cell rs-score-head">
       <span class="rs-score-label">{{ model.score_header }}</span>
@@ -71,7 +71,7 @@
     <tbody>
       <tr v-for="row in summary.rows">
         <td>{{ row.label }}</td>
-        <td v-for="value in row.values" class="rs-num" :colspan="span(row)">{{ value }}</td>
+        <td v-for="value in row.values" class="rs-num" :colspan="row.span">{{ value }}</td>
       </tr>
     </tbody>
   </table>

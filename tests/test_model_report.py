@@ -254,7 +254,7 @@ def test_data_is_strict_json(fitted, weights):
     data = make_report(fitted, weights).data
 
     assert json.loads(json.dumps(data, allow_nan=False)) == data
-    assert data["schema_version"] == 1
+    assert data["schema_version"] == 2
 
 
 @pytest.mark.parametrize("invalid, match", [
@@ -305,12 +305,7 @@ def test_report_of_a_classifier_fit_on_a_dataset_holds_every_component():
         assert f'data-component="{component}"' in page
     assert data["model"]["items"]
     assert data["summary"]["columns"] == ["", *data["samples"]]
-    assert [row["key"] for row in data["summary"]["rows"]] == [
-        "n", "outcome_rate", "model_size", "point_range", "objective_value", "optimality_gap",
-        "run_time", "auc", "ece", "log_loss"]
-    per_sample = {"n", "outcome_rate", "auc", "ece", "log_loss"}
-    assert all(len(row["values"]) == (len(data["samples"]) if row["key"] in per_sample else 1)
-               for row in data["summary"]["rows"])
+    assert data["summary"]["rows"]  # the rows themselves are pinned by the flat-table test
     for key in ("roc", "calibration"):
         # a trace is named for its legend entry: the sample, then its n, outcome rate and metric
         assert [trace["name"].split("<br>")[0] for trace in data["figures"][key]["data"]] == \

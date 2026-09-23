@@ -6,8 +6,8 @@
 // the whole figure, styling included (its Plotly template travels in the spec), so this only
 // hands it to Plotly -- on a copy, because Plotly writes into the objects it is given.
 function drawFigure(element, figure) {
-  const spec = structuredClone(figure);
-  Plotly.newPlot(element, spec.data, spec.layout,
+  // the figure has one consumer and is drawn once, so Plotly may write into it directly
+  Plotly.newPlot(element, figure.data, figure.layout,
     { displayModeBar: false, responsive: true, scrollZoom: false });
 }
 

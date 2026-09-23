@@ -3,10 +3,6 @@
 // The markup is the in-DOM template in the "model-card" slot of template.html.
 window.ModelCard = {
   props: ["data"],
-  setup(props) {
-    const model = props.data.model;
-    const isChecklist = model.type === "checklist";
-    // Python writes every label, including each item's name and points cell
-    return { model, isChecklist };
-  },
+  // Python writes every label, every header and the checkbox glyph
+  setup: (props) => ({ model: props.data.model }),
 };
