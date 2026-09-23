@@ -52,18 +52,19 @@ SCRIPTS = ("model_card.js", "summary_table.js", "roc_plot.js", "calibration_plot
            "mount_report.js")
 
 # ---------------------------------------------------------------------------
-# Visuals: tweak the look of both figures here.
-# nsf-career palette (see assets/styles.css for the same tokens)
+# Visuals: the figures name the page's CSS custom properties; the browser resolves
+# them before drawing (see drawFigure in assets/mount_report.js), so assets/styles.css
+# is the only place a colour, the font or the plot height is written.
 # ---------------------------------------------------------------------------
 STYLE = {
-    "ink": "#1F2933",
-    "muted": "#98A2AD",
-    "grid": "#DFE4E9",
-    "stripe": "#F2F2F2",
-    "bg": "#FFFFFF",
-    "samples": ["#2F6FB3", "#E07B39", "#10B981"],  # train, test, third sample
-    "font": '-apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif',
-    "height": 360,
+    "ink": "var(--rs-ink)",
+    "muted": "var(--rs-muted)",
+    "grid": "var(--rs-grid)",
+    "stripe": "var(--rs-stripe)",
+    "bg": "var(--rs-bg)",
+    "font": "var(--pico-font-family)",
+    "height": "var(--rs-plot-height)",
+    "samples": ["var(--rs-sample-1)", "var(--rs-sample-2)", "var(--rs-sample-3)"],
     "bubble_px": (14, 34),  # calibration bubble diameter for the smallest and largest n
 }
 

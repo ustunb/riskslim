@@ -69,6 +69,18 @@ DATA_BLOCK = re.compile(r'<script type="application/json" id="report-data">(.*?)
 HOSTILE_NAMES = ["(Intercept)", "a</script><script>alert(1)</script>", "b<!-- c", "c"]
 
 
+def with_tokens_resolved(value):
+    """A figure with its ``var(--token)`` strings filled in, as the browser fills them."""
+    if isinstance(value, str):
+        resolved = re.sub(r"var\(--rs-plot-height\)", "360", value)
+        return 360 if resolved == "360" else re.sub(r"var\(--[\w-]+\)", "#000000", resolved)
+    if isinstance(value, list):
+        return [with_tokens_resolved(item) for item in value]
+    if isinstance(value, dict):
+        return {key: with_tokens_resolved(item) for key, item in value.items()}
+    return value
+
+
 def make_report(rho, names=NAMES, samples=None, **kwargs):
     """A report over the shared sample, with the solver statistics and constraints filled in."""
     return ModelReport(rho, names, "y", samples or SAMPLES, training=TRAINING,
@@ -236,7 +248,7 @@ def test_figure_plots_each_sample_section_with_a_top_left_metrics_box(report, ke
     figure = report.data["figures"][key]
     x_field, y_field = coordinates
 
-    go.Figure(figure)  # raises on invalid Plotly properties
+    go.Figure(with_tokens_resolved(figure))  # raises on invalid Plotly properties
     assert [trace["name"] for trace in figure["data"]] == ["train", "test"]
     for trace, name in zip(figure["data"], ["train", "test"]):
         assert trace["x"] == report.data[key][name][x_field]

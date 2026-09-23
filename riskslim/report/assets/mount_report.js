@@ -3,8 +3,25 @@
 // data block to the components.
 
 // Both plot components draw their figure the same way; only the figure differs.
+// Python names the page's CSS custom properties -- "var(--rs-ink)", "var(--rs-plot-height)" --
+// and they are resolved against :root here, so styles.css stays the one place a value is written.
+function resolveStyleTokens(value, styles) {
+  if (typeof value === "string") {
+    const resolved = value.replace(/var\((--[\w-]+)\)/g,
+      (_, token) => styles.getPropertyValue(token).trim());
+    return /^-?\d*\.?\d+px$/.test(resolved) ? parseFloat(resolved) : resolved;
+  }
+  if (Array.isArray(value)) return value.map((item) => resolveStyleTokens(item, styles));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, resolveStyleTokens(item, styles)]));
+  }
+  return value;
+}
+
 function drawFigure(element, figure) {
-  const spec = structuredClone(figure);
+  const styles = getComputedStyle(document.documentElement);
+  const spec = resolveStyleTokens(structuredClone(figure), styles);
   Plotly.newPlot(element, spec.data, spec.layout,
     { displayModeBar: false, responsive: true, scrollZoom: false });
 }
