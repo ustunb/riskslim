@@ -265,14 +265,13 @@ class RiskSLIMOptimizer:
         # Construct LP relaxation
         lp_settings = dict(mip_settings)
         lp_settings["relax_integer_variables"] = True
-        lp = load(self.solver)()
-        lp_indices = lp.build(coef_set=self.coef_set, settings=lp_settings)
+        lp = type(self.mip)()
+        lp.build(coef_set=self.coef_set, settings=lp_settings)
         lp.set_parameters(self.cplex_settings, display_progress=settings["display_cplex_progress"])
 
         # Solve RiskSLIM LP using standard CPA
         stats, cuts, pool = run_standard_cpa(
                 mip=lp,
-                cpx_indices=lp_indices,
                 compute_loss=self.compute_loss_real,
                 compute_loss_cut=self.compute_loss_cut_real,
                 settings=settings,

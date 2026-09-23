@@ -79,11 +79,7 @@ class CplexRiskSLIMMIP(RiskSLIMMIP):
         assert isinstance(coef_set, CoefficientSet)
         assert isinstance(settings, dict)
 
-        log = (
-            (lambda msg: print_log(msg))
-            if settings.get("print_flag", False)
-            else (lambda msg: None)
-        )
+        log = print_log if settings.get("print_flag", False) else (lambda msg: None)
 
         # set default parameters
         settings.setdefault("C_0", 0.01)

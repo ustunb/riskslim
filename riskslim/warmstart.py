@@ -10,29 +10,28 @@ from riskslim.utils import print_log, validate_settings
 
 
 def run_standard_cpa(mip,
-                     cpx_indices,
                      compute_loss,
                      compute_loss_cut,
                      settings = DEFAULT_CPA_SETTINGS,
                      print_flag = True):
 
     assert isinstance(mip, RiskSLIMMIP)
-    assert isinstance(cpx_indices, dict)
     assert callable(compute_loss)
     assert callable(compute_loss_cut)
     assert isinstance(settings, dict)
 
     settings = validate_settings(settings, defaults=DEFAULT_CPA_SETTINGS, raise_key_error=False)
 
-    rho_idx = cpx_indices["rho"]
-    loss_idx = cpx_indices["loss"]
-    alpha_idx = cpx_indices["alpha"]
+    indices = mip.indices
+    rho_idx = indices["rho"]
+    loss_idx = indices["loss"]
+    alpha_idx = indices["alpha"]
     cut_idx = loss_idx + rho_idx
-    objval_idx = cpx_indices["objval"]
-    L0_idx = cpx_indices["L0_norm"]
+    objval_idx = indices["objval"]
+    L0_idx = indices["L0_norm"]
 
-    P = len(cpx_indices["rho"])
-    C_0_alpha = np.array(cpx_indices['C_0_alpha'])
+    P = len(indices["rho"])
+    C_0_alpha = np.array(indices['C_0_alpha'])
     C_0_nnz = C_0_alpha[np.flatnonzero(C_0_alpha)]
 
     if isinstance(loss_idx, list) and len(loss_idx) == 1:
@@ -63,7 +62,7 @@ def run_standard_cpa(mip,
         update_bounds = lambda bounds, lb, ub: bounds
 
     objval = 0.0
-    upperbound = float('inf')
+    upperbound = 1e20  # CPLEX infinity, the value this loop has always started from
     lowerbound = 0.0
     n_iterations = 0
     n_simplex_iterations = 0

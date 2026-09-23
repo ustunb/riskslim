@@ -40,7 +40,7 @@ def test_run_standard_cpa(generated_normal_data, cpa_type, maxes):
     }
 
     mip = CplexRiskSLIMMIP()
-    indices = mip.build(coef_set, mip_settings)
+    mip.build(coef_set, mip_settings)
 
     compute_loss_cut = lambda rho: log_loss_value_and_slope(Z, rho)
 
@@ -53,7 +53,6 @@ def test_run_standard_cpa(generated_normal_data, cpa_type, maxes):
 
     stats, cuts, pool = run_standard_cpa(
         mip,
-        indices,
         log_loss_value,
         compute_loss_cut,
         settings=settings,

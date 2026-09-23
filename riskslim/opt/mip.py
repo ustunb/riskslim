@@ -112,7 +112,7 @@ def build_mip_indices(
         "alpha": [position[n] for n in alpha_names],
         "L0_reg_ind": L0_reg_ind,
         "C_0_rho": C_0_rho,
-        "C_0_alpha": list(C_0_alpha) if len(alpha_names) > 0 else [],
+        "C_0_alpha": list(C_0_alpha),
     }
 
     if include_objval:
@@ -177,18 +177,15 @@ def convert_to_risk_slim_solution(
     L0_penalty = np.sum(indices["C_0_alpha"] * alpha)
 
     # add loss / objval
-    need_loss = "loss" in indices
     need_objective_val = "objval" in indices
     need_L0_norm = "L0_norm" in indices
-    need_sigma = "sigma_names" in indices
 
-    if (need_loss or need_objective_val) and loss is None and objval is None:
+    if loss is None and objval is None:
         raise ValueError("convert_to_risk_slim_solution needs loss or objval")
 
-    if need_loss:
-        if loss is None:
-            loss = objval - L0_penalty
-        solution_val[indices["loss"]] = loss
+    if loss is None:
+        loss = objval - L0_penalty
+    solution_val[indices["loss"]] = loss
 
     if need_objective_val:
         if objval is None:
@@ -197,12 +194,6 @@ def convert_to_risk_slim_solution(
 
     if need_L0_norm:
         solution_val[indices["L0_norm"]] = np.sum(alpha)
-
-    if need_sigma:
-        rho_for_sigma = np.array(
-            [indices["rho"][int(s.strip("sigma_"))] for s in indices["sigma_names"]]
-        )
-        solution_val[indices["sigma"]] = np.abs(solution_val[rho_for_sigma])
 
     return solution_val.tolist(), objval
 
@@ -465,7 +456,7 @@ class RiskSLIMMIP(ABC):
     def is_optimal(self) -> bool:
         """Return True if the last solve ended optimal (within tolerance).
 
-        CPLEX: status name in ``("optimal", "optimal_tolerance", "MIP_optimal")``.
+        CPLEX: status name in ``riskslim.opt.cpx.solver.OPTIMAL_STATUS_NAMES``.
         SCIP: ``getStatus() == "optimal"``.
         """
 
