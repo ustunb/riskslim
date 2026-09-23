@@ -26,7 +26,7 @@ Conventions
 import html
 import json
 import math
-from functools import cache
+from functools import cache, cached_property
 from importlib.resources import files
 from itertools import cycle
 from pathlib import Path
@@ -42,7 +42,8 @@ from ..loss_functions.log_loss import log_loss_value_from_scores
 from ..utils import is_integer
 
 SCHEMA_VERSION = 1
-MODEL_TYPES = ("risk_score", "checklist")
+MAX_TOTALS = 10_000  # score totals to enumerate before falling back to observed scores
+MODEL_TYPES = {"risk_score": "Risk score", "checklist": "Checklist"}
 
 ASSETS = files(__package__) / "assets"
 # Inlined in this order: each component file defines its component globally, and mount_report.js
@@ -98,43 +99,43 @@ class ModelReport:
         self.rho = np.asarray(rho, dtype=float).ravel()
         self.variable_names = list(variable_names)
         self.outcome_name = str(outcome_name)
-        self.samples = samples
         self.training = training
         self.constraints = dict(constraints or {})
+        if model_type is not None and model_type not in MODEL_TYPES:
+            raise ValueError(f"model_type must be one of {tuple(MODEL_TYPES)}; got {model_type!r}")
+        self.check_inputs()
         self.model_type = infer_model_type(self.rho[1:]) if model_type is None else model_type
-        assert self.__check_rep__()
 
-        self.samples = {name: (np.asarray(X, dtype=float), (np.asarray(y).ravel() == 1).astype(int))
-                        for name, (X, y) in ordered_samples(self.samples)}
-        self.intercept, self.points = float(self.rho[0]), self.rho[1:]
+        # samples stay local: the page needs only what they produce, and holding them would pin
+        # a float64 copy of every X for the report's lifetime
+        samples = checked_samples(samples, len(self.variable_names) - 1)
+        intercept, points = float(self.rho[0]), self.rho[1:]
 
-        scores = {name: X @ self.points for name, (X, _) in self.samples.items()}
-        model = model_section(self.points, self.intercept, self.variable_names[1:],
-                              self.outcome_name, self.model_type, self.samples["train"][0], scores)
-        roc = {name: roc_section(y, scores[name]) for name, (_, y) in self.samples.items()}
-        calibration = {name: calibration_section(y, scores[name], self.intercept)
-                       for name, (_, y) in self.samples.items()}
-        log_loss = {
-            name: float(log_loss_value_from_scores((2 * y - 1) * (scores[name] + self.intercept)))
-            for name, (_, y) in self.samples.items()
-        }
-        kind = "Checklist" if self.model_type == "checklist" else "Risk score"
+        scores = {name: X @ points for name, (X, _) in samples.items()}
+        model = model_section(points, intercept, self.variable_names[1:], self.outcome_name,
+                              self.model_type, samples["train"][0], scores)
+        roc = {name: roc_section(y, scores[name]) for name, (_, y) in samples.items()}
+        calibration = {name: calibration_section(y, scores[name], intercept)
+                       for name, (_, y) in samples.items()}
+        log_loss = {name: float(log_loss_value_from_scores((2 * y - 1) * (scores[name] + intercept)))
+                    for name, (_, y) in samples.items()}
+        names = list(samples)
         self.data = {
             "schema_version": SCHEMA_VERSION,
-            "title": f"{kind}: {self.outcome_name}",
+            "title": f"{MODEL_TYPES[self.model_type]}: {self.outcome_name}",
             "outcome_name": self.outcome_name,
-            "samples": list(self.samples),
+            "samples": names,
             "model": model,
-            "summary": summary_section(self.samples, model, roc, calibration, log_loss,
-                                       self.training, self.constraints),
+            "summary": summary_section(samples, model, roc, calibration, log_loss, self.training,
+                                       self.constraints),
             "roc": roc,
             "calibration": calibration,
         }
-        self.data["figures"] = {"roc": roc_figure(self.data),
-                                "calibration": calibration_figure(self.data)}
+        self.data["figures"] = {"roc": roc_figure(names, roc),
+                                "calibration": calibration_figure(names, calibration)}
 
-    def __check_rep__(self):
-        """Check the inputs the report data is computed from; raise on the first problem."""
+    def check_inputs(self):
+        """Check the coefficients and their names; raise on the first problem."""
         rho, names = self.rho, self.variable_names
         if len(names) != len(rho) or not names or names[0] != INTERCEPT_NAME:
             raise ValueError(
@@ -144,37 +145,9 @@ class ModelReport:
         if not np.all(np.isfinite(rho)):
             raise ValueError(f"rho must be finite; got {rho.tolist()}")
 
-        samples = self.samples
-        if not isinstance(samples, dict) or "train" not in samples:
-            keys = sorted(samples) if isinstance(samples, dict) else type(samples).__name__
-            raise ValueError(f"samples must be a dict with a 'train' entry, "
-                             f"e.g. {{'train': (X, y)}}; got {keys}")
-        n_features = len(names) - 1
-        for name, (X, y) in ordered_samples(samples):
-            X = np.asarray(X, dtype=float)
-            y = np.asarray(y).ravel()
-            if X.ndim != 2 or X.shape[1] != n_features:
-                raise ValueError(
-                    f"sample {name!r}: X has shape {X.shape} but variable_names lists {n_features} "
-                    f"features (excluding {INTERCEPT_NAME!r}); pass X without the intercept column"
-                )
-            if len(y) != X.shape[0]:
-                raise ValueError(f"sample {name!r}: X has {X.shape[0]} rows but y has {len(y)}")
-            labels = set(np.unique(y).tolist())
-            if not (labels <= {0, 1} or labels <= {-1, 1}):
-                raise ValueError(f"sample {name!r}: y must be in {{0, 1}} or {{-1, 1}}; "
-                                 f"got values {sorted(labels)}")
-            if len(labels) < 2:
-                raise ValueError(f"sample {name!r} has a single class ({sorted(labels)}); ROC and "
-                                 f"calibration need both classes in every sample")
-
-        if self.model_type not in MODEL_TYPES:
-            raise ValueError(f"model_type must be one of {MODEL_TYPES}; got {self.model_type!r}")
-        return True
-
-    @property
+    @cached_property
     def html(self):
-        """The report page as a string."""
+        """The report page as a string, rendered once."""
         shell, styles, scripts = load_assets()
         return shell.render(title=self.data["title"], styles=styles, scripts=scripts,
                             data=Markup(json_for_script(self.data)))
@@ -202,15 +175,38 @@ def infer_model_type(points):
     return "risk_score"
 
 
-def ordered_samples(samples):
-    """``(name, (X, y))`` pairs with ``train`` first."""
-    return [(name, samples[name]) for name in ["train", *[k for k in samples if k != "train"]]]
+def checked_samples(samples, n_features):
+    """Validate and normalize: ``{name: (X float 2d, y in {0, 1})}``, ``train`` first."""
+    if not isinstance(samples, dict) or "train" not in samples:
+        keys = sorted(samples) if isinstance(samples, dict) else type(samples).__name__
+        raise ValueError(f"samples must be a dict with a 'train' entry, "
+                         f"e.g. {{'train': (X, y)}}; got {keys}")
+    checked = {}
+    for name in ["train", *[k for k in samples if k != "train"]]:
+        X, y = samples[name]
+        X = np.asarray(X, dtype=float)
+        y = np.asarray(y).ravel()
+        if X.ndim != 2 or X.shape[1] != n_features:
+            raise ValueError(
+                f"sample {name!r}: X has shape {X.shape} but variable_names lists {n_features} "
+                f"features (excluding {INTERCEPT_NAME!r}); pass X without the intercept column"
+            )
+        if len(y) != X.shape[0]:
+            raise ValueError(f"sample {name!r}: X has {X.shape[0]} rows but y has {len(y)}")
+        labels = set(np.unique(y).tolist())
+        if not (labels <= {0, 1} or labels <= {-1, 1}):
+            raise ValueError(f"sample {name!r}: y must be in {{0, 1}} or {{-1, 1}}; "
+                             f"got values {sorted(labels)}")
+        if len(labels) < 2:
+            raise ValueError(f"sample {name!r} has a single class ({sorted(labels)}); ROC and "
+                             f"calibration need both classes in every sample")
+        checked[name] = (X, (y == 1).astype(int))
+    return checked
 
 
 def model_section(points, intercept, names, outcome_name, model_type, X_train, scores):
     """Items, score range, score-to-risk row and (for checklists) M and the rule."""
     items = []
-    lo, hi = 0.0, 0.0
     value_sets = []
     for j in np.flatnonzero(points):
         values = np.unique(X_train[:, j])
@@ -219,14 +215,14 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, s
         if binary:
             vmin, vmax, values = 0.0, 1.0, np.array([0.0, 1.0])
         p = float(points[j])
-        lo += min(p * vmin, p * vmax)
-        hi += max(p * vmin, p * vmax)
         value_sets.append(p * values)
         items.append({"name": str(names[j]), "points": number(p), "binary": binary,
                       "value_range": [number(vmin), number(vmax)]})
     # order items as print_model does: most positive points first
     items.sort(key=lambda item: -item["points"])
 
+    lo = sum(float(v.min()) for v in value_sets)
+    hi = sum(float(v.max()) for v in value_sets)
     totals = achievable_totals(value_sets)
     if totals is None:
         totals = np.unique(np.concatenate(list(scores.values())))
@@ -260,15 +256,13 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, s
     return model
 
 
-def achievable_totals(value_sets, max_totals=10_000):
+def achievable_totals(value_sets):
     """Every sum of one value per set, when all values are integers; else None."""
     totals = {0}
     for values in value_sets:
-        if not is_integer(values) or len(totals) * len(values) > max_totals:
+        if not is_integer(values) or len(totals) * len(values) > MAX_TOTALS:
             return None
         totals = {t + int(v) for t in totals for v in values}
-        if len(totals) > max_totals:
-            return None
     return sorted(totals)
 
 
@@ -351,12 +345,17 @@ def fmt(value, template):
 # Plotly figures: plain JSON dicts the browser hands to ``Plotly.newPlot``.
 # ---------------------------------------------------------------------------
 
-def roc_figure(data):
+def sample_colors(names):
+    """One palette colour per sample, in order."""
+    return [color for _, color in zip(names, cycle(STYLE["samples"]))]
+
+
+def roc_figure(names, sections):
     """One ROC curve per sample with a point at each score threshold; AUC box top-left."""
-    colors = [color for _, color in zip(data["samples"], cycle(STYLE["samples"]))]
+    colors = sample_colors(names)
     traces = []
-    for name, color in zip(data["samples"], colors):
-        roc = data["roc"][name]
+    for name, color in zip(names, colors):
+        roc = sections[name]
         labels = ["none" if t is None else f"score ≥ {t}" for t in roc["thresholds"]]
         traces.append({
             "type": "scatter", "mode": "lines+markers", "name": name,
@@ -365,19 +364,19 @@ def roc_figure(data):
             "hovertemplate": "%{customdata}<br>FPR %{x:.1%} · TPR %{y:.1%}"
                              f"<extra>{name}</extra>",
         })
-    metrics = [(name, f"{data['roc'][name]['auc']:.3f}") for name in data["samples"]]
+    metrics = [(name, f"{sections[name]['auc']:.3f}") for name in names]
     layout = figure_layout("False positive rate", "True positive rate", "AUC", metrics, colors)
     return {"data": traces, "layout": layout}
 
 
-def calibration_figure(data):
+def calibration_figure(names, sections):
     """Bubbles per score, sized by n and labelled with the score; CAL box top-left."""
-    n_max = max(n for name in data["samples"] for n in data["calibration"][name]["n"])
+    n_max = max(n for name in names for n in sections[name]["n"])
     d_min, d_max = STYLE["bubble_px"]
-    colors = [color for _, color in zip(data["samples"], cycle(STYLE["samples"]))]
+    colors = sample_colors(names)
     traces = []
-    for name, color in zip(data["samples"], colors):
-        cal = data["calibration"][name]
+    for name, color in zip(names, colors):
+        cal = sections[name]
         traces.append({
             "type": "scatter", "mode": "markers+text", "name": name,
             "x": cal["predicted"], "y": cal["observed"],
@@ -392,13 +391,13 @@ def calibration_figure(data):
                              "observed risk %{y:.1%}<br>n = %{customdata[0]:,}"
                              f"<extra>{name}</extra>",
         })
-    metrics = [(name, f"{data['calibration'][name]['error']:.1%}") for name in data["samples"]]
+    metrics = [(name, f"{sections[name]['error']:.1%}") for name in names]
     layout = figure_layout("Predicted risk", "Observed risk", "CAL", metrics, colors,
                            axis_overrides={"range": [-0.03, 1.03], "tickformat": ".0%"})
     return {"data": traces, "layout": layout}
 
 
-def figure_layout(x_title, y_title, metric, metrics, colors, axis_overrides=None):
+def figure_layout(x_title, y_title, box_label, metrics, colors, axis_overrides=None):
     """Shared axes, fonts, diagonal and the top-left metrics box."""
     axis = {
         "showgrid": True, "gridcolor": STYLE["grid"], "zeroline": False, "showline": True,
@@ -408,7 +407,7 @@ def figure_layout(x_title, y_title, metric, metrics, colors, axis_overrides=None
         "range": [-0.02, 1.02], "dtick": 0.2,
         **(axis_overrides or {}),
     }
-    lines = [f"<b>{metric}</b>"] + [
+    lines = [f"<b>{box_label}</b>"] + [
         f'<span style="color:{color}">{name}</span> {value}'
         for (name, value), color in zip(metrics, colors)
     ]

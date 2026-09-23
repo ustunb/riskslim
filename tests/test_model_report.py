@@ -163,7 +163,7 @@ def test_roc_has_a_point_per_score_threshold_from_origin_to_corner():
 
 
 def test_summary_has_four_blocks_of_formatted_values():
-    data = build(RISK_SCORE_RHO, training=TRAINING, constraints=CONSTRAINTS)
+    data = make_report(RISK_SCORE_RHO).data
 
     assert data["samples"] == ["train", "test"]
     assert {block["key"]: block["rows"] for block in data["summary"]} == {
@@ -178,7 +178,7 @@ def test_summary_has_four_blocks_of_formatted_values():
 
 @pytest.mark.parametrize("rho", [RISK_SCORE_RHO, CHECKLIST_RHO], ids=["risk-score", "checklist"])
 def test_data_is_strict_json(rho):
-    data = build(rho, training=TRAINING, constraints=CONSTRAINTS)
+    data = make_report(rho).data
 
     assert json.loads(json.dumps(data, allow_nan=False)) == data
     assert data["schema_version"] == 1
@@ -202,7 +202,7 @@ def test_data_is_strict_json(rho):
                  "'test' has a single class", id="single-class"),
 ])
 def test_invalid_inputs_are_rejected(invalid, match):
-    with pytest.raises(Exception, match=match):
+    with pytest.raises(ValueError, match=match):
         ModelReport(**{**VALID_CALL, **invalid})
 
 
@@ -228,9 +228,8 @@ def test_save_and_notebook_display_carry_the_same_html(report, tmp_path):
 
 
 @pytest.mark.parametrize("key, coordinates, metrics_text", [
-    ("roc", ("fpr", "tpr"), ["AUC", "train</span> 0.844", "test</span> 1.000"]),
-    ("calibration", ("predicted", "observed"), ["CAL", "train</span> 32.7%",
-                                                "test</span> 23.4%"]),
+    ("roc", ("fpr", "tpr"), ["AUC", "train", "0.844", "test", "1.000"]),
+    ("calibration", ("predicted", "observed"), ["CAL", "train", "32.7%", "test", "23.4%"]),
 ])
 def test_figure_plots_each_sample_section_with_a_top_left_metrics_box(report, key, coordinates,
                                                                      metrics_text):
@@ -245,7 +244,7 @@ def test_figure_plots_each_sample_section_with_a_top_left_metrics_box(report, ke
     (box,) = figure["layout"]["annotations"]
     assert (box["xref"], box["yref"], box["xanchor"], box["yanchor"]) == (
         "paper", "paper", "left", "top")
-    assert box["x"] <= 0.05 and box["y"] >= 0.95
+    assert box["x"] <= 0.05 and box["y"] >= 0.95  # top-left corner of the plot area
     assert all(text in box["text"] for text in metrics_text), box["text"]
 
 
