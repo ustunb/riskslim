@@ -623,6 +623,7 @@ dependencies = [
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "packaging" },
     { name = "pandas" },
+    { name = "plotly" },
     { name = "prettytable" },
     { name = "scikit-learn" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -634,7 +635,6 @@ browser = [
     { name = "playwright" },
 ]
 dev = [
-    { name = "plotly" },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -648,6 +648,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.2" },
     { name = "packaging" },
     { name = "pandas" },
+    { name = "plotly", specifier = ">=6" },
     { name = "prettytable" },
     { name = "scikit-learn", specifier = ">=1.6" },
     { name = "scipy" },
@@ -656,7 +657,6 @@ requires-dist = [
 [package.metadata.requires-dev]
 browser = [{ name = "playwright" }]
 dev = [
-    { name = "plotly" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "ruff", specifier = ">=0.6" },
 ]

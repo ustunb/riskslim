@@ -25,7 +25,9 @@ labels outside {0, 1} / {-1, 1}, and a sample with a single class.
 n/a: non-binary features for the checklist -- the score range rule is shared with the risk score.
 
 Checks that need no browser: `plotly.graph_objects.Figure(fig)` rejects misspelled or invalid
-properties. The browser test is opt-in (`pytest -m browser`): each model type's page is built and
+properties, and one test asserts the Plotly template's colours are the ones styles.css writes as
+`--rs-*` tokens (the page and the plots hold the palette in their own idiom, so the test is what
+keeps them from drifting). The browser test is opt-in (`pytest -m browser`): each model type's page is built and
 saved once, then opened in headless Chromium at 1280 px and 375 px, requiring no console or page
 errors, 2 rendered Plotly charts and one model row per item; screenshots and the HTML go to a
 tmp_path or --report-dir=DIR
@@ -40,6 +42,7 @@ from pathlib import Path
 
 import numpy as np
 import plotly.graph_objects as go
+import plotly.io as pio
 import pytest
 from utils import (
     CHECKLIST_RHO,
@@ -55,7 +58,7 @@ from utils import (
 )
 
 from riskslim.report import ModelReport
-from riskslim.report.model_report import ASSETS
+from riskslim.report.model_report import ASSETS, TEMPLATE_NAME
 
 VALID_CALL = {"rho": RISK_SCORE_RHO, "variable_names": NAMES, "outcome_name": "y",
               "samples": SAMPLES}
@@ -68,15 +71,6 @@ CDN_URLS = [
 ]
 DATA_BLOCK = re.compile(r'<script type="application/json" id="report-data">(.*?)</script>', re.S)
 HOSTILE_NAMES = ["(Intercept)", "a</script><script>alert(1)</script>", "b<!-- c", "c"]
-
-
-def with_tokens_resolved(figure):
-    """The figure as the browser resolves it, from the page's own ``:root`` tokens."""
-    tokens = dict(re.findall(r"(--[\w-]+):\s*([^;]+);", (ASSETS / "styles.css").read_text()))
-    # a token value can hold quotes (the font stack), so escape it as JSON before substituting
-    return json.loads(re.sub(r"var\((--[\w-]+)\)",
-                             lambda m: json.dumps(tokens[m.group(1)].strip())[1:-1],
-                             json.dumps(figure)))
 
 
 def make_report(rho, names=NAMES, samples=None, training=TRAINING, constraints=CONSTRAINTS,
@@ -242,7 +236,7 @@ def test_figure_plots_each_sample_section_with_a_top_left_metrics_box(report, ke
     figure = report.data["figures"][key]
     x_field, y_field = coordinates
 
-    go.Figure(with_tokens_resolved(figure))  # raises on invalid Plotly properties
+    go.Figure(figure)  # raises on invalid Plotly properties
     assert [trace["name"] for trace in figure["data"]] == ["train", "test"]
     for trace, name in zip(figure["data"], ["train", "test"]):
         assert trace["x"] == report.data[key][name][x_field]
@@ -272,6 +266,22 @@ def test_roc_points_carry_score_thresholds(report):
 
     assert train["customdata"] == ["none", "score ≥ 3", "score ≥ 2", "score ≥ 1",
                                    "score ≥ 0", "score ≥ -1"]
+
+
+def test_plot_template_holds_the_same_palette_as_the_stylesheet(report):
+    tokens = {name: value.strip() for name, value in
+              re.findall(r"(--[\w-]+):\s*([^;]+);", (ASSETS / "styles.css").read_text())}
+    layout = pio.templates[TEMPLATE_NAME].layout
+    (box,) = report.data["figures"]["roc"]["layout"]["annotations"]
+
+    assert layout.font.family == tokens["--pico-font-family"]
+    assert layout.paper_bgcolor == layout.plot_bgcolor == tokens["--rs-bg"]
+    assert layout.font.color == layout.xaxis.linecolor == layout.yaxis.linecolor == \
+        layout.xaxis.title.font.color == layout.yaxis.title.font.color == tokens["--rs-ink"]
+    assert layout.xaxis.gridcolor == layout.yaxis.gridcolor == tokens["--rs-grid"]
+    assert layout.xaxis.tickfont.color == layout.yaxis.tickfont.color == tokens["--rs-muted"]
+    assert list(layout.colorway) == [tokens[f"--rs-sample-{i}"] for i in (1, 2, 3)]
+    assert (box["bgcolor"], box["bordercolor"]) == (tokens["--rs-stripe"], tokens["--rs-grid"])
 
 
 @pytest.fixture(scope="module")

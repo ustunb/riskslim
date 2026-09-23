@@ -2,32 +2,11 @@
 // is the component's in-DOM template. Python computes everything; this file only hands the JSON
 // data block to the components.
 
-// Both plot components draw their figure the same way; only the figure differs.
-// Python names the page's CSS custom properties -- "var(--rs-ink)" -- and they are resolved
-// against :root here, so styles.css stays the one place a value is written.
-const cssValues = new Map();
-
-function resolveStyleTokens(value) {
-  if (typeof value === "string") {
-    if (!value.includes("var(")) return value;  // data arrays and labels carry no tokens
-    return value.replace(/var\((--[\w-]+)\)/g, (_, token) => {
-      if (!cssValues.has(token)) {
-        cssValues.set(token, getComputedStyle(document.documentElement)
-          .getPropertyValue(token).trim());
-      }
-      return cssValues.get(token);
-    });
-  }
-  if (Array.isArray(value)) return value.map(resolveStyleTokens);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, resolveStyleTokens(item)]));
-  }
-  return value;
-}
-
+// Both plot components draw their figure the same way; only the figure differs. Python builds
+// the whole figure, styling included (its Plotly template travels in the spec), so this only
+// hands it to Plotly -- on a copy, because Plotly writes into the objects it is given.
 function drawFigure(element, figure) {
-  const spec = resolveStyleTokens(figure);  // returns fresh containers; Plotly may write into it
+  const spec = structuredClone(figure);
   Plotly.newPlot(element, spec.data, spec.layout,
     { displayModeBar: false, responsive: true, scrollZoom: false });
 }

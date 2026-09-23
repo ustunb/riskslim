@@ -32,6 +32,8 @@ from itertools import cycle
 from pathlib import Path
 
 import numpy as np
+import plotly.graph_objects as go
+import plotly.io as pio
 from jinja2 import Environment
 from markupsafe import Markup
 from scipy.special import expit
@@ -52,12 +54,41 @@ SCRIPTS = ("model_card.js", "summary_table.js", "roc_plot.js", "calibration_plot
            "mount_report.js")
 
 # ---------------------------------------------------------------------------
-# Visuals: the figures name the page's CSS custom properties; the browser resolves
-# them before drawing (see drawFigure in assets/mount_report.js), so assets/styles.css
-# is the only place a colour, the font or the plot height is written.
+# Visuals: the plots are styled with Plotly's own mechanism, the template below, which both
+# figures reference; the page is styled by the --rs-* custom properties in assets/styles.css.
+# The two hold the same palette in their own idiom, and a test asserts they agree.
 # ---------------------------------------------------------------------------
-SAMPLE_COLORS = ["var(--rs-sample-1)", "var(--rs-sample-2)", "var(--rs-sample-3)"]
+TEMPLATE_NAME = "riskslim"
+FONT_FAMILY = '-apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif'
+INK = "#1F2933"
+MUTED = "#98A2AD"
+GRID = "#DFE4E9"
+STRIPE = "#F2F2F2"
+BACKGROUND = "#FFFFFF"
+SAMPLE_COLORS = ["#2F6FB3", "#E07B39", "#10B981"]  # train, test, a third sample
 BUBBLE_PX = (14, 34)  # calibration bubble diameter for the smallest and largest n
+
+AXIS = {
+    "showgrid": True, "gridcolor": GRID, "zeroline": False, "showline": True, "linecolor": INK,
+    "ticks": "outside", "ticklen": 3, "fixedrange": True, "dtick": 0.2,
+    "tickfont": {"size": 11, "color": MUTED},
+    "title": {"font": {"size": 12, "color": INK}},
+}
+
+# Registered, not made the default: importing riskslim must not restyle anyone else's plots.
+pio.templates[TEMPLATE_NAME] = go.layout.Template(layout=go.Layout(
+    autosize=True,
+    font={"family": FONT_FAMILY, "size": 11, "color": INK},
+    paper_bgcolor=BACKGROUND,
+    plot_bgcolor=BACKGROUND,
+    colorway=SAMPLE_COLORS,
+    margin={"t": 36, "r": 12, "b": 48, "l": 56},
+    hovermode="closest",
+    dragmode=False,
+    legend={"orientation": "h", "x": 1, "xanchor": "right", "y": 1.01, "yanchor": "bottom"},
+    xaxis=AXIS,
+    yaxis=AXIS,
+))
 
 
 class ModelReport:
@@ -342,94 +373,79 @@ def fmt(value, template):
 
 
 # ---------------------------------------------------------------------------
-# Plotly figures: plain JSON dicts the browser hands to ``Plotly.newPlot``.
+# Plotly figures: built as ``go.Figure`` objects, so every property is validated here, and
+# serialized to the plain JSON the data block carries to ``Plotly.newPlot``.
 # ---------------------------------------------------------------------------
 
 def sample_colors(names):
-    """One palette colour per sample, in order."""
+    """One palette colour per sample, in order -- the colorway the traces themselves get."""
     return [color for _, color in zip(names, cycle(SAMPLE_COLORS))]
 
 
 def roc_figure(names, sections):
     """One ROC curve per sample with a point at each score threshold; AUC box top-left."""
-    colors = sample_colors(names)
     traces = []
-    for name, color in zip(names, colors):
+    for name in names:
         roc = sections[name]
         labels = ["none" if t is None else f"score ≥ {t}" for t in roc["thresholds"]]
-        traces.append({
-            "type": "scatter", "mode": "lines+markers", "name": name,
-            "x": roc["fpr"], "y": roc["tpr"], "customdata": labels,
-            "line": {"color": color, "width": 2}, "marker": {"color": color, "size": 6},
-            "hovertemplate": "%{customdata}<br>FPR %{x:.1%} · TPR %{y:.1%}"
-                             f"<extra>{name}</extra>",
-        })
+        traces.append(go.Scatter(
+            mode="lines+markers", name=name,
+            x=roc["fpr"], y=roc["tpr"], customdata=labels,
+            line={"width": 2}, marker={"size": 6},
+            hovertemplate="%{customdata}<br>FPR %{x:.1%} · TPR %{y:.1%}"
+                          f"<extra>{name}</extra>",
+        ))
     metrics = [(name, f"{sections[name]['auc']:.3f}") for name in names]
-    layout = figure_layout("False positive rate", "True positive rate", "AUC", metrics, colors)
-    return {"data": traces, "layout": layout}
+    layout = figure_layout("False positive rate", "True positive rate", "AUC", metrics, names)
+    return go.Figure(traces, layout).to_plotly_json()
 
 
 def calibration_figure(names, sections):
     """Bubbles per score, sized by n and labelled with the score; CAL box top-left."""
     n_max = max(n for name in names for n in sections[name]["n"])
     d_min, d_max = BUBBLE_PX
-    colors = sample_colors(names)
     traces = []
-    for name, color in zip(names, colors):
+    for name in names:
         cal = sections[name]
-        traces.append({
-            "type": "scatter", "mode": "markers+text", "name": name,
-            "x": cal["predicted"], "y": cal["observed"],
-            "text": [str(s) for s in cal["scores"]], "customdata": [[n] for n in cal["n"]],
-            "textposition": "middle center",
-            "textfont": {"size": 9, "color": "var(--rs-bg)"},
-            "cliponaxis": False,
-            "marker": {"color": color, "opacity": 0.85, "line": {"color": "var(--rs-bg)", "width": 1},
-                       "size": [round(d_min + (d_max - d_min) * math.sqrt(n / n_max), 2)
-                                for n in cal["n"]]},
-            "hovertemplate": "score %{text}<br>predicted risk %{x:.1%}<br>"
-                             "observed risk %{y:.1%}<br>n = %{customdata[0]:,}"
-                             f"<extra>{name}</extra>",
-        })
+        traces.append(go.Scatter(
+            mode="markers+text", name=name,
+            x=cal["predicted"], y=cal["observed"],
+            text=[str(s) for s in cal["scores"]], customdata=[[n] for n in cal["n"]],
+            textposition="middle center",
+            textfont={"size": 9, "color": BACKGROUND},
+            cliponaxis=False,
+            marker={"opacity": 0.85, "line": {"color": BACKGROUND, "width": 1},
+                    "size": [round(d_min + (d_max - d_min) * math.sqrt(n / n_max), 2)
+                             for n in cal["n"]]},
+            hovertemplate="score %{text}<br>predicted risk %{x:.1%}<br>"
+                          "observed risk %{y:.1%}<br>n = %{customdata[0]:,}"
+                          f"<extra>{name}</extra>",
+        ))
     metrics = [(name, f"{sections[name]['error']:.1%}") for name in names]
-    layout = figure_layout("Predicted risk", "Observed risk", "CAL", metrics, colors,
+    layout = figure_layout("Predicted risk", "Observed risk", "CAL", metrics, names,
                            axis_overrides={"range": [-0.03, 1.03], "tickformat": ".0%"})
-    return {"data": traces, "layout": layout}
+    return go.Figure(traces, layout).to_plotly_json()
 
 
-def figure_layout(x_title, y_title, box_label, metrics, colors, axis_overrides=None):
-    """Shared axes, fonts, diagonal and the top-left metrics box."""
-    axis = {
-        "showgrid": True, "gridcolor": "var(--rs-grid)", "zeroline": False, "showline": True,
-        "linecolor": "var(--rs-ink)", "ticks": "outside", "ticklen": 3, "fixedrange": True,
-        "tickfont": {"size": 11, "color": "var(--rs-muted)"},
-        "title": {"font": {"size": 12, "color": "var(--rs-ink)"}},
-        "range": [-0.02, 1.02], "dtick": 0.2,
-        **(axis_overrides or {}),
-    }
+def figure_layout(x_title, y_title, box_label, metrics, names, axis_overrides=None):
+    """What one figure adds to the template: axis titles and range, diagonal, metrics box."""
+    axis = {"range": [-0.02, 1.02], **(axis_overrides or {})}
     lines = [f"<b>{box_label}</b>"] + [
         f'<span style="color:{color}">{name}</span> {value}'
-        for (name, value), color in zip(metrics, colors)
+        for (name, value), color in zip(metrics, sample_colors(names))
     ]
-    return {
-        "autosize": True,
-        "margin": {"t": 36, "r": 12, "b": 48, "l": 56},
-        "font": {"family": "var(--pico-font-family)", "size": 11, "color": "var(--rs-ink)"},
-        "paper_bgcolor": "var(--rs-bg)", "plot_bgcolor": "var(--rs-bg)",
-        "xaxis": {**axis, "title": {**axis["title"], "text": x_title}},
-        "yaxis": {**axis, "title": {**axis["title"], "text": y_title}},
-        "hovermode": "closest", "dragmode": False,
-        "legend": {"orientation": "h", "x": 1, "xanchor": "right", "y": 1.01,
-                   "yanchor": "bottom"},
-        "shapes": [{"type": "line", "x0": 0, "y0": 0, "x1": 1, "y1": 1, "layer": "below",
-                    "line": {"color": "var(--rs-muted)", "width": 1, "dash": "dash"}}],
-        "annotations": [{
-            "xref": "paper", "yref": "paper", "x": 0.02, "y": 0.98,
-            "xanchor": "left", "yanchor": "top", "align": "left", "showarrow": False,
-            "text": "<br>".join(lines), "bgcolor": "var(--rs-stripe)",
-            "bordercolor": "var(--rs-grid)", "borderpad": 4,
-        }],
-    }
+    return go.Layout(
+        template=TEMPLATE_NAME,
+        xaxis={**axis, "title": {"text": x_title}},
+        yaxis={**axis, "title": {"text": y_title}},
+        shapes=[go.layout.Shape(type="line", x0=0, y0=0, x1=1, y1=1, layer="below",
+                                line={"color": MUTED, "width": 1, "dash": "dash"})],
+        annotations=[go.layout.Annotation(
+            xref="paper", yref="paper", x=0.02, y=0.98,
+            xanchor="left", yanchor="top", align="left", showarrow=False,
+            text="<br>".join(lines), bgcolor=STRIPE, bordercolor=GRID, borderpad=4,
+        )],
+    )
 
 
 # ---------------------------------------------------------------------------

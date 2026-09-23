@@ -1,4 +1,6 @@
-/* riskslim report: palette tokens (nsf-career), 2x2 grid that stacks below 720px, tables. */
+/* riskslim report: palette tokens (nsf-career), 2x2 grid that stacks below 720px, tables.
+   The plots hold the same palette in their own idiom -- the Plotly template in model_report.py;
+   a test asserts the two agree, so the values below and the template's cannot drift apart. */
 :root {
   --rs-ink: #1F2933;
   --rs-muted: #98A2AD;

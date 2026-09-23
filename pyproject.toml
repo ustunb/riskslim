@@ -21,6 +21,7 @@ dependencies = [
   "cplex>=22.1.2.1",
   "packaging",
   "jinja2>=3.1.6",
+  "plotly>=6",
   "imbalanced-learn",
   "dill",
 ]
@@ -40,7 +41,7 @@ Homepage = "https://github.com/ustunb/riskslim"
 Paper = "https://jmlr.org/papers/v20/18-615.html"
 
 [dependency-groups]
-dev = ["pytest>=8.0", "ruff>=0.6", "plotly"]
+dev = ["pytest>=8.0", "ruff>=0.6"]
 browser = ["playwright"]
 
 [tool.setuptools.packages.find]
