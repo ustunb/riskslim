@@ -10,7 +10,7 @@ from riskslim.solution_pool import FastSolutionPool
 from riskslim.utils import Stats, cast_to_integer, is_integer, print_log
 
 
-# --- begin BLM StatsCallback (vendored; do not edit)
+# --- begin vendored StatsCallback (do not edit)
 class StatsCallback(MIPInfoCallback):
 
     def initialize(self, store_solutions = False, solution_start_idx = None, solution_end_idx = None, sense = "minimize"):
@@ -183,7 +183,7 @@ class StatsCallback(MIPInfoCallback):
                            'simplex_iterations']]
 
         return stats, incumbents
-# --- end BLM StatsCallback
+# --- end vendored StatsCallback
 
 
 # --- RiskSLIM callbacks
