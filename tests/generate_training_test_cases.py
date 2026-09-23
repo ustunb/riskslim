@@ -23,7 +23,7 @@ from sklearn.exceptions import ConvergenceWarning
 from sklearn.linear_model import LogisticRegression
 
 from riskslim.coefficient_set import CoefficientSet
-from riskslim.data import ClassificationDataset
+from riskslim.defaults import INTERCEPT_NAME
 
 
 SCHEMA_VERSION = 2
@@ -414,19 +414,18 @@ def regenerate_case_data(record: dict, source: dict | None = None) -> dict:
 
 def determine_coefficient_bounds(data: dict, feature_bounds: tuple[int, int]) -> dict:
     """Derive the intercept domain with the repository's coefficient set."""
-    dataset = ClassificationDataset(
-        data["X"], data["y"], list(data["variable_names"]), data["outcome_name"]
-    )
+    X_with_intercept = np.column_stack([np.ones(data["X"].shape[0]), data["X"]])
+    y_signed = np.where(data["y"] == 0, -1, data["y"])
     coefficient_set = CoefficientSet(
-        dataset.variable_names,
+        [INTERCEPT_NAME] + list(data["variable_names"]),
         lb=feature_bounds[0],
         ub=feature_bounds[1],
         vtype="I",
         print_flag=False,
     )
     coefficient_set.update_intercept_bounds(
-        X=dataset.X,
-        y=dataset.y,
+        X=X_with_intercept,
+        y=y_signed,
         max_offset=None,
         max_L0_value=data["X"].shape[1],
     )

@@ -4,7 +4,6 @@ import pytest
 import numpy as np
 from riskslim.coefficient_set import CoefficientSet, _CoefficientElement
 from riskslim.bounds import get_score_bounds
-from riskslim.data import ClassificationDataset
 
 
 @pytest.mark.parametrize('lb', [-5, [-5]*11])
@@ -44,11 +43,12 @@ def test_coefficientset_update_intercept_bounds(
     X = generated_normal_data['X'][0]
     y = generated_normal_data['y']
     variable_names = generated_normal_data['variable_names']
-    data = ClassificationDataset(X, y, variable_names=variable_names, outcome_name='outcome')
+    X_with_intercept = np.column_stack([np.ones(X.shape[0]), X])
+    y_signed = np.where(y == np.min(y), -1, 1)
 
-    cs = CoefficientSet(data.variable_names)
+    cs = CoefficientSet(['(Intercept)'] + variable_names)
 
-    cs.update_intercept_bounds(data.X, data.y, 1, max_L0_value=max_size)
+    cs.update_intercept_bounds(X_with_intercept, y_signed, 1, max_L0_value=max_size)
 
 
 def test_coefficientset_tabulate():

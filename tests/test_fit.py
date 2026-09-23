@@ -43,7 +43,7 @@ def test_fit_builds_optimizer(generated_normal_data, use_coef_set):
     assert isinstance(rs.optimizer.bounds, Bounds)
     assert isinstance(rs.optimizer.stats, Stats)
 
-    assert rs.optimizer.data.Z.shape == rs.optimizer.data.X.shape
+    assert rs.optimizer.Z.shape == (X.shape[0], X.shape[1] + 1)
 
 
 def test_time_limited_fit_matches_solver_objective():

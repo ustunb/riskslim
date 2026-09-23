@@ -287,7 +287,7 @@ class BinaryClassificationDataset(DillSerializableMixin):
         return len(self._df)
 
     def __repr__(self):
-        return f'ClassificationDataset<n={self.n}, d={self.d}>'
+        return f'BinaryClassificationDataset<n={self.n}, d={self.d}>'
 
     def __copy__(self):
         return BinaryClassificationDataset(

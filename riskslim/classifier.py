@@ -15,7 +15,7 @@ from sklearn.utils.validation import check_is_fitted, validate_data
 
 from .optimizer import RiskSLIMOptimizer
 from .coefficient_set import CoefficientSet
-from .data import ClassificationDataset
+from .data import BinaryClassificationDataset
 from .defaults import DEFAULT_LCPA_SETTINGS, INTERCEPT_NAME, OUTCOME_NAME
 from .report import ModelReport
 from .utils import print_model
@@ -130,9 +130,14 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         """Intercept followed by the coefficients, the order print_model and reports expect."""
         return np.concatenate([[self.intercept_], self.coef_])
 
+    @property
+    def _variable_names(self):
+        """INTERCEPT_NAME followed by the feature names, aligned with ``_rho``."""
+        return [INTERCEPT_NAME] + list(self._data.names.X)
+
     def __repr__(self, N_CHAR_MAX=700):
         if hasattr(self, "coef_"):
-            table = print_model(self._rho, self._data.variable_names, self._data.outcome_name,
+            table = print_model(self._rho, self._variable_names, self._data.names.y,
                                 return_only=True)
             return str(table)
         return super().__repr__(N_CHAR_MAX=N_CHAR_MAX)
@@ -185,13 +190,15 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         if variable_names is None and hasattr(self, "feature_names_in_"):
             variable_names = list(self.feature_names_in_)
         outcome_name = OUTCOME_NAME if self.outcome_name is None else self.outcome_name
-        self._data = ClassificationDataset(X, y_signed, variable_names, outcome_name)
+        names = {} if variable_names is None else {"X_names": list(variable_names)}
+        self._data = BinaryClassificationDataset(X=X, y=y_signed, y_name=outcome_name, n_folds=(), **names)
 
         if self.coef_set is None:
-            self.coef_set_ = CoefficientSet(self._data.variable_names, lb = -self.max_coef, ub = self.max_coef)
+            self.coef_set_ = CoefficientSet(self._variable_names, lb = -self.max_coef, ub = self.max_coef)
         else:
             self.coef_set_ = copy.deepcopy(self.coef_set)
-        self.max_size_ = self._data.d if self.max_size is None else self.max_size
+        # default: every coefficient, the intercept counted (data.d does not count it)
+        self.max_size_ = self._data.d + 1 if self.max_size is None else self.max_size
 
         self.optimizer_ = RiskSLIMOptimizer(
             data = self._data,
@@ -230,8 +237,7 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
             Use ``report.save(path)`` to write an HTML file; notebooks display it inline.
         """
         check_is_fitted(self)
-        X_train = self._data.X[:, 1:]
-        samples = {"train": (X_train, self._data.y)}
+        samples = {"train": (self._data.X, self._data.y)}
         if (X_test is None) != (y_test is None):
             raise ValueError("report() needs both X_test and y_test, or neither")
         if X_test is not None:
@@ -244,8 +250,8 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         variable_lb, variable_ub = self.coef_set_.lb[features], self.coef_set_.ub[features]
         return ModelReport(
             rho = self._rho,
-            variable_names = self._data.variable_names,
-            outcome_name = self._data.outcome_name,
+            variable_names = self._variable_names,
+            outcome_name = self._data.names.y,
             samples = samples,
             training = self.solution_info_,
             constraints = {"max_size": self.max_size_,

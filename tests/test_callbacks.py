@@ -7,8 +7,8 @@ from riskslim.solution_pool import FastSolutionPool
 from riskslim.coefficient_set import CoefficientSet
 from riskslim.heuristics import discrete_descent, sequential_rounding
 from riskslim.opt.cpx.callbacks import LossCallback, PolishAndRoundCallback
-from riskslim.defaults import DEFAULT_LCPA_SETTINGS
-from riskslim.data import ClassificationDataset
+from riskslim.defaults import DEFAULT_LCPA_SETTINGS, INTERCEPT_NAME
+from riskslim.data import BinaryClassificationDataset
 
 @pytest.mark.parametrize('cut_queue', [None, FastSolutionPool(12)])
 @pytest.mark.parametrize('polish_queue', [None, FastSolutionPool(12)])
@@ -18,10 +18,10 @@ def test_losscallback(generated_normal_data, cut_queue, polish_queue):
     X = generated_normal_data['X'][0]
     y = generated_normal_data['y']
     variable_names = generated_normal_data['variable_names']
-    data = ClassificationDataset(X, y, variable_names=variable_names, outcome_name='outcome')
+    data = BinaryClassificationDataset(X=X, y=y, X_names=variable_names, y_name='outcome', n_folds=())
 
     # Create mip
-    coef_set = CoefficientSet(data.variable_names)
+    coef_set = CoefficientSet([INTERCEPT_NAME] + variable_names)
 
     mip_settings =mip_settings = {
         "C_0": 1e-6,
@@ -68,10 +68,10 @@ def test_polish_and_round_callback(generated_normal_data):
     X = generated_normal_data['X'][0]
     y = generated_normal_data['y']
     variable_names = generated_normal_data['variable_names']
-    data = ClassificationDataset(X, y, variable_names=variable_names, outcome_name='outcome')
+    data = BinaryClassificationDataset(X=X, y=y, X_names=variable_names, y_name='outcome', n_folds=())
 
     # Create mip
-    coef_set = CoefficientSet(data.variable_names)
+    coef_set = CoefficientSet([INTERCEPT_NAME] + variable_names)
 
     mip_settings =mip_settings = {
         "C_0": 1e-6,

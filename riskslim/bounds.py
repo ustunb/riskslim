@@ -209,7 +209,7 @@ def chained_updates_for_lp(bounds, C_0_nnz, new_objval_at_feasible = None, new_o
     return new_bounds
 
 
-def compute_loss_bounds(data, coef_set, max_size):
+def compute_loss_bounds(Z, coef_set, max_size):
 
     # min value of loss = log(1+exp(-score)) occurs at max score for each point
     # max value of loss = loss(1+exp(-score)) occurs at min score for each point
@@ -221,8 +221,8 @@ def compute_loss_bounds(data, coef_set, max_size):
     L0_reg_ind = coef_set.penalized_indices()
 
     # calculate the smallest and largest score that can be attained by each point
-    scores_at_lb = data.Z * coef_set.lb
-    scores_at_ub = data.Z * coef_set.ub
+    scores_at_lb = Z * coef_set.lb
+    scores_at_ub = Z * coef_set.ub
     max_scores_matrix = np.maximum(scores_at_ub, scores_at_lb)
     min_scores_matrix = np.minimum(scores_at_ub, scores_at_lb)
     assert np.all(max_scores_matrix >= min_scores_matrix)

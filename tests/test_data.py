@@ -1,33 +1,8 @@
 """Test data objects."""
 
 import numpy as np
-import pandas as pd
-from riskslim.data import ClassificationDataset
 from riskslim.utils import Stats
 from riskslim.bounds import Bounds
-
-
-def test_ClassificationDataset():
-
-    n_obs = 10
-    n_variables = 100
-
-    rng = np.random.default_rng(0)
-    X = rng.random((n_obs, n_variables))
-    y = np.tile([1, -1], n_obs // 2)
-
-    variable_names = ['var_' + str(i) for i in range(n_variables)]
-
-    ds = ClassificationDataset(X, y, variable_names, outcome_name='outcome')
-    assert np.all(ds.X[:, 1:] == X)
-    assert np.all(ds.y == y)
-    assert ds.variable_names[1:] == variable_names
-    assert ds.outcome_name == 'outcome'
-    assert isinstance(ds.df, pd.DataFrame)
-    assert isinstance(ds.__str__(), str)
-    assert isinstance(ds.__repr__(), str)
-
-    ds.__check_rep__()
 
 
 def test_bounds():

@@ -4,7 +4,7 @@ import numpy as np
 
 from riskslim.loss_computation import get_loss_functions
 from riskslim.utils import Stats, validate_settings, print_log
-from riskslim.defaults import DEFAULT_INITIALIZATION_SETTINGS, DEFAULT_LCPA_SETTINGS
+from riskslim.defaults import DEFAULT_INITIALIZATION_SETTINGS, DEFAULT_LCPA_SETTINGS, INTERCEPT_NAME
 from riskslim.opt.mip import load
 from riskslim.solution_pool import SolutionPool, FastSolutionPool
 from riskslim.heuristics import discrete_descent, sequential_rounding
@@ -22,15 +22,20 @@ class RiskSLIMOptimizer:
 
     Attributes
     ----------
-    X : 2d array
-        Observations (rows) and features (columns).
-    y : 1d or 2d array
-        Class labels.
+    data : riskslim.data.BinaryClassificationDataset
+        Training data, without an intercept column.
+    Z : 2d array of shape (n, n_variables)
+        Signed design matrix ``y_i * [1, x_i]``: the intercept column first, then the
+        features, each row multiplied by its label in {-1, +1}. C-contiguous float64.
+    n_variables : int
+        Number of coefficients, the intercept included (``data.d + 1``).
+    variable_names : list of str
+        ``INTERCEPT_NAME`` followed by the feature names, in the order of ``Z``'s columns.
     coef_set : riskslim.coefficient_set.CoefficientSet
         Constraints on coefficients of input variables
-    bounds : riskslim.data.Bounds
+    bounds : riskslim.bounds.Bounds
         Lower and upper bounds on objective value, loss, and model size.
-    stats : riskslim.data.Stats
+    stats : riskslim.utils.Stats
         Cplex solution statistics.
     mip : riskslim.opt.mip.RiskSLIMMIP
         RiskSLIM MIP on the chosen solver.
@@ -50,6 +55,13 @@ class RiskSLIMOptimizer:
         """
         Parameters
         ----------
+        data : riskslim.data.BinaryClassificationDataset
+            Training data, without an intercept column; the negative class is ``data.classes[0]``.
+        coef_set : riskslim.coefficient_set.CoefficientSet
+            Constraints on the coefficients, the intercept included, in the order of
+            ``variable_names``.
+        max_size : int
+            Maximum number of nonzero penalized coefficients.
         c0_value : 1d array or float, optional, default: 1e-6
             L0-penalty for all parameters when an integer or for each parameter
             separately when an array.
@@ -92,12 +104,18 @@ class RiskSLIMOptimizer:
         assert np.greater(c0_value, 0.0), "c0_value should be positive"
         self.c0_value = c0_value
 
+        # design matrix: the intercept is rho[0], so a ones column goes first; data.d does not count it
+        X_with_intercept = np.column_stack([np.ones(data.n), data.X])
+        y_signed = np.where(data.y == data.classes[0], -1, 1)
+        self.n_variables = data.d + 1
+        self.variable_names = [INTERCEPT_NAME] + list(data.names.X)
+        self.Z = np.ascontiguousarray(X_with_intercept * y_signed[:, None], dtype=np.float64)
+
         # bounds
-        self.n_variables = data.d
         self.min_size = 0
 
         # coefficient bounds
-        self.coef_set.update_intercept_bounds(X = self.data.X, y = self.data.y, max_offset = max_abs_offset)
+        self.coef_set.update_intercept_bounds(X = X_with_intercept, y = y_signed, max_offset = max_abs_offset)
         self.min_coef = self.coef_set.lb
         self.max_coef = self.coef_set.ub
 
@@ -132,7 +150,7 @@ class RiskSLIMOptimizer:
         self.C_0_nnz = self.C_0[self.L0_reg_ind]
 
         # loss functions
-        handles = get_loss_functions(data, coef_set, loss_computation = settings["loss_computation"], max_size = self.max_size)
+        handles = get_loss_functions(self.Z, coef_set, loss_computation = settings["loss_computation"], max_size = self.max_size)
         for name, handle in handles.items():
             self.__setattr__(f"compute_{name}", handle)
 
@@ -145,7 +163,7 @@ class RiskSLIMOptimizer:
 
         # set up bounds
         bounds = Bounds(min_size = self.min_size, max_size=self.max_size)
-        bounds.loss_min, bounds.loss_max = compute_loss_bounds(self.data, self.coef_set, self.max_size)
+        bounds.loss_min, bounds.loss_max = compute_loss_bounds(self.Z, self.coef_set, self.max_size)
 
         # solution pool
         pool = SolutionPool(self.n_variables)
@@ -197,7 +215,7 @@ class RiskSLIMOptimizer:
             active_set_flag = self.max_size <= self.n_variables
             polisher = lambda rho: discrete_descent(
                     rho,
-                    self.data.Z,
+                    self.Z,
                     self.C_0,
                     self.coef_set.ub,
                     self.coef_set.lb,
@@ -208,7 +226,7 @@ class RiskSLIMOptimizer:
 
             rounder = lambda rho, cutoff: sequential_rounding(
                     rho,
-                    self.data.Z,
+                    self.Z,
                     self.C_0,
                     self.compute_loss_from_scores_real,
                     self.get_L0_penalty,
@@ -329,7 +347,7 @@ class RiskSLIMOptimizer:
             self.log("best objective value: {:04f}".format(np.min(pool.objvals)))
             sqrnd_pool, _, _ = sequential_round_solution_pool(
                     pool=pool,
-                    Z=self.data.Z,
+                    Z=self.Z,
                     C_0=self.C_0,
                     compute_loss_from_scores_real=self.compute_loss_from_scores_real,
                     get_L0_penalty=self.get_L0_penalty,
@@ -351,7 +369,7 @@ class RiskSLIMOptimizer:
             self.log("best objective value: %1.4f" % np.min(pool.objvals))
             dcd_pool, _, _ = discrete_descent_solution_pool(
                     pool=pool,
-                    Z=self.data.Z,
+                    Z=self.Z,
                     C_0=self.C_0,
                     constraints=constraints,
                     compute_loss_from_scores=self.compute_loss_from_scores,
@@ -423,7 +441,7 @@ class RiskSLIMOptimizer:
             raise ValueError("var_name and values must be the same length.")
 
         # Anon funcs to get name and index set in mip object (e.g. rho_i, alpha_i)
-        get_name = lambda var_name: var_type + '_' + str(self._data.variable_names.index(var_name))
+        get_name = lambda var_name: var_type + '_' + str(self.variable_names.index(var_name))
         get_ind = lambda var_names: [get_name(v) for v in var_names]
 
         # Add constraint to a queue - it is added to the mip solver add fit time
