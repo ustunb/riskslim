@@ -6,14 +6,7 @@ window.ModelCard = {
   setup(props) {
     const model = props.data.model;
     const isChecklist = model.type === "checklist";
-    const pointsLabel = (item) => {
-      if (isChecklist) return item.points > 0 ? "+" : "−";
-      if (!item.binary) return `${item.points} × value`;
-      return `${item.points} ${Math.abs(item.points) === 1 ? "point" : "points"}`;
-    };
-    const itemName = (item) => item.binary ? item.name
-      : `${item.name} (${item.value_range[0]}–${item.value_range[1]})`;
-    // the strip is one wrapping grid at every width -- styles.css decides how many cells fit
-    return { model, isChecklist, pointsLabel, itemName };
+    // Python writes every label, including each item's name and points cell
+    return { model, isChecklist };
   },
 };

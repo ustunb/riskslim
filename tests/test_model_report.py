@@ -149,7 +149,8 @@ def test_non_binary_feature_score_range_spans_points_times_value_range(fitted_wi
     model = make_report(fitted_wide, RISK_SCORE_WEIGHTS, test=(None, None)).data["model"]
 
     assert model["items"][0] == {"name": "a", "points": 2, "binary": False,
-                                 "value_range": [1, 8]}
+                                 "value_range": [1, 8], "name_label": "a (1–8)",
+                                 "points_label": "2 × value"}
     assert model["score_range"] == [1, 17]
 
 

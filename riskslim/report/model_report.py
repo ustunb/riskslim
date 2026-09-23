@@ -359,6 +359,13 @@ def display_name(name):
     return f"{feature} {OPERATOR_SYMBOLS[operator]} {value}"
 
 
+def point_label(points, binary, model_type):
+    """The item's cell under the Points header: a checklist marks +/-, a risk score counts."""
+    if model_type == "checklist":
+        return "+" if points > 0 else "−"
+    return str(points) if binary else f"{points} × value"
+
+
 def model_section(points, intercept, names, outcome_name, model_type, X_train, scores):
     """Items, score range, score-to-risk strip and (for checklists) M and the rule.
 
@@ -377,7 +384,10 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, s
         p = float(points[j])
         value_sets.append(p * values)
         items.append({"name": display_name(str(names[j])), "points": number(p), "binary": binary,
-                      "value_range": [number(vmin), number(vmax)]})
+                      "value_range": [number(vmin), number(vmax)],
+                      "name_label": display_name(str(names[j])) if binary else
+                      f"{display_name(str(names[j]))} ({number(vmin)}–{number(vmax)})",
+                      "points_label": point_label(number(p), binary, model_type)})
     # order items as print_model does: most positive points first
     items.sort(key=lambda item: -item["points"])
 

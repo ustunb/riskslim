@@ -37,8 +37,8 @@
     <tbody>
       <tr v-for="item in model.items" class="rs-item-row">
         <td v-if="isChecklist" class="rs-box" aria-hidden="true">☐</td>
-        <td class="rs-name">{{ itemName(item) }}</td>
-        <td v-if="model.points_header" class="rs-points">{{ pointsLabel(item) }}</td>
+        <td class="rs-name">{{ item.name_label }}</td>
+        <td v-if="model.points_header" class="rs-points">{{ item.points_label }}</td>
       </tr>
       <tr v-if="model.items.length === 0"><td colspan="3">No items: every row gets the same score.</td></tr>
     </tbody>
