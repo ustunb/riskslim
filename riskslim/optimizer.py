@@ -84,7 +84,7 @@ class RiskSLIMOptimizer:
 
         # solver backend
         self.solver = solver
-        mip_class = load(solver)
+        self.mip_class = load(solver)
 
         # attach main inputs
         self.data = data
@@ -177,7 +177,7 @@ class RiskSLIMOptimizer:
 
         # create the RiskSLIM MIP
         mip_settings.update(bounds.asdict())
-        mip = mip_class()
+        mip = self.mip_class()
         indices = mip.build(coef_set=self.coef_set, settings=mip_settings)
         indices.update({"C_0_nnz": self.C_0_nnz, "L0_reg_ind": self.L0_reg_ind})
         self.mip = mip
@@ -265,7 +265,7 @@ class RiskSLIMOptimizer:
         # Construct LP relaxation
         lp_settings = dict(mip_settings)
         lp_settings["relax_integer_variables"] = True
-        lp = type(self.mip)()
+        lp = self.mip_class()
         lp.build(coef_set=self.coef_set, settings=lp_settings)
         lp.set_parameters(self.cplex_settings, display_progress=settings["display_cplex_progress"])
 
