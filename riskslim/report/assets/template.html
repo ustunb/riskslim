@@ -48,11 +48,11 @@
   </table>
   <p v-if="isChecklist" class="rs-rule">{{ model.rule }}</p>
   <div v-if="wrapScores" class="rs-score-grid">
-    <div v-for="(r, j) in model.score_to_risk.risk"
+    <div v-for="cell in model.score_to_risk"
          class="rs-score-cell"
-         :class="{ 'rs-positive': positive(model.score_to_risk.scores[j]) }">
-      <span class="rs-score-label">{{ isChecklist ? "≥" : "" }}{{ model.score_to_risk.scores[j] }}</span>
-      <span class="rs-score-value">{{ pct(r) }}</span>
+         :class="{ 'rs-positive': cell.positive }">
+      <span class="rs-score-label">{{ cell.score }}</span>
+      <span class="rs-score-value">{{ cell.risk }}</span>
     </div>
   </div>
   <div v-else class="rs-score-risk">
@@ -60,13 +60,13 @@
       <tbody>
         <tr>
           <th>{{ isChecklist ? "NET CHECKED" : "SCORE" }}</th>
-          <td v-for="s in model.score_to_risk.scores"
-              :class="{ 'rs-positive': positive(s) }">{{ s }}</td>
+          <td v-for="cell in model.score_to_risk"
+              :class="{ 'rs-positive': cell.positive }">{{ cell.score }}</td>
         </tr>
         <tr>
           <th>RISK</th>
-          <td v-for="(r, j) in model.score_to_risk.risk"
-              :class="{ 'rs-positive': positive(model.score_to_risk.scores[j]) }">{{ pct(r) }}</td>
+          <td v-for="cell in model.score_to_risk"
+              :class="{ 'rs-positive': cell.positive }">{{ cell.risk }}</td>
         </tr>
       </tbody>
     </table>

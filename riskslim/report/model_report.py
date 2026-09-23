@@ -25,10 +25,14 @@ Conventions
 - **Score range:** ``sum(points * [min, max])`` of each item over the training data (a binary
   item contributes ``points * [0, 1]``). The score-to-risk row lists every achievable total when
   all item values are integers, and otherwise the totals observed in the samples.
-- **Calibration error:** ``|predicted - observed|`` per score bin (``local_error``), and their
-  n-weighted mean over the sample (``error``). Score bins with no rows in a sample are absent
-  from that sample. A CV sample pools fold models, so one score can fall in several bins, one
-  per fold intercept.
+- **Collapsed endpoints:** ``logit(k) ≈ logit(k + 1)`` once the risk is near 0 or 1, so the
+  scores whose risk falls outside 1%..99% collapse into one cell of the score-to-risk strip and
+  one point of the calibration plot at each end, as they do in the R report (``tail_groups``).
+  Display only: every reported number is computed per score bin, before any collapsing.
+- **Calibration error:** ``|predicted - observed|`` per score bin (``local_error``), and the
+  sample's ``ece`` (the R's ``avg_cal_err_distinct``). Score bins with no rows in a sample are
+  absent from that sample. A CV sample pools fold models, so one score can fall in several bins,
+  one per fold intercept.
 """
 
 import html
@@ -56,6 +60,10 @@ from ..utils import is_integer
 SCHEMA_VERSION = 1
 MAX_TOTALS = 10_000  # score totals to enumerate before falling back to observed scores
 MODEL_TYPES = {"risk_score": "Risk score", "checklist": "Checklist"}
+
+# where the strip and the calibration points collapse their endpoints: the R's
+# lower_risk_threshold and upper_risk_threshold, whose defaults every R call site also passes
+LOW_RISK, HIGH_RISK = 0.01, 0.99
 
 # sample names, in page order: the training sample, the CV sample ("5-CV"), then the other splits
 TRAINING = "Training"
@@ -374,18 +382,17 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, s
     if totals is None:
         totals = np.unique(np.concatenate(list(scores.values())))
     totals = [number(s) for s in totals]
+    m = math.floor(-intercept) + 1 if model_type == "checklist" else None
     model = {
         "type": model_type,
         "intercept": number(intercept),
         "items": items,
         "score_range": [number(lo), number(hi)],
-        "score_to_risk": {"scores": totals,
-                          "risk": [float(expit(s + intercept)) for s in totals]},
+        "score_to_risk": score_to_risk_cells(totals, intercept, m),
         "checklist_m": None,
         "rule": None,
     }
     if model_type == "checklist":
-        m = math.floor(-intercept) + 1
         n_items = len(items)
         n_negative = sum(item["points"] < 0 for item in items)
         k_min, k_max = -n_negative, n_items - n_negative
@@ -413,6 +420,58 @@ def achievable_totals(value_sets):
     return sorted(totals)
 
 
+def tail_groups(risks):
+    """``[(first, last)]`` over ascending ``risks``: one group per risk, except that the risks
+    below ``LOW_RISK`` become one group and those above ``HIGH_RISK`` another.
+
+    The endpoints collapse because ``logit(k) ≈ logit(k + 1)`` once the risk is near 0 or 1: a
+    wide score range otherwise ends in a run of cells all reading ``100.0%`` and a run of plot
+    points stacked in the corner. The R collapses both the same way and at the same thresholds --
+    the risk row in ``get.risk.xtable`` (``dev/reference/burn-rules/reporting_utils.R:607-680``)
+    and the calibration points in ``collapse.calibration.df`` (``ibid.:1310-1352``) -- and a tail
+    holding a single risk is left alone by both.
+    """
+    n, low = len(risks), sum(r < LOW_RISK for r in risks)
+    high = sum(r > HIGH_RISK for r in risks)
+    groups = [(i, i) for i in range(n)]
+    if high > 1:
+        groups[n - high:] = [(n - high, n - 1)]
+    if low > 1:
+        groups[:low] = [(0, low - 1)]
+    return groups
+
+
+def score_to_risk_cells(scores, intercept, checklist_m):
+    """The score-to-risk strip: ``{"score", "risk", "positive"}`` per cell, tails collapsed.
+
+    ``scores`` is ascending, so risk is too. A collapsed cell is labelled with the score range it
+    covers (``"0 to 1"``) and with the threshold it stays under (``"< 1.0%"``), as in the R's
+    ``get.risk.xtable``; every other cell shows its own score and risk.
+    """
+    risks = [float(expit(s + intercept)) for s in scores]
+    cells = []
+    for first, last in tail_groups(risks):
+        risk = (percent(risks[first]) if first == last
+                else f"< {percent(LOW_RISK)}" if risks[last] < LOW_RISK
+                else f"> {percent(HIGH_RISK)}")
+        cells.append({"score": score_label(scores[first], scores[last]), "risk": risk,
+                      "positive": checklist_m is not None and scores[first] >= checklist_m})
+    return cells
+
+
+def score_label(low, high):
+    """``"3"`` for one score, ``"0 to 1"`` for a range; one decimal unless both are integral."""
+    digits = 0 if float(low).is_integer() and float(high).is_integer() else 1
+    if low == high:
+        return f"{low:.{digits}f}"
+    return f"{low:.{digits}f} to {high:.{digits}f}"
+
+
+def percent(risk):
+    """A risk as the R prints it: ``formatC(100 * risk, format="f", digits=1)`` and ``%``."""
+    return f"{100 * risk:.1f}%"
+
+
 def roc_section(y, score, intercept):
     """FPR/TPR at each risk threshold (predict positive if risk >= threshold) and AUC.
 
@@ -436,11 +495,11 @@ def roc_section(y, score, intercept):
 
 
 def calibration_section(y, score, intercept):
-    """Per score bin: predicted risk, observed rate, n and local error; and the sample's error.
+    """Per score bin: predicted risk, observed rate, n and local error; and the sample's ECE.
 
     A bin is the rows sharing a score and a risk: one bin per score for one model, one per
     score and fold intercept for a CV sample. ``local_error`` is that bin's
-    ``|predicted - observed|``; ``error`` is their n-weighted mean.
+    ``|predicted - observed|``, the R's per-bin ``cal_err``.
     """
     margin = np.broadcast_to(score + intercept, score.shape)
     bins, inverse, n = np.unique(np.column_stack([score, margin]), axis=0,
@@ -455,8 +514,22 @@ def calibration_section(y, score, intercept):
         "observed": [float(v) for v in observed],
         "n": [int(v) for v in n],
         "local_error": [float(v) for v in np.abs(predicted - observed)],
-        "error": float(np.sum(n * np.abs(predicted - observed)) / np.sum(n)),
+        "ece": expected_calibration_error(y, expit(margin)),
     }
+
+
+def expected_calibration_error(y, risk):
+    """The R's ``avg_cal_err_distinct``: the n-weighted mean of ``|predicted - observed|`` over
+    the rows grouped by distinct predicted risk (``classification_utils.R:204-226``).
+
+    Rows are grouped by the risk they are given, not by the score that gave it, so two fold
+    models that predict the same risk from different scores land in one group, as they do in the
+    R. The R's sibling ``avg_cal_err_binned`` is the same mean over ten equal-width risk bins, and
+    is for real-valued scores, which this report does not support.
+    """
+    risk, groups, n = np.unique(risk, return_inverse=True, return_counts=True)
+    observed = np.bincount(groups.ravel(), weights=y, minlength=len(risk)) / n
+    return float(np.sum(n * np.abs(risk - observed)) / len(y))
 
 
 def summary_section(labels, model, roc, calibration, log_loss, training, constraints):
@@ -492,7 +565,7 @@ def summary_section(labels, model, roc, calibration, log_loss, training, constra
     blocks.append({
         "key": "performance", "title": "Performance", "columns": ["", *names],
         "rows": [["AUC", *[f"{roc[s]['auc']:.3f}" for s in names]],
-                 ["calibration error", *[f"{calibration[s]['error']:.1%}" for s in names]],
+                 ["ECE", *[f"{calibration[s]['ece']:.1%}" for s in names]],
                  ["log loss", *[f"{log_loss[s]:.3f}" for s in names]]],
     })
     return blocks
@@ -546,17 +619,46 @@ def roc_figure(names, sections, labels):
                                            "True positive rate")).to_plotly_json()
 
 
+def calibration_points(section):
+    """The bubbles of one sample, in the shape of the section they come from.
+
+    One bubble per score bin, except that the bins of a collapsed tail become a single bubble:
+    the same grouping as the strip (``tail_groups``, over the bins in risk order), with the
+    group's rows pooled as the R pools them in ``collapse.calibration.df`` -- n adds up, and the
+    predicted and observed risk are the n-weighted means, so the bubble sits where its rows are.
+    The bubble carries the strip's label for the group (``"7 to 12"``).
+
+    Display only: ``ece`` and the per-bin ``local_error`` in the data block are computed before
+    any of this, so a collapsed tail does not move a reported number.
+    """
+    order = sorted(range(len(section["n"])),
+                   key=lambda i: (section["predicted"][i], section["scores"][i]))
+    risks = [section["predicted"][i] for i in order]
+    points = []
+    for first, last in tail_groups(risks):
+        rows = order[first:last + 1]
+        n = sum(section["n"][i] for i in rows)
+        predicted = sum(section["predicted"][i] * section["n"][i] for i in rows) / n
+        observed = sum(section["observed"][i] * section["n"][i] for i in rows) / n
+        scores = [section["scores"][i] for i in rows]
+        points.append((score_label(min(scores), max(scores)), predicted, observed, n,
+                       abs(predicted - observed)))
+    keys = ("scores", "predicted", "observed", "n", "local_error")
+    return dict(zip(keys, (list(values) for values in zip(*points))))
+
+
 def calibration_figure(names, sections, labels):
     """Bubbles per score, sized by n and labelled with the score; ECE in the legend."""
-    n_max = max(n for name in names for n in sections[name]["n"])
+    points = {name: calibration_points(sections[name]) for name in names}
+    n_max = max(n for point in points.values() for n in point["n"])
     d_min, d_max = BUBBLE_PX
     traces = []
     for name in names:
-        cal = sections[name]
+        cal = points[name]
         traces.append(go.Scatter(
-            mode="markers+text", name=f"{labels[name]}<br>ECE = {cal['error']:.1%}",
+            mode="markers+text", name=f"{labels[name]}<br>ECE = {sections[name]['ece']:.1%}",
             x=cal["predicted"], y=cal["observed"],
-            text=[str(s) for s in cal["scores"]],
+            text=cal["scores"],
             customdata=[[n, e] for n, e in zip(cal["n"], cal["local_error"])],
             textposition="top center",
             textfont={"size": 11, "color": INK},

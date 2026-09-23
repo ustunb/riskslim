@@ -7,7 +7,6 @@ window.ModelCard = {
     const model = props.data.model;
     const isChecklist = model.type === "checklist";
     const hasNegative = model.items.some((item) => item.points < 0);
-    const pct = (v) => (100 * v).toFixed(1) + "%";
     const pointsLabel = (item) => {
       if (isChecklist) return item.points > 0 ? "+" : "−";
       if (!item.binary) return `${item.points} × value`;
@@ -15,9 +14,8 @@ window.ModelCard = {
     };
     const itemName = (item) => item.binary ? item.name
       : `${item.name} (${item.value_range[0]}–${item.value_range[1]})`;
-    const positive = (s) => isChecklist && s >= model.checklist_m;
-    // a single row only fits a dozen scores; wider ranges wrap into a grid
-    const wrapScores = model.score_to_risk.scores.length > 12;
-    return { model, isChecklist, hasNegative, pointsLabel, itemName, pct, positive, wrapScores };
+    // a single row only fits a dozen cells; wider strips wrap into a grid
+    const wrapScores = model.score_to_risk.length > 12;
+    return { model, isChecklist, hasNegative, pointsLabel, itemName, wrapScores };
   },
 };

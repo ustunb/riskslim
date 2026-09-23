@@ -19,6 +19,11 @@ Dimensions:
                 -- inferred from the coefficients; model_type="risk_score" overrides a checklist
   label coding: {0, 1}, {-1, 1}    -- both must map to the same positive class (one fit each)
   samples:      Training only, Training + Test (the test sample has no row with score 1)
+  tails:        no score outside 1%..99% (one cell and one bubble per score), a high tail of
+                many scores, a low tail holding every score -- a tail of one score is not a
+                separate value: it is printed and plotted like any other, which the first case
+                already covers. The strip and the calibration bubbles collapse from one rule, so
+                the strip carries the three cases and the bubbles one pooling case.
   figure:       roc, calibration   -- one trace per sample, plotted straight from the data block's
                                       roc / calibration sections, each named for its legend entry
                                       (sample, n and outcome rate, AUC / ECE)
@@ -111,28 +116,48 @@ def report(fitted):
     return make_report(fitted, RISK_SCORE_RHO)
 
 
-def test_risk_score_model_has_score_range_and_score_to_risk(fitted):
+def test_risk_score_model_has_items_and_score_range(fitted):
     model = make_report(fitted, RISK_SCORE_RHO).data["model"]
 
     assert model["type"] == "risk_score"
     assert [(item["name"], item["points"]) for item in model["items"]] == [
         ("a", 2), ("b", 1), ("c", -1)]
     assert model["score_range"] == [-1, 3]
-    assert model["score_to_risk"]["scores"] == [-1, 0, 1, 2, 3]
-    assert model["score_to_risk"]["risk"] == pytest.approx(
-        [0.0474258732, 0.1192029220, 0.2689414214, 0.5, 0.7310585786])
     assert model["checklist_m"] is None
 
 
-def test_non_binary_feature_score_range_spans_points_times_value_range():
-    X = np.column_stack([np.arange(1, 9), X_TRAIN[:, 1:]])  # a takes values 1..8
+@pytest.fixture(scope="module")
+def fitted_wide():
+    """A classifier whose first feature takes values 1..8, so scores run 1..17."""
+    return fit_classifier(np.column_stack([np.arange(1, 9), X_TRAIN[:, 1:]]))
 
-    model = make_report(fit_classifier(X), RISK_SCORE_RHO, test=(None, None)).data["model"]
+
+def test_non_binary_feature_score_range_spans_points_times_value_range(fitted_wide):
+    model = make_report(fitted_wide, RISK_SCORE_RHO, test=(None, None)).data["model"]
 
     assert model["items"][0] == {"name": "a", "points": 2, "binary": False,
                                  "value_range": [1, 8]}
     assert model["score_range"] == [1, 17]
-    assert model["score_to_risk"]["scores"] == list(range(1, 18))
+
+
+@pytest.mark.parametrize("wide, rho, expected", [
+    pytest.param(False, RISK_SCORE_RHO,
+                 [("-1", "4.7%"), ("0", "11.9%"), ("1", "26.9%"), ("2", "50.0%"), ("3", "73.1%")],
+                 id="narrow-range-keeps-one-cell-per-score"),
+    pytest.param(True, RISK_SCORE_RHO,
+                 [("1", "26.9%"), ("2", "50.0%"), ("3", "73.1%"), ("4", "88.1%"), ("5", "95.3%"),
+                  ("6", "98.2%"), ("7 to 17", "> 99.0%")],
+                 id="wide-range-collapses-the-high-tail"),
+    pytest.param(False, [-9, 2, 1, -1], [("-1 to 3", "< 1.0%")],
+                 id="every-risk-below-one-percent-collapses-to-one-cell"),
+])
+def test_score_to_risk_collapses_the_tails_of_the_strip(fitted, fitted_wide, wide, rho, expected):
+    classifier, test = (fitted_wide, (None, None)) if wide else (fitted, (X_TEST, Y_TEST))
+
+    model = make_report(classifier, rho, test=test).data["model"]
+
+    assert [(cell["score"], cell["risk"]) for cell in model["score_to_risk"]] == expected
+    assert not any(cell["positive"] for cell in model["score_to_risk"])
 
 
 @pytest.mark.parametrize("rho, expected_m, expected_rule", [
@@ -171,12 +196,12 @@ def test_calibration_bins_count_rows_per_score(negative_label):
     assert train["scores"] == [-1, 0, 1, 2, 3]
     assert train["n"] == [1, 2, 2, 2, 1]
     assert train["observed"] == [0.0, 0.5, 0.0, 1.0, 1.0]
-    assert train["error"] == pytest.approx(0.3269805367)
+    assert train["ece"] == pytest.approx(0.3269805367)
     # score 1 has no test rows: absent, not NaN
     assert test["scores"] == [-1, 0, 2, 3]
     assert test["n"] == [1, 1, 1, 1]
     assert test["observed"] == [0.0, 0.0, 1.0, 1.0]
-    assert test["error"] == pytest.approx(0.2338925541)
+    assert test["ece"] == pytest.approx(0.2338925541)
 
 
 def test_roc_has_a_point_per_score_threshold_from_origin_to_corner(report):
@@ -198,7 +223,7 @@ def test_summary_has_four_blocks_of_formatted_values(report):
         "constraints": [["model size", "3 (max 3)"], ["point range", "-5 to 5"]],
         "training": [["objective value", "0.5000"], ["optimality gap", "n/a"],
                      ["run time", "1.2 s"]],
-        "performance": [["AUC", "0.844", "1.000"], ["calibration error", "32.7%", "23.4%"],
+        "performance": [["AUC", "0.844", "1.000"], ["ECE", "32.7%", "23.4%"],
                         ["log loss", "0.579", "0.295"]],
     }
 
@@ -310,6 +335,25 @@ def test_calibration_bubbles_are_labelled_with_scores_and_sized_by_n(report):
     assert small < large
     assert train["marker"]["size"] == [small, large, large, large, small]
     assert test["marker"]["size"] == [small] * 4
+
+
+def test_calibration_bubbles_pool_the_rows_of_a_collapsed_tail(fitted_wide):
+    report = make_report(fitted_wide, RISK_SCORE_RHO, test=(None, None))
+    (train,) = report.data["figures"]["calibration"]["data"]
+    section = report.data["calibration"]["Training"]
+
+    # 8 rows, 8 distinct scores; the five above 99% risk are one bubble, the other three their own
+    assert section["scores"] == [3, 4, 6, 9, 10, 11, 14, 15]
+    assert train["text"] == ["3", "4", "6", "9 to 15"]
+    n, local_error = zip(*train["customdata"])  # hover: the bubble's n and calibration error
+    assert list(n) == [1, 1, 1, 5]
+    assert list(local_error) == pytest.approx(
+        [0.2689414214, 0.1192029220, 0.0179862100, 0.7997243599])
+    assert train["x"][-1] == pytest.approx(0.9997243599)  # the pooled rows' mean predicted risk
+    assert train["y"] == [1.0, 1.0, 1.0, pytest.approx(0.2)]  # 1 of the 5 pooled rows is positive
+    # pooling moves no reported number: ECE and local_error stay on the distinct scores
+    assert len(section["local_error"]) == 8
+    assert section["ece"] == pytest.approx(0.5505955802)
 
 
 def test_roc_points_carry_score_thresholds(report):
