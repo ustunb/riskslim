@@ -1,7 +1,6 @@
 """RiskSLIM Classifier."""
 
 import copy
-import warnings
 
 import numpy as np
 from scipy.special import expit
@@ -233,71 +232,20 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
             How to show the model. Inferred from the coefficients when None: a checklist when
             every nonzero coefficient is +1 or -1.
         data : riskslim.data.BinaryClassificationDataset, optional
-            When it has splits (``data.split(...)``), each split is a sample; otherwise the
-            training sample is the data passed to ``fit``.
+            The dataset the model was fit on: its names label the page, and when it has splits
+            (``data.split(...)``) each split is a sample; otherwise the training sample is the
+            data passed to ``fit``.
         folds : list of RiskSLIMClassifier, optional
-            Fitted per-fold models. None uses ``cv_results_["estimator"]`` after ``fit_cv``.
+            Fitted per-fold models for the CV sample, scoring the test rows of ``fit_cv``. None
+            uses ``cv_results_["estimator"]`` after ``fit_cv``.
 
         Returns
         -------
         report : riskslim.report.ModelReport
             Use ``report.save(path)`` to write an HTML file; notebooks display it inline.
         """
-        check_is_fitted(self)
-        samples = self._report_samples(data)
-        if (X_test is None) != (y_test is None):
-            raise ValueError("report() needs both X_test and y_test, or neither")
-        if X_test is not None and "test" in samples:
-            warnings.warn("report() uses the test split of data; X_test and y_test are ignored",
-                          UserWarning, stacklevel=2)
-        elif X_test is not None:
-            X_test = validate_data(self, X_test, dtype=np.float64, reset=False)
-            y_test = np.ravel(y_test)
-            if not np.isin(y_test, self.classes_).all():
-                raise ValueError(f"y_test has labels outside the classes seen in fit {self.classes_.tolist()}")
-            samples["test"] = (X_test, (y_test == self.classes_[1]).astype(int))
-        # the fold models are checked here; the page does not show a CV sample yet
-        self._report_fold_models(folds)
-        features = [j for j, name in enumerate(self.coef_set_.variable_names) if name != INTERCEPT_NAME]
-        variable_lb, variable_ub = self.coef_set_.lb[features], self.coef_set_.ub[features]
-        return ModelReport(
-            rho = self._rho,
-            variable_names = self._variable_names,
-            outcome_name = self._data.names.y,
-            samples = samples,
-            training = self.solution_info_,
-            constraints = {"max_size": self.max_size_,
-                           "point_range": (float(np.min(variable_lb)), float(np.max(variable_ub)))},
-            model_type = model_type,
-        )
-
-    def _report_samples(self, data):
-        """``{name: (X, y in {0, 1})}`` from the splits of ``data``, else the data passed to fit."""
-        if data is not None and not isinstance(data, BinaryClassificationDataset):
-            raise TypeError(f"data must be a BinaryClassificationDataset; got {type(data).__name__}")
-        if data is None or data.splits is None:
-            return {"train": (self._data.X, (self._data.y == 1).astype(int))}
-        if data.d != self.n_features_in_:
-            raise ValueError(f"data has {data.d} features but the model was fit on {self.n_features_in_}")
-        positive = data.classes[1]
-        samples = {}
-        for split_name, sample in vars(data.splits).items():
-            X, y = sample.X, sample.y  # each access rebuilds the array from the parent's DataFrame
-            samples["train" if split_name == "training" else split_name] = (X, (y == positive).astype(int))
-        return samples
-
-    def _report_fold_models(self, folds):
-        """The fitted per-fold models: ``folds``, else those from ``fit_cv``, else None."""
-        if folds is None:
-            cv_results = getattr(self, "cv_results_", None)
-            return None if cv_results is None else list(cv_results["estimator"])
-        folds = list(folds)
-        for fold_model in folds:
-            check_is_fitted(fold_model)
-            if fold_model.n_features_in_ != self.n_features_in_:
-                raise ValueError(f"a fold model was fit on {fold_model.n_features_in_} features; "
-                                 f"this model on {self.n_features_in_}")
-        return folds
+        return ModelReport(self, data=data, folds=folds, model_type=model_type,
+                           X_test=X_test, y_test=y_test)
 
     def decision_function(self, X):
         """Risk score of each sample; > 0 predicts ``classes_[1]``.

@@ -1,6 +1,7 @@
 """The report: one object that computes the page, builds its figures and renders the HTML.
 
-``ModelReport`` takes plain arrays (no fitted classifier, no solver). It computes one
+``ModelReport`` takes a fitted ``RiskSLIMClassifier`` and, optionally, the
+``BinaryClassificationDataset`` it was fit on (no solver runs). It computes one
 JSON-serializable data block with no NaN or inf, builds the two Plotly figures from it, and
 renders a single self-contained page (libraries load from a pinned CDN). The browser only
 displays what Python computed.
@@ -14,18 +15,25 @@ Conventions
   ``1 / (1 + exp(-(score + intercept)))``.
 - A row is predicted positive when ``score + intercept > 0`` (risk strictly above 0.5), the same
   rule as ``RiskSLIMClassifier.predict``.
+- **Samples:** ``Training``, then ``{k}-CV`` (the out-of-fold predictions of ``k`` fold models,
+  each scoring its own test rows with its own points and intercept), then the dataset's other
+  splits (``Validation``, ``Test``).
+- **Item names:** a rule name ``feature_op_value`` (e.g. ``ClumpThickness_geq_5``) is shown as
+  ``feature symbol value`` (``ClumpThickness ≥ 5``); any other name is shown as it is.
 - **Checklist M:** with k = (#checked +1 items) - (#checked -1 items), M is the smallest integer
   k with ``k + intercept > 0``, i.e. ``floor(-intercept) + 1``.
 - **Score range:** ``sum(points * [min, max])`` of each item over the training data (a binary
   item contributes ``points * [0, 1]``). The score-to-risk row lists every achievable total when
   all item values are integers, and otherwise the totals observed in the samples.
 - **Calibration error:** the n-weighted mean of ``|predicted - observed|`` over score bins. Score
-  bins with no rows in a sample are absent from that sample.
+  bins with no rows in a sample are absent from that sample. A CV sample pools fold models, so
+  one score can fall in several bins, one per fold intercept.
 """
 
 import html
 import json
 import math
+import warnings
 from functools import cache
 from importlib.resources import files
 from itertools import cycle
@@ -38,7 +46,9 @@ from jinja2 import Environment
 from markupsafe import Markup
 from scipy.special import expit
 from sklearn.metrics import auc, roc_curve
+from sklearn.utils.validation import check_is_fitted, validate_data
 
+from ..data import BinaryClassificationDataset, RuleName
 from ..defaults import INTERCEPT_NAME
 from ..loss_functions.log_loss import log_loss_value_from_scores
 from ..utils import is_integer
@@ -46,6 +56,14 @@ from ..utils import is_integer
 SCHEMA_VERSION = 1
 MAX_TOTALS = 10_000  # score totals to enumerate before falling back to observed scores
 MODEL_TYPES = {"risk_score": "Risk score", "checklist": "Checklist"}
+
+# sample names, in page order: the training sample, the CV sample ("5-CV"), then the other splits
+TRAINING = "Training"
+SPLIT_SAMPLES = {"training": TRAINING, "validation": "Validation", "test": "Test"}
+
+# how each rule-name operator (``feature_op_value``) is shown
+OPERATOR_SYMBOLS = {"geq": "≥", "leq": "≤", "lt": "<", "gt": ">", "eq": "=", "neq": "≠",
+                    "is": "=", "isnot": "≠", "in": "∈", "notin": "∉"}
 
 ASSETS = files(__package__) / "assets"
 # Inlined in this order: each component file defines its component globally, and mount_report.js
@@ -65,7 +83,7 @@ MUTED = "#98A2AD"
 GRID = "#DFE4E9"
 STRIPE = "#F2F2F2"
 BACKGROUND = "#FFFFFF"
-SAMPLE_COLORS = ["#2F6FB3", "#E07B39", "#10B981"]  # train, test, a third sample
+SAMPLE_COLORS = ["#2F6FB3", "#E07B39", "#10B981"]  # one per sample, in page order
 BUBBLE_PX = (14, 34)  # calibration bubble diameter for the smallest and largest n
 
 AXIS = {
@@ -96,56 +114,71 @@ class ModelReport:
 
     ``report.data`` is everything the page shows, ``report.html`` is the page as a string,
     ``report.save(path)`` writes it, and notebooks display it inline in an iframe.
+    ``RiskSLIMClassifier.report(...)`` builds one.
 
     Parameters
     ----------
-    rho : 1d array
-        Coefficients, intercept first.
-    variable_names : list of str
-        Names matching ``rho``; the first is ``"(Intercept)"``.
-    outcome_name : str
-        Name of the positive outcome.
-    samples : dict
-        ``{"train": (X, y), "test": (X, y)}``; ``train`` is required. X excludes the intercept
-        column; y is in {0, 1} or {-1, 1}.
-    training : dict, optional
-        Solver statistics (``RiskSLIMClassifier.solution_info_``); uses ``objective_value``,
-        ``optimality_gap`` and ``run_time``.
-    constraints : dict, optional
-        ``max_size`` (int) and ``point_range`` ((lb, ub) over the non-intercept coefficients).
+    classifier : riskslim.RiskSLIMClassifier
+        A fitted classifier. The report shows its coefficients, its solver statistics
+        (``solution_info_``: ``objective_value``, ``optimality_gap``, ``run_time``) and its
+        constraints (``max_size_``, and the point range of ``coef_set_``).
+    data : riskslim.data.BinaryClassificationDataset, optional
+        The dataset the model was fit on. Its feature and outcome names label the page, and when
+        it has splits (``data.split(...)``) each split is a sample. Without it, or without
+        splits, the training sample is the data passed to ``fit``.
+    folds : list of RiskSLIMClassifier, optional
+        Fitted per-fold models for the CV sample, one per fold of ``classifier.fit_cv``; each
+        scores its own test rows, ``classifier.cv_results_["indices"]["test"]``. None uses
+        ``cv_results_["estimator"]``; without ``fit_cv`` there is no CV sample.
     model_type : {"risk_score", "checklist"}, optional
-        Inferred from the coefficients when None.
+        Inferred from the coefficients when None: a checklist when every nonzero coefficient is
+        +1 or -1.
+    X_test, y_test : array-like, optional
+        A held-out sample, shown as ``Test``. Ignored, with a warning, when ``data`` already has
+        a test split.
     """
 
-    def __init__(self, rho, variable_names, outcome_name, samples, training=None,
-                 constraints=None, model_type=None):
-        self.rho, self.variable_names = checked_coefficients(rho, variable_names)
-        self.outcome_name = str(outcome_name)
-        self.training = training
-        self.constraints = dict(constraints or {})
+    def __init__(self, classifier, data=None, folds=None, model_type=None, X_test=None,
+                 y_test=None):
+        check_is_fitted(classifier)
+        dataset = checked_dataset(data, classifier)
+        self.rho, self.variable_names = checked_coefficients(classifier, dataset)
+        self.outcome_name = str(dataset.names.y)
+        self.training = classifier.solution_info_
+        self.constraints = fitted_constraints(classifier)
         self.model_type = checked_model_type(model_type, self.rho[1:])
 
         # samples stay local: the page needs only what they produce, and holding them would pin
         # a float64 copy of every X for the report's lifetime
-        samples = checked_samples(samples, len(self.variable_names) - 1)
+        samples = split_samples(classifier, data, X_test, y_test)
         intercept, points = float(self.rho[0]), self.rho[1:]
 
-        scores = {name: X @ points for name, (X, _) in samples.items()}
+        # {name: (y, score, intercept)}: the model scores each split; a CV row is scored by its
+        # own fold model, so the CV sample carries one intercept per row
+        scored = {name: (y, X @ points, intercept) for name, (X, y) in samples.items()}
         model = model_section(points, intercept, self.variable_names[1:], self.outcome_name,
-                              self.model_type, samples["train"][0], scores)
-        roc = {name: roc_section(y, scores[name]) for name, (_, y) in samples.items()}
-        calibration = {name: calibration_section(y, scores[name], intercept)
-                       for name, (_, y) in samples.items()}
-        log_loss = {name: float(log_loss_value_from_scores((2 * y - 1) * (scores[name] + intercept)))
-                    for name, (_, y) in samples.items()}
-        names = list(samples)
+                              self.model_type, samples[TRAINING][0],
+                              {name: score for name, (_, score, _) in scored.items()})
+        cv = cv_sample(classifier, folds)
+        if cv is not None:
+            cv_name, cv_scored = cv
+            scored = {TRAINING: scored.pop(TRAINING), cv_name: cv_scored, **scored}
+        checked_classes(scored)
+
+        roc = {name: roc_section(y, score, b) for name, (y, score, b) in scored.items()}
+        calibration = {name: calibration_section(y, score, b)
+                       for name, (y, score, b) in scored.items()}
+        log_loss = {name: float(log_loss_value_from_scores((2 * y - 1) * (score + b)))
+                    for name, (y, score, b) in scored.items()}
+        names = list(scored)
         self.data = {
             "schema_version": SCHEMA_VERSION,
             "title": f"{MODEL_TYPES[self.model_type]}: {self.outcome_name}",
             "outcome_name": self.outcome_name,
             "samples": names,
             "model": model,
-            "summary": summary_section(samples, model, roc, calibration, log_loss, self.training,
+            "summary": summary_section({name: y for name, (y, _, _) in scored.items()}, model,
+                                       roc, calibration, log_loss, self.training,
                                        self.constraints),
             "roc": roc,
             "calibration": calibration,
@@ -183,18 +216,33 @@ def infer_model_type(points):
     return "risk_score"
 
 
-def checked_coefficients(rho, variable_names):
-    """Validate the coefficients and their names; return them as an array and a list."""
-    rho = np.asarray(rho, dtype=float).ravel()
-    names = list(variable_names)
-    if len(names) != len(rho) or not names or names[0] != INTERCEPT_NAME:
-        raise ValueError(
-            f"rho and variable_names must have the same length with {INTERCEPT_NAME!r} first; "
-            f"got {len(rho)} coefficients and names {names[:3]}..."
-        )
+def checked_dataset(data, classifier):
+    """``data`` when given, checked against the fit; else the dataset ``fit`` built."""
+    if data is None:
+        return classifier._data
+    if not isinstance(data, BinaryClassificationDataset):
+        raise TypeError(f"data must be a BinaryClassificationDataset; got {type(data).__name__}")
+    if data.d != classifier.n_features_in_:
+        raise ValueError(f"data has {data.d} features but the model was fit on "
+                         f"{classifier.n_features_in_}")
+    return data
+
+
+def checked_coefficients(classifier, dataset):
+    """The coefficients, intercept first, and their names from the dataset."""
+    rho = np.concatenate([[classifier.intercept_], classifier.coef_]).astype(float)
     if not np.all(np.isfinite(rho)):
         raise ValueError(f"rho must be finite; got {rho.tolist()}")
-    return rho, names
+    return rho, [INTERCEPT_NAME, *dataset.names.X]
+
+
+def fitted_constraints(classifier):
+    """The model size limit and the point range over the non-intercept coefficients."""
+    coef_set = classifier.coef_set_
+    features = [j for j, name in enumerate(coef_set.variable_names) if name != INTERCEPT_NAME]
+    return {"max_size": classifier.max_size_,
+            "point_range": (float(np.min(coef_set.lb[features])),
+                            float(np.max(coef_set.ub[features])))}
 
 
 def checked_model_type(model_type, points):
@@ -206,33 +254,91 @@ def checked_model_type(model_type, points):
     return model_type
 
 
-def checked_samples(samples, n_features):
-    """Validate and normalize: ``{name: (X float 2d, y in {0, 1})}``, ``train`` first."""
-    if not isinstance(samples, dict) or "train" not in samples:
-        keys = sorted(samples) if isinstance(samples, dict) else type(samples).__name__
-        raise ValueError(f"samples must be a dict with a 'train' entry, "
-                         f"e.g. {{'train': (X, y)}}; got {keys}")
-    checked = {}
-    for name in ["train", *[k for k in samples if k != "train"]]:
-        X, y = samples[name]
-        X = np.asarray(X, dtype=float)
-        y = np.asarray(y).ravel()
-        if X.ndim != 2 or X.shape[1] != n_features:
-            raise ValueError(
-                f"sample {name!r}: X has shape {X.shape} but variable_names lists {n_features} "
-                f"features (excluding {INTERCEPT_NAME!r}); pass X without the intercept column"
-            )
-        if len(y) != X.shape[0]:
-            raise ValueError(f"sample {name!r}: X has {X.shape[0]} rows but y has {len(y)}")
-        labels = set(np.unique(y).tolist())
-        if not (labels <= {0, 1} or labels <= {-1, 1}):
-            raise ValueError(f"sample {name!r}: y must be in {{0, 1}} or {{-1, 1}}; "
-                             f"got values {sorted(labels)}")
+def split_samples(classifier, data, X_test, y_test):
+    """``{name: (X, y in {0, 1})}``: the splits of ``data``, else the data passed to fit, plus
+    ``X_test`` / ``y_test`` as ``Test`` when ``data`` has no test split."""
+    if (X_test is None) != (y_test is None):
+        raise ValueError("report() needs both X_test and y_test, or neither")
+    if data is None or data.splits is None:
+        fit_data = classifier._data
+        samples = {TRAINING: (fit_data.X, (fit_data.y == fit_data.classes[1]).astype(int))}
+    else:
+        splits = vars(data.splits)
+        samples = {}
+        for split_name, sample_name in SPLIT_SAMPLES.items():
+            if split_name in splits:
+                # each access rebuilds the array from the parent's DataFrame: read once
+                X, y = splits[split_name].X, splits[split_name].y
+                samples[sample_name] = (X, (y == data.classes[1]).astype(int))
+    test = SPLIT_SAMPLES["test"]
+    if X_test is None:
+        return samples
+    if test in samples:
+        warnings.warn("report() uses the test split of data; X_test and y_test are ignored",
+                      UserWarning, stacklevel=4)
+        return samples
+    X_test, y_test = validate_data(classifier, X_test, y_test, dtype=np.float64, reset=False)
+    if not np.isin(y_test, classifier.classes_).all():
+        raise ValueError(f"y_test has labels outside the classes seen in fit "
+                         f"{classifier.classes_.tolist()}")
+    samples[test] = (X_test, (y_test == classifier.classes_[1]).astype(int))
+    return samples
+
+
+def cv_sample(classifier, folds):
+    """``(name, (y, score, intercept))`` of the fold models' out-of-fold predictions, or None.
+
+    The fold models are ``folds``, else ``cv_results_["estimator"]``. Each scores its own test
+    rows of the data passed to fit, read from ``cv_results_["indices"]["test"]`` and never
+    re-derived, so the report and ``fit_cv`` cannot disagree about which rows a fold held out.
+    """
+    cv_results = getattr(classifier, "cv_results_", None)
+    if folds is None:
+        if cv_results is None:
+            return None
+        folds = list(cv_results["estimator"])
+    else:
+        folds = list(folds)
+        for fold_model in folds:
+            check_is_fitted(fold_model)
+            if fold_model.n_features_in_ != classifier.n_features_in_:
+                raise ValueError(f"a fold model was fit on {fold_model.n_features_in_} features; "
+                                 f"this model on {classifier.n_features_in_}")
+    if not folds:
+        return None
+
+    fit_data = classifier._data
+    test_rows = [] if cv_results is None else [np.asarray(rows) for rows in
+                                               cv_results["indices"]["test"]]
+    if len(test_rows) != len(folds) or any(rows.max(initial=-1) >= fit_data.n
+                                           for rows in test_rows):
+        warnings.warn(f"report() shows no CV sample: {len(folds)} fold models need their test "
+                      f"rows from fit_cv on the data passed to fit, and cv_results_ has "
+                      f"{len(test_rows)} folds", UserWarning, stacklevel=4)
+        return None
+    X, y = fit_data.X, (fit_data.y == fit_data.classes[1]).astype(int)
+    score = np.concatenate([X[rows] @ fold.coef_ for fold, rows in zip(folds, test_rows)])
+    intercept = np.concatenate([np.full(len(rows), float(fold.intercept_))
+                                for fold, rows in zip(folds, test_rows)])
+    return f"{len(folds)}-CV", (y[np.concatenate(test_rows)], score, intercept)
+
+
+def checked_classes(scored):
+    """Every sample holds both classes: ROC and calibration need them."""
+    for name, (y, _, _) in scored.items():
+        labels = sorted(np.unique(y).tolist())
         if len(labels) < 2:
-            raise ValueError(f"sample {name!r} has a single class ({sorted(labels)}); ROC and "
+            raise ValueError(f"sample {name!r} has a single class ({labels}); ROC and "
                              f"calibration need both classes in every sample")
-        checked[name] = (X, (y == 1).astype(int))
-    return checked
+
+
+def display_name(name):
+    """``feature symbol value`` for a rule name ``feature_op_value``; else the name as it is."""
+    try:
+        feature, operator, value = RuleName.parse(name)
+    except ValueError:
+        return name
+    return f"{feature} {OPERATOR_SYMBOLS[operator]} {value}"
 
 
 def model_section(points, intercept, names, outcome_name, model_type, X_train, scores):
@@ -247,7 +353,7 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, s
             vmin, vmax, values = 0.0, 1.0, np.array([0.0, 1.0])
         p = float(points[j])
         value_sets.append(p * values)
-        items.append({"name": str(names[j]), "points": number(p), "binary": binary,
+        items.append({"name": display_name(str(names[j])), "points": number(p), "binary": binary,
                       "value_range": [number(vmin), number(vmax)]})
     # order items as print_model does: most positive points first
     items.sort(key=lambda item: -item["points"])
@@ -297,25 +403,43 @@ def achievable_totals(value_sets):
     return sorted(totals)
 
 
-def roc_section(y, score):
-    """FPR/TPR at each score threshold (predict positive if score >= threshold) and AUC."""
-    fpr, tpr, thresholds = roc_curve(y, score, drop_intermediate=False)
+def roc_section(y, score, intercept):
+    """FPR/TPR at each risk threshold (predict positive if risk >= threshold) and AUC.
+
+    Rows rank by ``score + intercept``. Each threshold is named by the score of its rows; the
+    first (no row predicted positive) is None, as is a CV threshold whose rows, scored by fold
+    models with different intercepts, have different scores.
+    """
+    margin = score + intercept
+    fpr, tpr, thresholds = roc_curve(y, margin, drop_intermediate=False)
+    scores_at = {}
+    for m, s in zip(margin.tolist(), score.tolist()):
+        scores_at.setdefault(m, set()).add(s)
     return {
         "fpr": [float(v) for v in fpr],
         "tpr": [float(v) for v in tpr],
-        "thresholds": [None if not np.isfinite(t) else number(t) for t in thresholds],
+        "thresholds": [number(next(iter(scores_at[t])))
+                       if np.isfinite(t) and len(scores_at[t]) == 1 else None
+                       for t in thresholds.tolist()],
         "auc": float(auc(fpr, tpr)),
     }
 
 
 def calibration_section(y, score, intercept):
-    """Per observed score: predicted risk, observed rate and n; n-weighted calibration error."""
-    bins, inverse, n = np.unique(score, return_inverse=True, return_counts=True)
+    """Per score bin: predicted risk, observed rate and n; n-weighted calibration error.
+
+    A bin is the rows sharing a score and a risk: one bin per score for one model, one per
+    score and fold intercept for a CV sample.
+    """
+    margin = np.broadcast_to(score + intercept, score.shape)
+    bins, inverse, n = np.unique(np.column_stack([score, margin]), axis=0,
+                                 return_inverse=True, return_counts=True)
+    inverse = inverse.ravel()
     positives = np.bincount(inverse, weights=y, minlength=len(bins))
-    predicted = expit(bins + intercept)
+    predicted = expit(bins[:, 1])
     observed = positives / n
     return {
-        "scores": [number(s) for s in bins],
+        "scores": [number(s) for s in bins[:, 0]],
         "predicted": [float(v) for v in predicted],
         "observed": [float(v) for v in observed],
         "n": [int(v) for v in n],
@@ -323,13 +447,16 @@ def calibration_section(y, score, intercept):
     }
 
 
-def summary_section(samples, model, roc, calibration, log_loss, training, constraints):
-    """Four display blocks (dataset, constraints, training, performance) of formatted strings."""
-    names = list(samples)
+def summary_section(labels, model, roc, calibration, log_loss, training, constraints):
+    """Four display blocks (dataset, constraints, training, performance) of formatted strings.
+
+    ``labels`` is ``{sample name: y in {0, 1}}``, in column order.
+    """
+    names = list(labels)
     blocks = [{
         "key": "dataset", "title": "Dataset", "columns": ["", *names],
-        "rows": [["n", *[f"{len(samples[s][1]):,}" for s in names]],
-                 ["outcome rate", *[f"{samples[s][1].mean():.1%}" for s in names]]],
+        "rows": [["n", *[f"{len(labels[s]):,}" for s in names]],
+                 ["outcome rate", *[f"{labels[s].mean():.1%}" for s in names]]],
     }]
 
     size = str(len(model["items"]))
@@ -387,7 +514,8 @@ def roc_figure(names, sections):
     traces = []
     for name in names:
         roc = sections[name]
-        labels = ["none" if t is None else f"score ≥ {t}" for t in roc["thresholds"]]
+        labels = ["none" if i == 0 else "scores differ by fold" if t is None else f"score ≥ {t}"
+                  for i, t in enumerate(roc["thresholds"])]
         traces.append(go.Scatter(
             mode="lines+markers", name=name,
             x=roc["fpr"], y=roc["tpr"], customdata=labels,

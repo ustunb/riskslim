@@ -3,14 +3,16 @@
 Test strategy
 -------------
 Fixture: the shared report sample in tests/utils.py (8 training rows, 4 test rows, three binary
-features, fixed coefficient vectors); expected values are literals worked out by hand, not
-recomputed. No solver is called.
+features, fixed coefficient vectors). One small classifier (max size 3, points -5 to 5) is fit
+once on the training rows; each report is built from a copy of it carrying a fixed coefficient
+vector and fixed solver statistics, with the test rows passed as X_test / y_test, so expected
+values are literals worked out by hand, not recomputed.
 
 Dimensions:
   model type:   risk_score (points 2, 1, -1), checklist (+1 items only), checklist (with a -1 item)
                 -- inferred from the coefficients; model_type="risk_score" overrides a checklist
-  label coding: {0, 1}, {-1, 1}    -- both must map to the same positive class
-  samples:      train only, train + test (the test sample has no row with score 1)
+  label coding: {0, 1}, {-1, 1}    -- both must map to the same positive class (one fit each)
+  samples:      Training only, Training + Test (the test sample has no row with score 1)
   figure:       roc, calibration   -- one trace per sample, plotted straight from the data block's
                                       roc / calibration sections, plus a top-left metrics box
                                       (AUC / calibration error)
@@ -18,10 +20,9 @@ Dimensions:
                                       plain label is the same path with nothing to escape, so it
                                       is not a separate case)
 
-Rejection paths owned here (one invalid mutation of a valid call each): rho and variable_names of
-different lengths, variable_names without "(Intercept)" first, non-finite rho, unknown model_type,
-samples without 'train', X column count != number of variable names, y row count != X row count,
-labels outside {0, 1} / {-1, 1}, and a sample with a single class.
+Rejection paths owned here (one invalid mutation of a valid call each): non-finite rho, unknown
+model_type, X_test column count != the fitted feature count, y_test row count != X_test row
+count, y_test labels outside the classes seen in fit, and a sample with a single class.
 n/a: non-binary features for the checklist -- the score range rule is shared with the risk score.
 
 Checks that need no browser: `plotly.graph_objects.Figure(fig)` rejects misspelled or invalid
@@ -35,6 +36,7 @@ tmp_path or --report-dir=DIR
 config).
 """
 
+import copy
 import html
 import json
 import re
@@ -46,10 +48,8 @@ import plotly.io as pio
 import pytest
 from utils import (
     CHECKLIST_RHO,
-    CONSTRAINTS,
     NAMES,
     RISK_SCORE_RHO,
-    SAMPLES,
     TRAINING,
     X_TEST,
     X_TRAIN,
@@ -57,11 +57,11 @@ from utils import (
     Y_TRAIN,
 )
 
+from riskslim import RiskSLIMClassifier
+from riskslim.data import BinaryClassificationDataset
 from riskslim.report import ModelReport
 from riskslim.report.model_report import ASSETS, TEMPLATE_NAME
 
-VALID_CALL = {"rho": RISK_SCORE_RHO, "variable_names": NAMES, "outcome_name": "y",
-              "samples": SAMPLES}
 DATA_KEYS = {"schema_version", "title", "outcome_name", "samples", "model", "summary", "roc",
              "calibration", "figures"}
 CDN_URLS = [
@@ -70,24 +70,41 @@ CDN_URLS = [
     "https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.min.css",
 ]
 DATA_BLOCK = re.compile(r'<script type="application/json" id="report-data">(.*?)</script>', re.S)
-HOSTILE_NAMES = ["(Intercept)", "a</script><script>alert(1)</script>", "b<!-- c", "c"]
+HOSTILE_NAMES = ["a</script><script>alert(1)</script>", "b<!-- c", "c"]
 
 
-def make_report(rho, names=NAMES, samples=None, training=TRAINING, constraints=CONSTRAINTS,
-                **kwargs):
-    """A report over the shared sample, with the solver statistics and constraints filled in."""
-    return ModelReport(rho, names, "y", samples or SAMPLES, training=training,
-                       constraints=constraints, **kwargs)
+def fit_classifier(X=X_TRAIN, y=Y_TRAIN):
+    """A small classifier fit on the training rows: max size 3, points -5 to 5."""
+    classifier = RiskSLIMClassifier(max_size=3, max_coef=5, variable_names=NAMES[1:],
+                                    outcome_name="y", verbose=False, max_runtime=5,
+                                    cplex_randomseed=0)
+    return classifier.fit(X, y)
 
 
 @pytest.fixture(scope="module")
-def report():
+def fitted():
+    """The one classifier most tests report on, fit once."""
+    return fit_classifier()
+
+
+def make_report(classifier, rho, test=(X_TEST, Y_TEST), **kwargs):
+    """A report on a copy of ``classifier`` with coefficients ``rho`` (intercept first) and the
+    shared solver statistics, so expected values do not depend on what the solver found."""
+    model = copy.copy(classifier)
+    model.intercept_, model.coef_ = float(rho[0]), np.asarray(rho[1:], dtype=float)
+    model.solution_info_ = dict(TRAINING)
+    X_test, y_test = test
+    return ModelReport(model, X_test=X_test, y_test=y_test, **kwargs)
+
+
+@pytest.fixture(scope="module")
+def report(fitted):
     """The default risk-score report."""
-    return make_report(RISK_SCORE_RHO)
+    return make_report(fitted, RISK_SCORE_RHO)
 
 
-def test_risk_score_model_has_score_range_and_score_to_risk():
-    model = make_report(RISK_SCORE_RHO).data["model"]
+def test_risk_score_model_has_score_range_and_score_to_risk(fitted):
+    model = make_report(fitted, RISK_SCORE_RHO).data["model"]
 
     assert model["type"] == "risk_score"
     assert [(item["name"], item["points"]) for item in model["items"]] == [
@@ -102,7 +119,7 @@ def test_risk_score_model_has_score_range_and_score_to_risk():
 def test_non_binary_feature_score_range_spans_points_times_value_range():
     X = np.column_stack([np.arange(1, 9), X_TRAIN[:, 1:]])  # a takes values 1..8
 
-    model = make_report(RISK_SCORE_RHO, samples={"train": (X, Y_TRAIN)}).data["model"]
+    model = make_report(fit_classifier(X), RISK_SCORE_RHO, test=(None, None)).data["model"]
 
     assert model["items"][0] == {"name": "a", "points": 2, "binary": False,
                                  "value_range": [1, 8]}
@@ -120,17 +137,19 @@ def test_non_binary_feature_score_range_spans_points_times_value_range():
                  "Never predict y (no set of checked items reaches the threshold)",
                  id="threshold-out-of-reach"),
 ])
-def test_checklist_m_is_smallest_net_count_with_positive_prediction(rho, expected_m,
+def test_checklist_m_is_smallest_net_count_with_positive_prediction(fitted, rho, expected_m,
                                                                     expected_rule):
-    model = make_report(rho).data["model"]
+    model = make_report(fitted, rho).data["model"]
 
     assert model["type"] == "checklist"
     assert model["checklist_m"] == expected_m
     assert model["rule"] == expected_rule
 
 
-def test_risk_score_type_can_be_forced_for_unit_coefficients():
-    assert make_report(CHECKLIST_RHO, model_type="risk_score").data["model"]["type"] == "risk_score"
+def test_risk_score_type_can_be_forced_for_unit_coefficients(fitted):
+    report = make_report(fitted, CHECKLIST_RHO, model_type="risk_score")
+
+    assert report.data["model"]["type"] == "risk_score"
 
 
 @pytest.mark.parametrize("negative_label", [0, -1], ids=["labels-01", "labels-pm1"])
@@ -138,8 +157,8 @@ def test_calibration_bins_count_rows_per_score(negative_label):
     y_train = np.where(Y_TRAIN == 1, 1, negative_label)
     y_test = np.where(Y_TEST == 1, 1, negative_label)
 
-    data = make_report(RISK_SCORE_RHO, samples={"train": (X_TRAIN, y_train), "test": (X_TEST, y_test)}).data
-    train, test = data["calibration"]["train"], data["calibration"]["test"]
+    data = make_report(fit_classifier(X_TRAIN, y_train), RISK_SCORE_RHO, test=(X_TEST, y_test)).data
+    train, test = data["calibration"]["Training"], data["calibration"]["Test"]
 
     assert train["scores"] == [-1, 0, 1, 2, 3]
     assert train["n"] == [1, 2, 2, 2, 1]
@@ -152,20 +171,20 @@ def test_calibration_bins_count_rows_per_score(negative_label):
     assert test["error"] == pytest.approx(0.2338925541)
 
 
-def test_roc_has_a_point_per_score_threshold_from_origin_to_corner():
-    roc = make_report(RISK_SCORE_RHO).data["roc"]
+def test_roc_has_a_point_per_score_threshold_from_origin_to_corner(report):
+    roc = report.data["roc"]
 
-    assert roc["train"]["thresholds"] == [None, 3, 2, 1, 0, -1]
-    assert roc["train"]["fpr"] == [0.0, 0.0, 0.0, 0.5, 0.75, 1.0]
-    assert roc["train"]["tpr"] == [0.0, 0.25, 0.75, 0.75, 1.0, 1.0]
-    assert roc["train"]["auc"] == 0.84375
-    assert roc["test"]["auc"] == 1.0
+    assert roc["Training"]["thresholds"] == [None, 3, 2, 1, 0, -1]
+    assert roc["Training"]["fpr"] == [0.0, 0.0, 0.0, 0.5, 0.75, 1.0]
+    assert roc["Training"]["tpr"] == [0.0, 0.25, 0.75, 0.75, 1.0, 1.0]
+    assert roc["Training"]["auc"] == 0.84375
+    assert roc["Test"]["auc"] == 1.0
 
 
-def test_summary_has_four_blocks_of_formatted_values():
-    data = make_report(RISK_SCORE_RHO).data
+def test_summary_has_four_blocks_of_formatted_values(report):
+    data = report.data
 
-    assert data["samples"] == ["train", "test"]
+    assert data["samples"] == ["Training", "Test"]
     assert {block["key"]: block["rows"] for block in data["summary"]} == {
         "dataset": [["n", "8", "4"], ["outcome rate", "50.0%", "50.0%"]],
         "constraints": [["model size", "3 (max 3)"], ["point range", "-5 to 5"]],
@@ -177,37 +196,35 @@ def test_summary_has_four_blocks_of_formatted_values():
 
 
 @pytest.mark.parametrize("rho", [RISK_SCORE_RHO, CHECKLIST_RHO], ids=["risk-score", "checklist"])
-def test_data_is_strict_json(rho):
-    data = make_report(rho).data
+def test_data_is_strict_json(fitted, rho):
+    data = make_report(fitted, rho).data
 
     assert json.loads(json.dumps(data, allow_nan=False)) == data
     assert data["schema_version"] == 1
 
 
 @pytest.mark.parametrize("invalid, match", [
-    pytest.param({"rho": RISK_SCORE_RHO[:3]}, "same length", id="rho-shorter-than-names"),
-    pytest.param({"variable_names": ["bias", "a", "b", "c"]}, r"'\(Intercept\)' first",
-                 id="no-intercept-name"),
     pytest.param({"rho": [float("nan"), 2, 1, -1]}, "rho must be finite", id="non-finite-rho"),
     pytest.param({"model_type": "decision_tree"}, "model_type must be one of",
                  id="unknown-model-type"),
-    pytest.param({"samples": {"test": (X_TEST, Y_TEST)}}, "'train' entry", id="missing-train"),
-    pytest.param({"samples": {"train": (X_TRAIN[:, :2], Y_TRAIN)}},
-                 "variable_names lists 3 features", id="column-count"),
-    pytest.param({"samples": {"train": (X_TRAIN, Y_TRAIN[:-1])}},
-                 "X has 8 rows but y has 7", id="row-count"),
-    pytest.param({"samples": {"train": (X_TRAIN, np.where(Y_TRAIN == 1, 1, 2))}},
-                 r"y must be in \{0, 1\} or \{-1, 1\}", id="unsupported-labels"),
-    pytest.param({"samples": {"train": (X_TRAIN, Y_TRAIN), "test": (X_TEST, np.zeros(4))}},
-                 "'test' has a single class", id="single-class"),
+    pytest.param({"test": (X_TEST[:, :2], Y_TEST)}, "expecting 3 features", id="column-count"),
+    pytest.param({"test": (X_TEST, Y_TEST[:-1])}, "inconsistent numbers of samples",
+                 id="row-count"),
+    pytest.param({"test": (X_TEST, np.where(Y_TEST == 1, 1, 2))},
+                 "labels outside the classes seen in fit", id="unsupported-labels"),
+    pytest.param({"test": (X_TEST, np.zeros(4))}, "'Test' has a single class",
+                 id="single-class"),
 ])
-def test_invalid_inputs_are_rejected(invalid, match):
+def test_invalid_inputs_are_rejected(fitted, invalid, match):
+    call = {"rho": RISK_SCORE_RHO, **invalid}
     with pytest.raises(ValueError, match=match):
-        ModelReport(**{**VALID_CALL, **invalid})
+        make_report(fitted, **call)
 
 
-def test_html_holds_one_data_block_that_round_trips():
-    hostile_report = make_report(RISK_SCORE_RHO, names=HOSTILE_NAMES)
+def test_html_holds_one_data_block_that_round_trips(fitted):
+    hostile_data = BinaryClassificationDataset(X=X_TRAIN, y=Y_TRAIN, X_names=HOSTILE_NAMES,
+                                               y_name="y", n_folds=())
+    hostile_report = make_report(fitted, RISK_SCORE_RHO, data=hostile_data)
 
     blocks = DATA_BLOCK.findall(hostile_report.html)
 
@@ -228,8 +245,8 @@ def test_save_and_notebook_display_carry_the_same_html(report, tmp_path):
 
 
 @pytest.mark.parametrize("key, coordinates, metrics_text", [
-    ("roc", ("fpr", "tpr"), [("train", "0.844"), ("test", "1.000")]),
-    ("calibration", ("predicted", "observed"), [("train", "32.7%"), ("test", "23.4%")]),
+    ("roc", ("fpr", "tpr"), [("Training", "0.844"), ("Test", "1.000")]),
+    ("calibration", ("predicted", "observed"), [("Training", "32.7%"), ("Test", "23.4%")]),
 ])
 def test_figure_plots_each_sample_section_with_a_top_left_metrics_box(report, key, coordinates,
                                                                      metrics_text):
@@ -237,8 +254,8 @@ def test_figure_plots_each_sample_section_with_a_top_left_metrics_box(report, ke
     x_field, y_field = coordinates
 
     go.Figure(figure)  # raises on invalid Plotly properties
-    assert [trace["name"] for trace in figure["data"]] == ["train", "test"]
-    for trace, name in zip(figure["data"], ["train", "test"]):
+    assert [trace["name"] for trace in figure["data"]] == ["Training", "Test"]
+    for trace, name in zip(figure["data"], ["Training", "Test"]):
         assert trace["x"] == report.data[key][name][x_field]
         assert trace["y"] == report.data[key][name][y_field]
     (box,) = figure["layout"]["annotations"]
@@ -294,10 +311,10 @@ def report_dir(request, tmp_path_factory):
 
 
 @pytest.fixture(scope="module", params=["risk_score", "checklist"])
-def saved_report(request, report_dir):
+def saved_report(request, fitted, report_dir):
     """One saved report page per model type, built and written once for all viewport widths."""
     rho = {"risk_score": RISK_SCORE_RHO, "checklist": CHECKLIST_RHO}[request.param]
-    return make_report(rho).save(report_dir / f"{request.param}_report.html")
+    return make_report(fitted, rho).save(report_dir / f"{request.param}_report.html")
 
 
 @pytest.fixture(scope="module")

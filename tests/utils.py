@@ -3,7 +3,8 @@
 import numpy as np
 
 # Report test data, used by tests/test_model_report.py: a hand-written 8-row training sample and a
-# 4-row test sample over three binary features (a, b, c), with fixed coefficients (no solver).
+# 4-row test sample over three binary features (a, b, c), with fixed coefficients and solver
+# statistics that the tests put on a fitted classifier.
 NAMES = ["(Intercept)", "a", "b", "c"]
 X_TRAIN = np.array([
     [1, 1, 0], [1, 0, 0], [1, 1, 1], [0, 1, 0],
@@ -12,11 +13,9 @@ X_TRAIN = np.array([
 Y_TRAIN = np.array([1, 1, 1, 0, 0, 0, 1, 0])
 X_TEST = np.array([[1, 1, 0], [0, 0, 0], [1, 0, 0], [0, 0, 1]])
 Y_TEST = np.array([1, 0, 1, 0])
-SAMPLES = {"train": (X_TRAIN, Y_TRAIN), "test": (X_TEST, Y_TEST)}
 RISK_SCORE_RHO = [-2, 2, 1, -1]  # train scores: 3, 2, 2, 1, 0, 1, 0, -1
 CHECKLIST_RHO = [-1, 1, 1, 0]
 TRAINING = {"objective_value": 0.5, "optimality_gap": float("inf"), "run_time": 1.25}
-CONSTRAINTS = {"max_size": 3, "point_range": (-5, 5)}
 
 
 def generate_random_normal(n_rows, n_columns, n_targets, seed):

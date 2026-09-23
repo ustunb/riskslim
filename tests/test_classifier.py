@@ -68,6 +68,6 @@ def test_report_shows_training_data_and_labelled_test_sample():
 
     data = clf.report(X[:40], labels[:40]).data
 
-    assert data['samples'] == ['train', 'test']
+    assert data['samples'] == ['Training', 'Test']
     assert data['summary'][0]['rows'] == [['n', '80', '40'], ['outcome rate', '62.5%', '62.5%']]
     assert data['summary'][2]['key'] == 'training'
