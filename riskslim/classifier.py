@@ -1,6 +1,7 @@
 """RiskSLIM Classifier."""
 
 import copy
+import warnings
 
 import numpy as np
 from scipy.special import expit
@@ -15,7 +16,7 @@ from sklearn.utils.validation import check_is_fitted, validate_data
 
 from .optimizer import RiskSLIMOptimizer
 from .coefficient_set import CoefficientSet
-from .data import BinaryClassificationDataset
+from .data import BinaryClassificationDataset, CVFolds
 from .defaults import DEFAULT_LCPA_SETTINGS, INTERCEPT_NAME, OUTCOME_NAME
 from .report import ModelReport
 from .utils import print_model
@@ -220,16 +221,22 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         }
         return self
 
-    def report(self, X_test=None, y_test=None, model_type=None):
+    def report(self, X_test=None, y_test=None, model_type=None, *, data=None, folds=None):
         """HTML report of the fitted model: the model, a summary table, ROC and calibration.
 
         Parameters
         ----------
         X_test, y_test : array-like, optional
-            A held-out sample, shown next to the training data passed to ``fit``.
+            A held-out sample, shown next to the training sample. Ignored, with a warning, when
+            ``data`` already has a test split.
         model_type : {"risk_score", "checklist"}, optional
             How to show the model. Inferred from the coefficients when None: a checklist when
             every nonzero coefficient is +1 or -1.
+        data : riskslim.data.BinaryClassificationDataset, optional
+            When it has splits (``data.split(...)``), each split is a sample; otherwise the
+            training sample is the data passed to ``fit``.
+        folds : list of RiskSLIMClassifier, optional
+            Fitted per-fold models. None uses ``cv_results_["estimator"]`` after ``fit_cv``.
 
         Returns
         -------
@@ -237,15 +244,20 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
             Use ``report.save(path)`` to write an HTML file; notebooks display it inline.
         """
         check_is_fitted(self)
-        samples = {"train": (self._data.X, self._data.y)}
+        samples = self._report_samples(data)
         if (X_test is None) != (y_test is None):
             raise ValueError("report() needs both X_test and y_test, or neither")
-        if X_test is not None:
+        if X_test is not None and "test" in samples:
+            warnings.warn("report() uses the test split of data; X_test and y_test are ignored",
+                          UserWarning, stacklevel=2)
+        elif X_test is not None:
             X_test = validate_data(self, X_test, dtype=np.float64, reset=False)
             y_test = np.ravel(y_test)
             if not np.isin(y_test, self.classes_).all():
                 raise ValueError(f"y_test has labels outside the classes seen in fit {self.classes_.tolist()}")
             samples["test"] = (X_test, (y_test == self.classes_[1]).astype(int))
+        # the fold models are checked here; the page does not show a CV sample yet
+        self._report_fold_models(folds)
         features = [j for j, name in enumerate(self.coef_set_.variable_names) if name != INTERCEPT_NAME]
         variable_lb, variable_ub = self.coef_set_.lb[features], self.coef_set_.ub[features]
         return ModelReport(
@@ -258,6 +270,34 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
                            "point_range": (float(np.min(variable_lb)), float(np.max(variable_ub)))},
             model_type = model_type,
         )
+
+    def _report_samples(self, data):
+        """``{name: (X, y in {0, 1})}`` from the splits of ``data``, else the data passed to fit."""
+        if data is not None and not isinstance(data, BinaryClassificationDataset):
+            raise TypeError(f"data must be a BinaryClassificationDataset; got {type(data).__name__}")
+        if data is None or data.splits is None:
+            return {"train": (self._data.X, (self._data.y == 1).astype(int))}
+        if data.d != self.n_features_in_:
+            raise ValueError(f"data has {data.d} features but the model was fit on {self.n_features_in_}")
+        positive = data.classes[1]
+        samples = {}
+        for split_name, sample in vars(data.splits).items():
+            X, y = sample.X, sample.y  # each access rebuilds the array from the parent's DataFrame
+            samples["train" if split_name == "training" else split_name] = (X, (y == positive).astype(int))
+        return samples
+
+    def _report_fold_models(self, folds):
+        """The fitted per-fold models: ``folds``, else those from ``fit_cv``, else None."""
+        if folds is None:
+            cv_results = getattr(self, "cv_results_", None)
+            return None if cv_results is None else list(cv_results["estimator"])
+        folds = list(folds)
+        for fold_model in folds:
+            check_is_fitted(fold_model)
+            if fold_model.n_features_in_ != self.n_features_in_:
+                raise ValueError(f"a fold model was fit on {fold_model.n_features_in_} features; "
+                                 f"this model on {self.n_features_in_}")
+        return folds
 
     def decision_function(self, X):
         """Risk score of each sample; > 0 predicts ``classes_[1]``.
@@ -337,7 +377,7 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
                 self.cv_calibrated_estimators_.append(calibrator.fit(X[train], y[train]))
         return self
 
-    def fit_cv(self, X, y, k=5, scoring="roc_auc", n_jobs=1, **kwargs):
+    def fit_cv(self, X, y, k=5, scoring="roc_auc", n_jobs=1, *, data=None, fold_id=None, **kwargs):
         """Cross-validate RiskSLIM; stores ``cv_`` and ``cv_results_``.
 
         Parameters
@@ -345,17 +385,24 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         X : array-like of shape (n_samples, n_features)
         y : array-like of shape (n_samples,)
         k : int, sklearn cross-validation generator or an iterable, default: 5
-            Determines the cross-validation splitting strategy.
+            Determines the cross-validation splitting strategy. Ignored when ``data`` is given.
         scoring : str or callable, default: "roc_auc"
             Strategy to evaluate the cross-validated model on each test fold.
         n_jobs : int, optional, default: 1
             Number of jobs to run in parallel. -1 defaults to max cores or threads.
+        data : riskslim.data.BinaryClassificationDataset, optional
+            Dataset whose rows are ``X`` and ``y``; its folds ``fold_id`` are the CV folds.
+        fold_id : str, optional
+            Fold id in ``data.cv``, e.g. ``"K05N01"`` (5 folds, replicate 1). None uses
+            ``k`` folds, replicate 1.
         **kwargs
             Settings passed to each fold's ``fit``.
         """
         scoring = check_scoring(self, scoring)
         self.__dict__.pop("cv_calibrated_estimators_", None)  # calibrated the previous folds
-        self.cv_ = check_cv(cv=k, y=y, classifier=True)
+        cv = k if data is None else dataset_folds(data, CVFolds.get_fold_id(k) if fold_id is None else fold_id,
+                                                  n_samples=len(y))
+        self.cv_ = check_cv(cv=cv, y=y, classifier=True)
         self.cv_results_ = cross_validate(
                 self,
                 X=X,
@@ -368,3 +415,20 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
                 n_jobs=n_jobs
                 )
         return self
+
+
+def dataset_folds(data, fold_id, n_samples):
+    """``(train, test)`` index pairs for each fold of ``fold_id``, read without splitting ``data``."""
+    if not isinstance(data, BinaryClassificationDataset):
+        raise TypeError(f"data must be a BinaryClassificationDataset; got {type(data).__name__}")
+    if data.n != n_samples:
+        raise ValueError(f"data has {data.n} rows but y has {n_samples}; pass data.X and data.y")
+    if fold_id not in data.cv:
+        raise ValueError(f"data.cv has no folds {fold_id!r}; build the dataset with those folds "
+                         f"(e.g. n_folds=(5,) for 'K05N01')")
+    n_folds = int(data.cv[fold_id].max())
+    pairs = []
+    for fold in range(1, n_folds + 1):
+        masks = data.cv.get_split_masks(fold_id, test=fold)
+        pairs.append((np.flatnonzero(masks["training"]), np.flatnonzero(masks["test"])))
+    return pairs
