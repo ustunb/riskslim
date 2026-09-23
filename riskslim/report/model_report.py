@@ -46,8 +46,9 @@ MODEL_TYPES = ("risk_score", "checklist")
 
 ASSETS = files(__package__) / "assets"
 # Inlined in this order: each component file defines its component globally, and mount_report.js
-# puts them into the slots of assets/template.html.
-SCRIPTS = ("model_card.js", "summary_table.js", "plotly_chart.js", "mount_report.js")
+# mounts it on its slot in assets/template.html, where the slot's markup is its in-DOM template.
+SCRIPTS = ("model_card.js", "summary_table.js", "roc_plot.js", "calibration_plot.js",
+           "mount_report.js")
 
 # ---------------------------------------------------------------------------
 # Visuals: tweak the look of both figures here.

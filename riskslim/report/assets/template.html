@@ -14,27 +14,93 @@
 </head>
 <body>
 {#- The page structure: a 2x2 grid of cards, each with one component slot that mount_report.js
-    fills. A slot is display:contents, so the component renders as a direct child of its card. #}
+    fills. A slot is display:contents, so the component renders as a direct child of its card.
+
+    The markup inside a slot is that component's in-DOM template -- Vue compiles it on mount, so
+    all of the page's HTML lives in this file and each .js file holds only its component's logic.
+    Vue interpolates with the same delimiters as Jinja, so every slot body sits inside a Jinja
+    raw block and reaches the browser untouched. #}
 <main class="container" id="report">
 <header class="rs-head"><h2>{{ title }}</h2></header>
 <section class="rs-row">
 <article class="rs-card">
 <header><h3>Model</h3></header>
-<div class="rs-slot" data-component="model-card"></div>
+<div class="rs-slot" data-component="model-card">{% raw %}
+  <table class="rs-model-table" :class="isChecklist ? 'rs-checklist' : 'rs-risk-score'">
+    <tbody>
+      <tr v-for="(item, i) in model.items" class="rs-item-row">
+        <td v-if="isChecklist" class="rs-box" aria-hidden="true">☐</td>
+        <td v-else class="rs-index">{{ i + 1 }}.</td>
+        <td class="rs-name">{{ itemName(item) }}</td>
+        <td v-if="!isChecklist || hasNegative" class="rs-points">{{ pointsLabel(item) }}</td>
+        <td v-if="!isChecklist" class="rs-tally">{{ i === 0 ? "" : "+" }} …</td>
+      </tr>
+      <tr v-if="model.items.length === 0"><td colspan="4">No items: every row gets the same score.</td></tr>
+    </tbody>
+    <tfoot v-if="!isChecklist && model.items.length">
+      <tr>
+        <td></td>
+        <td>ADD POINTS FROM ROWS 1–{{ model.items.length }}</td>
+        <td class="rs-points">SCORE</td>
+        <td class="rs-tally">= …</td>
+      </tr>
+    </tfoot>
+  </table>
+  <p v-if="isChecklist" class="rs-rule">{{ model.rule }}</p>
+  <div v-if="wrapScores" class="rs-score-grid">
+    <div v-for="(r, j) in model.score_to_risk.risk"
+         class="rs-score-cell"
+         :class="{ 'rs-positive': positive(model.score_to_risk.scores[j]) }">
+      <span class="rs-score-label">{{ isChecklist ? "≥" : "" }}{{ model.score_to_risk.scores[j] }}</span>
+      <span class="rs-score-value">{{ pct(r) }}</span>
+    </div>
+  </div>
+  <div v-else class="rs-score-risk">
+    <table>
+      <tbody>
+        <tr>
+          <th>{{ isChecklist ? "NET CHECKED" : "SCORE" }}</th>
+          <td v-for="s in model.score_to_risk.scores"
+              :class="{ 'rs-positive': positive(s) }">{{ s }}</td>
+        </tr>
+        <tr>
+          <th>RISK</th>
+          <td v-for="(r, j) in model.score_to_risk.risk"
+              :class="{ 'rs-positive': positive(model.score_to_risk.scores[j]) }">{{ pct(r) }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+{% endraw %}</div>
 </article>
 <article class="rs-card">
 <header><h3>Summary</h3></header>
-<div class="rs-slot" data-component="summary-table"></div>
+<div class="rs-slot" data-component="summary-table">{% raw %}
+  <table class="rs-summary-table">
+    <tbody v-for="block in blocks" :class="'rs-block-' + block.key">
+      <tr class="rs-block-head">
+        <th>{{ block.title }}</th>
+        <th v-for="(column, j) in block.columns.slice(1)" class="rs-num"
+            :colspan="span(block, j)">{{ column }}</th>
+      </tr>
+      <tr v-for="row in block.rows">
+        <td>{{ row[0] }}</td>
+        <td v-for="(value, j) in row.slice(1)" class="rs-num"
+            :colspan="span(block, j)">{{ value }}</td>
+      </tr>
+    </tbody>
+  </table>
+{% endraw %}</div>
 </article>
 </section>
 <section class="rs-row">
 <article class="rs-card">
 <header><h3>ROC</h3></header>
-<div class="rs-slot" data-component="plotly-chart" data-figure="roc"></div>
+<div class="rs-slot" data-component="roc-plot"><div ref="plot" class="rs-plot" data-figure="roc"></div></div>
 </article>
 <article class="rs-card">
 <header><h3>Calibration</h3></header>
-<div class="rs-slot" data-component="plotly-chart" data-figure="calibration"></div>
+<div class="rs-slot" data-component="calibration-plot"><div ref="plot" class="rs-plot" data-figure="calibration"></div></div>
 </article>
 </section>
 </main>
