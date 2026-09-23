@@ -25,6 +25,9 @@
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: minmax(0, 1fr);
+  /* each card is as tall as its own content: stretching the shorter one to match its neighbour
+     left a block of dead space under the model card */
+  align-items: start;
   gap: 1rem;
   margin-bottom: 1rem;
 }
@@ -52,51 +55,43 @@
 .rs-card table { margin-bottom: 0.75rem; font-size: 0.9rem; }
 .rs-card th, .rs-card td { padding: 0.3rem 0.5rem; }
 
-/* model table: points in the rightmost columns, like the paper */
-.rs-model-table td { border-bottom: 1px solid var(--rs-grid); }
-.rs-model-table .rs-index { width: 2.5em; color: var(--rs-muted); }
+/* model table: the points column on the right, like the paper */
+.rs-model-table th, .rs-model-table td { border-bottom: 1px solid var(--rs-grid); }
+.rs-model-table th { color: var(--rs-muted); font-size: 0.75rem; }
 .rs-model-table .rs-name { overflow-wrap: anywhere; }
-.rs-model-table .rs-points { text-align: right; white-space: nowrap; font-weight: 600; }
-.rs-model-table .rs-tally { text-align: right; white-space: nowrap; color: var(--rs-muted); width: 4em; }
-.rs-model-table tfoot td { font-weight: 600; border-top: 2px solid var(--rs-ink); border-bottom: 0; }
+.rs-model-table .rs-points { text-align: right; white-space: nowrap; }
+.rs-model-table td.rs-points { font-weight: 600; }
 .rs-model-table .rs-box { width: 2em; font-size: 1.2rem; line-height: 1; }
 .rs-rule { font-weight: 600; margin-bottom: 0.75rem; }
 
-/* score-to-risk grid: used when a single row would not fit */
+/* score-to-risk strip: one grid that wraps, so it fits the card at any width with no sideways
+   scroll. auto-fill decides how many cells a row holds from the card's real width, and the
+   track floor is set by the widest cell the strip can hold -- a collapsed tail ("10 to 13",
+   "> 99.0%"), which is about three times a bare score. */
 .rs-score-grid {
-  display: grid; gap: 1px;
-  grid-template-columns: repeat(auto-fill, minmax(4.2em, 1fr));
-  border: 1px solid var(--rs-grid); background: var(--rs-grid);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 5em), 1fr));
+  border-top: 1px solid var(--rs-grid); border-left: 1px solid var(--rs-grid);
 }
+/* each cell draws its own right and bottom rule, so the last row simply ends after its last
+   cell instead of ruling off the empty tracks beside it */
 .rs-score-cell {
   display: grid; padding: 0.3rem 0.2rem; text-align: center;
   background: var(--rs-bg); font-variant-numeric: tabular-nums;
+  border-right: 1px solid var(--rs-grid); border-bottom: 1px solid var(--rs-grid);
+  overflow-wrap: anywhere;
 }
 .rs-score-label { font-size: 0.75rem; color: var(--rs-muted); }
 .rs-score-value { font-size: 0.9rem; }
+.rs-score-head { text-align: left; }
+.rs-score-head .rs-score-value { font-size: 0.75rem; color: var(--rs-muted); }
+.rs-score-cell.rs-positive { background: var(--rs-highlight); }
 
-/* score-to-risk row: scrolls sideways when there are many scores */
-.rs-score-risk { overflow-x: auto; }
-.rs-score-risk table { width: auto; border-collapse: collapse; }
-.rs-score-risk th {
-  position: sticky; left: 0;
-  background: var(--rs-bg);
-  font-size: 0.75rem; color: var(--rs-muted); text-align: left; white-space: nowrap;
-}
-.rs-score-risk td {
-  min-width: 3.4em;
-  text-align: center; white-space: nowrap;
-  border: 1px solid var(--rs-grid);
-  font-variant-numeric: tabular-nums;
-}
-.rs-score-risk tr:first-child td { background: var(--rs-risk); font-weight: 600; }
-.rs-score-risk td.rs-positive { background: var(--rs-highlight); }
-
-/* summary table: one header row per block */
-.rs-summary-table .rs-block-head th {
+/* summary table: one header row, naming the samples */
+.rs-summary-table thead th {
   background: var(--rs-stripe);
   font-weight: 600;
-  border-top: 1px solid var(--rs-grid);
+  border-bottom: 1px solid var(--rs-grid);
 }
 .rs-summary-table td { border-bottom: 1px solid var(--rs-grid); }
 .rs-summary-table .rs-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }

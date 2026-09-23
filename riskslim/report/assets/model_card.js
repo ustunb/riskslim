@@ -6,7 +6,6 @@ window.ModelCard = {
   setup(props) {
     const model = props.data.model;
     const isChecklist = model.type === "checklist";
-    const hasNegative = model.items.some((item) => item.points < 0);
     const pointsLabel = (item) => {
       if (isChecklist) return item.points > 0 ? "+" : "−";
       if (!item.binary) return `${item.points} × value`;
@@ -14,8 +13,7 @@ window.ModelCard = {
     };
     const itemName = (item) => item.binary ? item.name
       : `${item.name} (${item.value_range[0]}–${item.value_range[1]})`;
-    // a single row only fits a dozen cells; wider strips wrap into a grid
-    const wrapScores = model.score_to_risk.length > 12;
-    return { model, isChecklist, hasNegative, pointsLabel, itemName, wrapScores };
+    // the strip is one wrapping grid at every width -- styles.css decides how many cells fit
+    return { model, isChecklist, pointsLabel, itemName };
   },
 };

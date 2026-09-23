@@ -388,10 +388,15 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, s
         totals = np.unique(np.concatenate(list(scores.values())))
     totals = [number(s) for s in totals]
     m = math.floor(-intercept) + 1 if model_type == "checklist" else None
+    checklist = model_type == "checklist"
+    shows_points = not checklist or any(item["points"] < 0 for item in items)
     model = {
         "type": model_type,
         "intercept": number(intercept),
         "items": items,
+        "points_header": "Points" if shows_points else None,
+        "score_header": "NET CHECKED" if checklist else "SCORE",
+        "risk_header": "RISK",
         "score_range": [number(lo), number(hi)],
         "score_to_risk": score_to_risk_cells(totals, intercept, m),
         "checklist_m": None,
@@ -537,43 +542,51 @@ def expected_calibration_error(y, risk):
     return float(np.sum(n * np.abs(risk - observed)) / len(y))
 
 
+def summary_row(key, label, values):
+    """One row of the summary table: a stable key, its leftmost-column label, and its values.
+
+    A row with one value where there are several samples is not a per-sample statistic; the page
+    stretches it across the sample columns.
+    """
+    return {"key": key, "label": label, "values": values}
+
+
 def summary_section(labels, model, roc, calibration, log_loss, training, constraints):
-    """Four display blocks (dataset, constraints, training, performance) of formatted strings.
+    """One flat table of formatted strings: ``columns`` (a blank label column, then the samples)
+    and ``rows`` in reading order -- the data, the constraints, the solver, the performance.
+
+    There are no block subheaders and no "value" header: the samples name the columns, and a row
+    that is not per-sample simply carries one value.
 
     ``labels`` is ``{sample name: y in {0, 1}}``, in column order.
     """
     names = list(labels)
-    blocks = [{
-        "key": "dataset", "title": "Dataset", "columns": ["", *names],
-        "rows": [["n", *[f"{len(labels[s]):,}" for s in names]],
-                 ["outcome rate", *[f"{labels[s].mean():.1%}" for s in names]]],
-    }]
+    rows = [summary_row("n", "N", [f"{len(labels[s]):,}" for s in names]),
+            summary_row("outcome_rate", "Outcome rate",
+                        [f"{labels[s].mean():.1%}" for s in names])]
 
     size = str(len(model["items"]))
     if constraints.get("max_size") is not None:
         size += f" (max {int(constraints['max_size'])})"
-    rows = [["model size", size]]
+    rows.append(summary_row("model_size", "Model size", [size]))
     if constraints.get("point_range") is not None:
         lb, ub = constraints["point_range"]
-        rows.append(["point range", f"{number(lb)} to {number(ub)}"])
-    blocks.append({"key": "constraints", "title": "Constraints", "columns": ["", "value"],
-                   "rows": rows})
+        rows.append(summary_row("point_range", "Point range", [f"{number(lb)} to {number(ub)}"]))
 
     if training is not None:
-        rows = [["objective value", fmt(training.get("objective_value"), "{:.4f}")],
-                ["optimality gap", fmt(training.get("optimality_gap"), "{:.1%}")],
-                ["run time", fmt(training.get("run_time"),
-                               "{:.2f} s" if (training.get("run_time") or 0) < 1 else "{:.1f} s")]]
-        blocks.append({"key": "training", "title": "Training", "columns": ["", "value"],
-                       "rows": rows})
+        run_time = "{:.2f} s" if (training.get("run_time") or 0) < 1 else "{:.1f} s"
+        rows += [
+            summary_row("objective_value", "Objective value",
+                        [fmt(training.get("objective_value"), "{:.4f}")]),
+            summary_row("optimality_gap", "Optimality gap",
+                        [fmt(training.get("optimality_gap"), "{:.1%}")]),
+            summary_row("run_time", "Run time", [fmt(training.get("run_time"), run_time)]),
+        ]
 
-    blocks.append({
-        "key": "performance", "title": "Performance", "columns": ["", *names],
-        "rows": [["AUC", *[f"{roc[s]['auc']:.3f}" for s in names]],
-                 ["ECE", *[f"{calibration[s]['ece']:.1%}" for s in names]],
-                 ["log loss", *[f"{log_loss[s]:.3f}" for s in names]]],
-    })
-    return blocks
+    rows += [summary_row("auc", "AUC", [f"{roc[s]['auc']:.3f}" for s in names]),
+             summary_row("ece", "ECE", [f"{calibration[s]['ece']:.1%}" for s in names]),
+             summary_row("log_loss", "Log loss", [f"{log_loss[s]:.3f}" for s in names])]
+    return {"columns": ["", *names], "rows": rows}
 
 
 def number(value):
@@ -597,13 +610,12 @@ def fmt(value, template):
 def sample_labels(summary, names):
     """``{sample: "Training<br>(n = 8,815 p = 12.4%)"}``: the legend's first two lines.
 
-    n and the outcome rate are the strings the summary's dataset block already shows, so the
-    legend and the table cannot round the same number two ways.
+    n and the outcome rate are the strings the summary table already shows, so the legend and the
+    table cannot round the same number two ways.
     """
-    (dataset,) = [block for block in summary if block["key"] == "dataset"]
-    counts, rates = dataset["rows"]
+    values = {row["key"]: row["values"] for row in summary["rows"]}
     return {name: f"{name}<br>(n = {n} p = {p})"
-            for name, n, p in zip(names, counts[1:], rates[1:])}
+            for name, n, p in zip(names, values["n"], values["outcome_rate"])}
 
 
 def roc_figure(names, sections, labels):

@@ -38,10 +38,11 @@ n/a: non-binary features for the checklist -- the score range rule is shared wit
 Checks that need no browser: `plotly.graph_objects.Figure(fig)` rejects misspelled or invalid
 properties, and one test asserts the Plotly template's colours are the ones styles.css writes as
 `--rs-*` tokens (the page and the plots hold the palette in their own idiom, so the test is what
-keeps them from drifting). The browser test is opt-in (`pytest -m browser`): each model type's page is built and
-saved once, then opened in headless Chromium at 1280 px and 375 px, requiring no console or page
-errors, 2 rendered Plotly charts and one model row per item; screenshots and the HTML go to a
-tmp_path or --report-dir=DIR
+keeps them from drifting). The browser test is opt-in (`pytest -m browser`): one page per saved
+report (each model type, plus `wide_strip` -- a long strip whose collapsed tails are its widest
+cells) is built and saved once, then opened in headless Chromium at 1280 px and 375 px, requiring
+no console or page errors, 2 rendered Plotly charts, one model row per item, and a score-to-risk
+strip that fits the card at that width; screenshots and the HTML go to a tmp_path or --report-dir=DIR
 (write it with "=": with a space, pytest reads an existing DIR as a test path and misses the
 config).
 """
@@ -83,6 +84,19 @@ DATA_BLOCK = re.compile(r'<script type="application/json" id="report-data">(.*?)
 HOSTILE_NAMES = ["a</script><script>alert(1)</script>", "b<!-- c", "c"]
 BREASTCANCER_FILE = Path(__file__).parents[1] / "data" / "breastcancer_data.csv"
 COMPONENTS = ["model-card", "summary-table", "roc-plot", "calibration-plot"]
+# How far the score-to-risk strip runs past its own box, past the card holding it, and past the
+# viewport, in px. All three are 0 at every width: the strip wraps to the width it is given, so it
+# neither scrolls sideways nor pushes the page wider than the window.
+STRIP_FIT = """() => {
+  const strip = document.querySelector(".rs-score-grid");
+  const card = strip.closest(".rs-card");
+  const past = (edge, limit) => Math.max(0, Math.ceil(edge - limit));
+  return {
+    strip: past(strip.scrollWidth, strip.clientWidth),
+    card: past(strip.getBoundingClientRect().right, card.getBoundingClientRect().right),
+    page: past(document.documentElement.scrollWidth, document.documentElement.clientWidth),
+  };
+}"""
 
 
 def fit_classifier(X=X_TRAIN, y=Y_TRAIN):
@@ -213,18 +227,25 @@ def test_roc_has_a_point_per_score_threshold_from_origin_to_corner(report):
     assert roc["Test"]["auc"] == 1.0
 
 
-def test_summary_has_four_blocks_of_formatted_values(report):
+def test_summary_is_one_flat_table_of_formatted_values(report):
     data = report.data
 
     assert data["samples"] == ["Training", "Test"]
-    assert {block["key"]: block["rows"] for block in data["summary"]} == {
-        "dataset": [["n", "8", "4"], ["outcome rate", "50.0%", "50.0%"]],
-        "constraints": [["model size", "3 (max 3)"], ["point range", "-5 to 5"]],
-        "training": [["objective value", "0.5000"], ["optimality gap", "n/a"],
-                     ["run time", "1.2 s"]],
-        "performance": [["AUC", "0.844", "1.000"], ["ECE", "32.7%", "23.4%"],
-                        ["log loss", "0.579", "0.295"]],
-    }
+    # one header row, naming the samples; no block subheaders and no "value" header
+    assert data["summary"]["columns"] == ["", "Training", "Test"]
+    # a row that is not per-sample carries one value, whatever the number of samples
+    assert [(row["label"], row["values"]) for row in data["summary"]["rows"]] == [
+        ("N", ["8", "4"]),
+        ("Outcome rate", ["50.0%", "50.0%"]),
+        ("Model size", ["3 (max 3)"]),
+        ("Point range", ["-5 to 5"]),
+        ("Objective value", ["0.5000"]),
+        ("Optimality gap", ["n/a"]),
+        ("Run time", ["1.2 s"]),
+        ("AUC", ["0.844", "1.000"]),
+        ("ECE", ["32.7%", "23.4%"]),
+        ("Log loss", ["0.579", "0.295"]),
+    ]
 
 
 @pytest.mark.parametrize("weights", [RISK_SCORE_WEIGHTS, CHECKLIST_WEIGHTS], ids=["risk-score", "checklist"])
@@ -282,10 +303,13 @@ def test_report_of_a_classifier_fit_on_a_dataset_holds_every_component():
     for component in COMPONENTS:
         assert f'data-component="{component}"' in page
     assert data["model"]["items"]
-    assert [block["key"] for block in data["summary"]] == [
-        "dataset", "constraints", "training", "performance"]
-    (performance,) = [block for block in data["summary"] if block["key"] == "performance"]
-    assert all(len(row) == 1 + len(data["samples"]) for row in performance["rows"])
+    assert data["summary"]["columns"] == ["", *data["samples"]]
+    assert [row["key"] for row in data["summary"]["rows"]] == [
+        "n", "outcome_rate", "model_size", "point_range", "objective_value", "optimality_gap",
+        "run_time", "auc", "ece", "log_loss"]
+    per_sample = {"n", "outcome_rate", "auc", "ece", "log_loss"}
+    assert all(len(row["values"]) == (len(data["samples"]) if row["key"] in per_sample else 1)
+               for row in data["summary"]["rows"])
     for key in ("roc", "calibration"):
         # a trace is named for its legend entry: the sample, then its n, outcome rate and metric
         assert [trace["name"].split("<br>")[0] for trace in data["figures"][key]["data"]] == \
@@ -390,11 +414,19 @@ def report_dir(request, tmp_path_factory):
     return Path(directory)
 
 
-@pytest.fixture(scope="module", params=["risk_score", "checklist"])
-def saved_report(request, fitted, report_dir):
-    """One saved report page per model type, built and written once for all viewport widths."""
-    weights = {"risk_score": RISK_SCORE_WEIGHTS, "checklist": CHECKLIST_WEIGHTS}[request.param]
-    return make_report(fitted, weights).save(report_dir / f"{request.param}_report.html")
+@pytest.fixture(scope="module", params=["risk_score", "checklist", "wide_strip"])
+def saved_report(request, fitted, fitted_wide, report_dir):
+    """One saved report page per model type, built and written once for all viewport widths.
+
+    ``wide_strip`` is the strip's hard case: scores 1..17 with both tails collapsed, so the strip
+    is long and its widest cells ("1 to 4", "14 to 17") are about three times a bare score.
+    """
+    pages = {"risk_score": (fitted, RISK_SCORE_WEIGHTS, (X_TEST, Y_TEST)),
+             "checklist": (fitted, CHECKLIST_WEIGHTS, (X_TEST, Y_TEST)),
+             "wide_strip": (fitted_wide, [-9, 2, 1, -1], (None, None))}
+    classifier, weights, test = pages[request.param]
+    return make_report(classifier, weights, test=test).save(
+        report_dir / f"{request.param}_report.html")
 
 
 @pytest.fixture(scope="module")
@@ -438,5 +470,7 @@ def test_report_renders_in_browser_without_errors(chromium, saved_report, width)
         assert errors == []
         assert page.locator(".rs-model-table .rs-item-row").count() == len(items)
         assert page.locator(".js-plotly-plot").count() == 2
+        # the strip wraps to fit the card at this width instead of running off the side of it
+        assert page.evaluate(STRIP_FIT) == {"strip": 0, "card": 0, "page": 0}
     finally:
         page.close()

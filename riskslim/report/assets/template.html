@@ -27,27 +27,28 @@
 <header><h3>Model</h3></header>
 <div class="rs-slot" data-component="model-card">{% raw %}
   <table class="rs-model-table" :class="isChecklist ? 'rs-checklist' : 'rs-risk-score'">
-    <tbody>
-      <tr v-for="(item, i) in model.items" class="rs-item-row">
-        <td v-if="isChecklist" class="rs-box" aria-hidden="true">☐</td>
-        <td v-else class="rs-index">{{ i + 1 }}.</td>
-        <td class="rs-name">{{ itemName(item) }}</td>
-        <td v-if="!isChecklist || hasNegative" class="rs-points">{{ pointsLabel(item) }}</td>
-        <td v-if="!isChecklist" class="rs-tally">{{ i === 0 ? "" : "+" }} …</td>
-      </tr>
-      <tr v-if="model.items.length === 0"><td colspan="4">No items: every row gets the same score.</td></tr>
-    </tbody>
-    <tfoot v-if="!isChecklist && model.items.length">
+    <thead v-if="model.points_header">
       <tr>
-        <td></td>
-        <td>ADD POINTS FROM ROWS 1–{{ model.items.length }}</td>
-        <td class="rs-points">SCORE</td>
-        <td class="rs-tally">= …</td>
+        <th v-if="isChecklist"></th>
+        <th></th>
+        <th class="rs-points">{{ model.points_header }}</th>
       </tr>
-    </tfoot>
+    </thead>
+    <tbody>
+      <tr v-for="item in model.items" class="rs-item-row">
+        <td v-if="isChecklist" class="rs-box" aria-hidden="true">☐</td>
+        <td class="rs-name">{{ itemName(item) }}</td>
+        <td v-if="model.points_header" class="rs-points">{{ pointsLabel(item) }}</td>
+      </tr>
+      <tr v-if="model.items.length === 0"><td colspan="3">No items: every row gets the same score.</td></tr>
+    </tbody>
   </table>
   <p v-if="isChecklist" class="rs-rule">{{ model.rule }}</p>
-  <div v-if="wrapScores" class="rs-score-grid">
+  <div class="rs-score-grid">
+    <div class="rs-score-cell rs-score-head">
+      <span class="rs-score-label">{{ model.score_header }}</span>
+      <span class="rs-score-value">{{ model.risk_header }}</span>
+    </div>
     <div v-for="cell in model.score_to_risk"
          class="rs-score-cell"
          :class="{ 'rs-positive': cell.positive }">
@@ -55,38 +56,22 @@
       <span class="rs-score-value">{{ cell.risk }}</span>
     </div>
   </div>
-  <div v-else class="rs-score-risk">
-    <table>
-      <tbody>
-        <tr>
-          <th>{{ isChecklist ? "NET CHECKED" : "SCORE" }}</th>
-          <td v-for="cell in model.score_to_risk"
-              :class="{ 'rs-positive': cell.positive }">{{ cell.score }}</td>
-        </tr>
-        <tr>
-          <th>RISK</th>
-          <td v-for="cell in model.score_to_risk"
-              :class="{ 'rs-positive': cell.positive }">{{ cell.risk }}</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
 {% endraw %}</div>
 </article>
 <article class="rs-card">
 <header><h3>Summary</h3></header>
 <div class="rs-slot" data-component="summary-table">{% raw %}
   <table class="rs-summary-table">
-    <tbody v-for="block in blocks">
-      <tr class="rs-block-head">
-        <th>{{ block.title }}</th>
-        <th v-for="(column, j) in block.columns.slice(1)" class="rs-num"
-            :colspan="span(block, j)">{{ column }}</th>
+    <thead>
+      <tr>
+        <th>{{ summary.columns[0] }}</th>
+        <th v-for="column in summary.columns.slice(1)" class="rs-num">{{ column }}</th>
       </tr>
-      <tr v-for="row in block.rows">
-        <td>{{ row[0] }}</td>
-        <td v-for="(value, j) in row.slice(1)" class="rs-num"
-            :colspan="span(block, j)">{{ value }}</td>
+    </thead>
+    <tbody>
+      <tr v-for="row in summary.rows">
+        <td>{{ row.label }}</td>
+        <td v-for="value in row.values" class="rs-num" :colspan="span(row)">{{ value }}</td>
       </tr>
     </tbody>
   </table>
