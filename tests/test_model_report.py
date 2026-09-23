@@ -8,6 +8,12 @@ once on the training rows; each report is built from a copy of it carrying a fix
 vector and fixed solver statistics, with the test rows passed as X_test / y_test, so expected
 values are literals worked out by hand, not recomputed.
 
+One end-to-end test skips the fixture: it reads data/breastcancer_data.csv into a
+BinaryClassificationDataset, fits a small model and its 5 fold models (fit, then fit_cv on the
+dataset's folds), and checks only that clf.report(data=...) builds a page holding every component
+(model card, summary table, ROC, calibration) and both samples (Training, 5-CV). It asserts
+presence, not values or appearance.
+
 Dimensions:
   model type:   risk_score (points 2, 1, -1), checklist (+1 items only), checklist (with a -1 item)
                 -- inferred from the coefficients; model_type="risk_score" overrides a checklist
@@ -71,6 +77,8 @@ CDN_URLS = [
 ]
 DATA_BLOCK = re.compile(r'<script type="application/json" id="report-data">(.*?)</script>', re.S)
 HOSTILE_NAMES = ["a</script><script>alert(1)</script>", "b<!-- c", "c"]
+BREASTCANCER_FILE = Path(__file__).parents[1] / "data" / "breastcancer_data.csv"
+COMPONENTS = ["model-card", "summary-table", "roc-plot", "calibration-plot"]
 
 
 def fit_classifier(X=X_TRAIN, y=Y_TRAIN):
@@ -233,6 +241,29 @@ def test_html_holds_one_data_block_that_round_trips(fitted):
     assert set(hostile_report.data) == DATA_KEYS
     assert set(hostile_report.data["figures"]) == {"roc", "calibration"}
     assert all(url in hostile_report.html for url in CDN_URLS)
+
+
+def test_report_of_a_classifier_fit_on_a_dataset_holds_every_component():
+    dataset = BinaryClassificationDataset.read_csv(BREASTCANCER_FILE, n_folds=(5,))
+    X, y = dataset.X, dataset.y
+    classifier = RiskSLIMClassifier(max_size=3, max_coef=5, verbose=False, max_runtime=5,
+                                    cplex_randomseed=0)
+    classifier.fit(X, y).fit_cv(X, y, data=dataset)
+
+    page = classifier.report(data=dataset).html
+    (block,) = DATA_BLOCK.findall(page)
+    data = json.loads(block)
+
+    assert data["samples"] == ["Training", "5-CV"]
+    for component in COMPONENTS:
+        assert f'data-component="{component}"' in page
+    assert data["model"]["items"]
+    assert [block["key"] for block in data["summary"]] == [
+        "dataset", "constraints", "training", "performance"]
+    (performance,) = [block for block in data["summary"] if block["key"] == "performance"]
+    assert all(len(row) == 1 + len(data["samples"]) for row in performance["rows"])
+    for key in ("roc", "calibration"):
+        assert [trace["name"] for trace in data["figures"][key]["data"]] == data["samples"]
 
 
 def test_save_and_notebook_display_carry_the_same_html(report, tmp_path):
