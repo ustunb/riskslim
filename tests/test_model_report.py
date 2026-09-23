@@ -20,8 +20,8 @@ Dimensions:
   label coding: {0, 1}, {-1, 1}    -- both must map to the same positive class (one fit each)
   samples:      Training only, Training + Test (the test sample has no row with score 1)
   figure:       roc, calibration   -- one trace per sample, plotted straight from the data block's
-                                      roc / calibration sections, plus a top-left metrics box
-                                      (AUC / calibration error)
+                                      roc / calibration sections, each named for its legend entry
+                                      (sample, n and outcome rate, AUC / ECE)
   label text:   contains "</script>" and "<!--"  -- must not end the JSON data block early (a
                                       plain label is the same path with nothing to escape, so it
                                       is not a separate case)
@@ -263,7 +263,9 @@ def test_report_of_a_classifier_fit_on_a_dataset_holds_every_component():
     (performance,) = [block for block in data["summary"] if block["key"] == "performance"]
     assert all(len(row) == 1 + len(data["samples"]) for row in performance["rows"])
     for key in ("roc", "calibration"):
-        assert [trace["name"] for trace in data["figures"][key]["data"]] == data["samples"]
+        # a trace is named for its legend entry: the sample, then its n, outcome rate and metric
+        assert [trace["name"].split("<br>")[0] for trace in data["figures"][key]["data"]] == \
+            data["samples"]
 
 
 def test_save_and_notebook_display_carry_the_same_html(report, tmp_path):
@@ -275,31 +277,32 @@ def test_save_and_notebook_display_carry_the_same_html(report, tmp_path):
     assert html.unescape(srcdoc) == report.html
 
 
-@pytest.mark.parametrize("key, coordinates, metrics_text", [
-    ("roc", ("fpr", "tpr"), [("Training", "0.844"), ("Test", "1.000")]),
-    ("calibration", ("predicted", "observed"), [("Training", "32.7%"), ("Test", "23.4%")]),
+@pytest.mark.parametrize("key, coordinates, legend_names", [
+    ("roc", ("fpr", "tpr"), ["Training<br>(n = 8 p = 50.0%)<br>AUC = 0.844",
+                             "Test<br>(n = 4 p = 50.0%)<br>AUC = 1.000"]),
+    ("calibration", ("predicted", "observed"), ["Training<br>(n = 8 p = 50.0%)<br>ECE = 32.7%",
+                                                "Test<br>(n = 4 p = 50.0%)<br>ECE = 23.4%"]),
 ])
-def test_figure_plots_each_sample_section_with_a_top_left_metrics_box(report, key, coordinates,
-                                                                     metrics_text):
+def test_figure_plots_each_sample_section_and_names_its_trace_for_the_legend(report, key,
+                                                                            coordinates,
+                                                                            legend_names):
     figure = report.data["figures"][key]
     x_field, y_field = coordinates
 
     go.Figure(figure)  # raises on invalid Plotly properties
-    assert [trace["name"] for trace in figure["data"]] == ["Training", "Test"]
+    # the sample's n, outcome rate and metric are the legend entry, not a box on the panel
+    assert "annotations" not in figure["layout"]
+    assert [trace["name"] for trace in figure["data"]] == legend_names
     for trace, name in zip(figure["data"], ["Training", "Test"]):
         assert trace["x"] == report.data[key][name][x_field]
         assert trace["y"] == report.data[key][name][y_field]
-    (box,) = figure["layout"]["annotations"]
-    assert (box["xref"], box["yref"], box["xanchor"], box["yanchor"]) == (
-        "paper", "paper", "left", "top")
-    assert box["x"] <= 0.05 and box["y"] >= 0.95
-    for name, value in metrics_text:
-        assert re.search(rf"{re.escape(name)}\D{{0,12}}{re.escape(value)}", box["text"]), box["text"]
+        assert trace["hovertemplate"].endswith(f"<extra>{name}</extra>")  # hover names the sample
 
 
 def test_calibration_bubbles_are_labelled_with_scores_and_sized_by_n(report):
     train, test = report.data["figures"]["calibration"]["data"]
 
+    assert train["textposition"] == "top center"  # outside the bubble, so the label is readable
     assert train["text"] == ["-1", "0", "1", "2", "3"]
     assert test["text"] == ["-1", "0", "2", "3"]
     # train n = [1, 2, 2, 2, 1]; test n = [1, 1, 1, 1]
@@ -320,16 +323,19 @@ def test_plot_template_holds_the_same_palette_as_the_stylesheet(report):
     tokens = {name: value.strip() for name, value in
               re.findall(r"(--[\w-]+):\s*([^;]+);", (ASSETS / "styles.css").read_text())}
     layout = pio.templates[TEMPLATE_NAME].layout
-    (box,) = report.data["figures"]["roc"]["layout"]["annotations"]
+    (diagonal,) = report.data["figures"]["roc"]["layout"]["shapes"]
 
     assert layout.font.family == tokens["--pico-font-family"]
     assert layout.paper_bgcolor == layout.plot_bgcolor == tokens["--rs-bg"]
-    assert layout.font.color == layout.xaxis.linecolor == layout.yaxis.linecolor == \
-        layout.xaxis.title.font.color == layout.yaxis.title.font.color == tokens["--rs-ink"]
+    assert layout.font.color == layout.xaxis.title.font.color == \
+        layout.yaxis.title.font.color == tokens["--rs-ink"]
     assert layout.xaxis.gridcolor == layout.yaxis.gridcolor == tokens["--rs-grid"]
-    assert layout.xaxis.tickfont.color == layout.yaxis.tickfont.color == tokens["--rs-muted"]
+    # the panel frame, the ticks and the diagonal are the grid colour, lighter than the data
+    assert layout.xaxis.linecolor == layout.yaxis.linecolor == tokens["--rs-grid"]
+    assert layout.xaxis.tickcolor == layout.yaxis.tickcolor == tokens["--rs-grid"]
+    assert diagonal["line"]["color"] == tokens["--rs-grid"]
+    assert layout.xaxis.tickfont.color == layout.yaxis.tickfont.color == tokens["--rs-axis-text"]
     assert list(layout.colorway) == [tokens[f"--rs-sample-{i}"] for i in (1, 2, 3)]
-    assert (box["bgcolor"], box["bordercolor"]) == (tokens["--rs-stripe"], tokens["--rs-grid"])
 
 
 @pytest.fixture(scope="module")

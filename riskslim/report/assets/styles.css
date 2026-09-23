@@ -3,17 +3,17 @@
    a test asserts the two agree, so the values below and the template's cannot drift apart. */
 :root {
   --rs-ink: #1F2933;
+  --rs-axis-text: #4D4D4D;  /* tick labels: readable on white, unlike --rs-muted */
   --rs-muted: #98A2AD;
   --rs-grid: #DFE4E9;
-  --rs-sample-1: #2F6FB3;  /* train */
-  --rs-sample-2: #E07B39;  /* test */
-  --rs-sample-3: #10B981;  /* third sample */
+  --rs-sample-1: #000000;  /* train */
+  --rs-sample-2: #D2B48C;  /* test (tan) */
+  --rs-sample-3: #BEBEBE;  /* CV folds (grey) */
   --rs-highlight: #FFE699;
   --rs-stripe: #F2F2F2;
   --rs-risk: #DDEBF7;
   --rs-bg: #FFFFFF;
-  --rs-plot-height: 360px;
-  --pico-font-family: -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --pico-font-family: "Helvetica Neue", Helvetica, Arial, "Nimbus Sans", "Liberation Sans", sans-serif;
   --pico-font-size: 15px;
   --pico-color: var(--rs-ink);
 }
@@ -101,4 +101,5 @@
 .rs-summary-table td { border-bottom: 1px solid var(--rs-grid); }
 .rs-summary-table .rs-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
-.rs-plot { width: 100%; min-height: var(--rs-plot-height); }
+/* square panel, like the R's coord_fixed(): the figure is as tall as it is wide */
+.rs-plot { width: 100%; aspect-ratio: 1 / 1; }

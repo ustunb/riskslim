@@ -25,9 +25,10 @@ Conventions
 - **Score range:** ``sum(points * [min, max])`` of each item over the training data (a binary
   item contributes ``points * [0, 1]``). The score-to-risk row lists every achievable total when
   all item values are integers, and otherwise the totals observed in the samples.
-- **Calibration error:** the n-weighted mean of ``|predicted - observed|`` over score bins. Score
-  bins with no rows in a sample are absent from that sample. A CV sample pools fold models, so
-  one score can fall in several bins, one per fold intercept.
+- **Calibration error:** ``|predicted - observed|`` per score bin (``local_error``), and their
+  n-weighted mean over the sample (``error``). Score bins with no rows in a sample are absent
+  from that sample. A CV sample pools fold models, so one score can fall in several bins, one
+  per fold intercept.
 """
 
 import html
@@ -36,7 +37,6 @@ import math
 import warnings
 from functools import cache
 from importlib.resources import files
-from itertools import cycle
 from pathlib import Path
 
 import numpy as np
@@ -77,35 +77,44 @@ SCRIPTS = ("model_card.js", "summary_table.js", "roc_plot.js", "calibration_plot
 # The two hold the same palette in their own idiom, and a test asserts they agree.
 # ---------------------------------------------------------------------------
 TEMPLATE_NAME = "riskslim"
-FONT_FAMILY = '-apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif'
+FONT_FAMILY = '"Helvetica Neue", Helvetica, Arial, "Nimbus Sans", "Liberation Sans", sans-serif'
 INK = "#1F2933"
-MUTED = "#98A2AD"
+AXIS_TEXT = "#4D4D4D"
 GRID = "#DFE4E9"
-STRIPE = "#F2F2F2"
 BACKGROUND = "#FFFFFF"
-SAMPLE_COLORS = ["#2F6FB3", "#E07B39", "#10B981"]  # one per sample, in page order
-BUBBLE_PX = (14, 34)  # calibration bubble diameter for the smallest and largest n
+SAMPLE_COLORS = ["#000000", "#D2B48C", "#BEBEBE"]  # one per sample, in page order
+BUBBLE_PX = (8, 20)  # calibration bubble diameter for the smallest and largest n
+AXIS_RANGE = [-0.02, 1.02]  # both axes of both figures: 0 to 1, with room for a marker on the edge
 
+# Both axes of both figures: a light four-sided frame (no dark axis L), percent ticks every 20%.
 AXIS = {
-    "showgrid": True, "gridcolor": GRID, "zeroline": False, "showline": True, "linecolor": INK,
-    "ticks": "outside", "ticklen": 3, "fixedrange": True, "dtick": 0.2,
-    "tickfont": {"size": 11, "color": MUTED},
-    "title": {"font": {"size": 12, "color": INK}},
+    "showgrid": True, "gridcolor": GRID, "zeroline": False,
+    "showline": True, "linecolor": GRID, "linewidth": 2, "mirror": True,
+    "ticks": "outside", "ticklen": 3, "tickcolor": GRID,
+    "fixedrange": True, "range": AXIS_RANGE, "dtick": 0.2, "tickformat": ".0%",
+    "tickfont": {"size": 14, "color": AXIS_TEXT},
+    "title": {"font": {"size": 15, "color": INK}},
 }
 
 # Registered, not made the default: importing riskslim must not restyle anyone else's plots.
 pio.templates[TEMPLATE_NAME] = go.layout.Template(layout=go.Layout(
     autosize=True,
-    font={"family": FONT_FAMILY, "size": 11, "color": INK},
+    font={"family": FONT_FAMILY, "size": 12, "color": INK},
     paper_bgcolor=BACKGROUND,
     plot_bgcolor=BACKGROUND,
     colorway=SAMPLE_COLORS,
-    margin={"t": 36, "r": 12, "b": 48, "l": 56},
+    # r and t leave room for the last tick label and for a bubble label overhanging the frame
+    margin={"t": 24, "r": 24, "b": 64, "l": 72},
     hovermode="closest",
     dragmode=False,
-    legend={"orientation": "h", "x": 1, "xanchor": "right", "y": 1.01, "yanchor": "bottom"},
+    # inside the panel, bottom right: the ROC curve owns the top left and the calibration points
+    # follow the diagonal, so that corner is empty in both figures
+    legend={"orientation": "v", "x": 0.98, "xanchor": "right", "y": 0.02, "yanchor": "bottom",
+            "bgcolor": "rgba(255,255,255,0)", "borderwidth": 0, "tracegroupgap": 8,
+            "font": {"size": 12, "color": INK}},
     xaxis=AXIS,
-    yaxis=AXIS,
+    # a square data space to go with the square panel: one unit of risk is one unit either way
+    yaxis={**AXIS, "scaleanchor": "x", "scaleratio": 1, "constrain": "domain"},
 ))
 
 
@@ -171,20 +180,21 @@ class ModelReport:
         log_loss = {name: float(log_loss_value_from_scores((2 * y - 1) * (score + b)))
                     for name, (y, score, b) in scored.items()}
         names = list(scored)
+        summary = summary_section({name: y for name, (y, _, _) in scored.items()}, model,
+                                  roc, calibration, log_loss, self.training, self.constraints)
         self.data = {
             "schema_version": SCHEMA_VERSION,
             "title": f"{MODEL_TYPES[self.model_type]}: {self.outcome_name}",
             "outcome_name": self.outcome_name,
             "samples": names,
             "model": model,
-            "summary": summary_section({name: y for name, (y, _, _) in scored.items()}, model,
-                                       roc, calibration, log_loss, self.training,
-                                       self.constraints),
+            "summary": summary,
             "roc": roc,
             "calibration": calibration,
         }
-        self.data["figures"] = {"roc": roc_figure(names, roc),
-                                "calibration": calibration_figure(names, calibration)}
+        labels = sample_labels(summary, names)
+        self.data["figures"] = {"roc": roc_figure(names, roc, labels),
+                                "calibration": calibration_figure(names, calibration, labels)}
 
     @property
     def html(self):
@@ -426,10 +436,11 @@ def roc_section(y, score, intercept):
 
 
 def calibration_section(y, score, intercept):
-    """Per score bin: predicted risk, observed rate and n; n-weighted calibration error.
+    """Per score bin: predicted risk, observed rate, n and local error; and the sample's error.
 
     A bin is the rows sharing a score and a risk: one bin per score for one model, one per
-    score and fold intercept for a CV sample.
+    score and fold intercept for a CV sample. ``local_error`` is that bin's
+    ``|predicted - observed|``; ``error`` is their n-weighted mean.
     """
     margin = np.broadcast_to(score + intercept, score.shape)
     bins, inverse, n = np.unique(np.column_stack([score, margin]), axis=0,
@@ -443,6 +454,7 @@ def calibration_section(y, score, intercept):
         "predicted": [float(v) for v in predicted],
         "observed": [float(v) for v in observed],
         "n": [int(v) for v in n],
+        "local_error": [float(v) for v in np.abs(predicted - observed)],
         "error": float(np.sum(n * np.abs(predicted - observed)) / np.sum(n)),
     }
 
@@ -504,75 +516,73 @@ def fmt(value, template):
 # serialized to the plain JSON the data block carries to ``Plotly.newPlot``.
 # ---------------------------------------------------------------------------
 
-def sample_colors(names):
-    """One palette colour per sample, in order -- the colorway the traces themselves get."""
-    return [color for _, color in zip(names, cycle(SAMPLE_COLORS))]
+def sample_labels(summary, names):
+    """``{sample: "Training<br>(n = 8,815 p = 12.4%)"}``: the legend's first two lines.
+
+    n and the outcome rate are the strings the summary's dataset block already shows, so the
+    legend and the table cannot round the same number two ways.
+    """
+    (dataset,) = [block for block in summary if block["key"] == "dataset"]
+    counts, rates = dataset["rows"]
+    return {name: f"{name}<br>(n = {n} p = {p})"
+            for name, n, p in zip(names, counts[1:], rates[1:])}
 
 
-def roc_figure(names, sections):
-    """One ROC curve per sample with a point at each score threshold; AUC box top-left."""
+def roc_figure(names, sections, labels):
+    """One ROC curve per sample with a point at each score threshold; AUC in the legend."""
     traces = []
     for name in names:
         roc = sections[name]
-        labels = ["none" if i == 0 else "scores differ by fold" if t is None else f"score ≥ {t}"
-                  for i, t in enumerate(roc["thresholds"])]
+        thresholds = ["none" if i == 0 else "scores differ by fold" if t is None else f"score ≥ {t}"
+                      for i, t in enumerate(roc["thresholds"])]
         traces.append(go.Scatter(
-            mode="lines+markers", name=name,
-            x=roc["fpr"], y=roc["tpr"], customdata=labels,
-            line={"width": 2}, marker={"size": 6},
+            mode="lines+markers", name=f"{labels[name]}<br>AUC = {roc['auc']:.3f}",
+            x=roc["fpr"], y=roc["tpr"], customdata=thresholds,
+            line={"width": 2}, marker={"size": 12},
             hovertemplate="%{customdata}<br>FPR %{x:.1%} · TPR %{y:.1%}"
                           f"<extra>{name}</extra>",
         ))
-    metrics = [(name, f"{sections[name]['auc']:.3f}") for name in names]
-    layout = figure_layout("False positive rate", "True positive rate", "AUC", metrics, names)
-    return go.Figure(traces, layout).to_plotly_json()
+    return go.Figure(traces, figure_layout("False positive rate",
+                                           "True positive rate")).to_plotly_json()
 
 
-def calibration_figure(names, sections):
-    """Bubbles per score, sized by n and labelled with the score; CAL box top-left."""
+def calibration_figure(names, sections, labels):
+    """Bubbles per score, sized by n and labelled with the score; ECE in the legend."""
     n_max = max(n for name in names for n in sections[name]["n"])
     d_min, d_max = BUBBLE_PX
     traces = []
     for name in names:
         cal = sections[name]
         traces.append(go.Scatter(
-            mode="markers+text", name=name,
+            mode="markers+text", name=f"{labels[name]}<br>ECE = {cal['error']:.1%}",
             x=cal["predicted"], y=cal["observed"],
-            text=[str(s) for s in cal["scores"]], customdata=[[n] for n in cal["n"]],
-            textposition="middle center",
-            textfont={"size": 9, "color": BACKGROUND},
+            text=[str(s) for s in cal["scores"]],
+            customdata=[[n, e] for n, e in zip(cal["n"], cal["local_error"])],
+            textposition="top center",
+            textfont={"size": 11, "color": INK},
             cliponaxis=False,
             marker={"opacity": 0.85, "line": {"color": BACKGROUND, "width": 1},
                     "size": [round(d_min + (d_max - d_min) * math.sqrt(n / n_max), 2)
                              for n in cal["n"]]},
             hovertemplate="score %{text}<br>predicted risk %{x:.1%}<br>"
-                          "observed risk %{y:.1%}<br>n = %{customdata[0]:,}"
+                          "observed risk %{y:.1%}<br>calibration error %{customdata[1]:.1%}<br>"
+                          "n = %{customdata[0]:,}"
                           f"<extra>{name}</extra>",
         ))
-    metrics = [(name, f"{sections[name]['error']:.1%}") for name in names]
-    layout = figure_layout("Predicted risk", "Observed risk", "CAL", metrics, names,
-                           axis_overrides={"range": [-0.03, 1.03], "tickformat": ".0%"})
-    return go.Figure(traces, layout).to_plotly_json()
+    return go.Figure(traces, figure_layout("Predicted risk", "Observed risk")).to_plotly_json()
 
 
-def figure_layout(x_title, y_title, box_label, metrics, names, axis_overrides=None):
-    """What one figure adds to the template: axis titles and range, diagonal, metrics box."""
-    axis = {"range": [-0.02, 1.02], **(axis_overrides or {})}
-    lines = [f"<b>{box_label}</b>"] + [
-        f'<span style="color:{color}">{name}</span> {value}'
-        for (name, value), color in zip(metrics, sample_colors(names))
-    ]
+def figure_layout(x_title, y_title):
+    """What one figure adds to the template: its axis titles and the diagonal.
+
+    The diagonal is drawn in the grid colour, deliberately lighter than the data that crosses it.
+    """
     return go.Layout(
         template=TEMPLATE_NAME,
-        xaxis={**axis, "title": {"text": x_title}},
-        yaxis={**axis, "title": {"text": y_title}},
+        xaxis={"title": {"text": x_title}},
+        yaxis={"title": {"text": y_title}},
         shapes=[go.layout.Shape(type="line", x0=0, y0=0, x1=1, y1=1, layer="below",
-                                line={"color": MUTED, "width": 1, "dash": "dash"})],
-        annotations=[go.layout.Annotation(
-            xref="paper", yref="paper", x=0.02, y=0.98,
-            xanchor="left", yanchor="top", align="left", showarrow=False,
-            text="<br>".join(lines), bgcolor=STRIPE, bordercolor=GRID, borderpad=4,
-        )],
+                                line={"color": GRID, "width": 1, "dash": "dash"})],
     )
 
 
