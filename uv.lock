@@ -59,6 +59,15 @@ wheels = [
 ]
 
 [[package]]
+name = "dill"
+version = "0.4.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/81/e1/56027a71e31b02ddc53c7d65b01e68edf64dea2932122fe7746a516f75d5/dill-0.4.1.tar.gz", hash = "sha256:423092df4182177d4d8ba8290c8a5b640c66ab35ec7da59ccfa00f6fa3eea5fa", size = 187315, upload-time = "2026-01-19T02:36:56.85Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1e/77/dc8c558f7593132cf8fefec57c4f60c83b16941c574ac5f619abb3ae7933/dill-0.4.1-py3-none-any.whl", hash = "sha256:1e1ce33e978ae97fcfcff5638477032b801c46c7c65cf717f95fbc2248f79a9d", size = 120019, upload-time = "2026-01-19T02:36:55.663Z" },
+]
+
+[[package]]
 name = "greenlet"
 version = "3.5.6"
 source = { registry = "https://pypi.org/simple" }
@@ -133,6 +142,25 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e0/36/b35747582fa4f1a5453f8f3002405dbac788e450cec7674dc2d204b6ccb5/greenlet-3.5.6-cp315-cp315t-musllinux_1_2_x86_64.whl", hash = "sha256:de9923832f2d8c1a5ecd8d7260465a6ca5a86888a0d129e3bd5cf0406d2fc5bf", size = 1702383, upload-time = "2026-09-14T14:35:58.143Z" },
     { url = "https://files.pythonhosted.org/packages/ed/69/6ec22ac9351e474d2a134d0ff9400dc80362d1c20f0721088ffffdfc205b/greenlet-3.5.6-cp315-cp315t-win_amd64.whl", hash = "sha256:2ab5f42ac6c238eb71770715e6e909ad9a1a92b6c681ccb64cd5a0f07edb953f", size = 331845, upload-time = "2026-09-14T14:27:41.723Z" },
     { url = "https://files.pythonhosted.org/packages/30/cf/697c051fd534e223461fb8b523890e21a24eeca229cd50624cff6f02fabd/greenlet-3.5.6-cp315-cp315t-win_arm64.whl", hash = "sha256:f9fe868463ec7e1363733af77e38a5fda3e9b63940337048c945d69e0c80ff24", size = 315070, upload-time = "2026-09-14T14:22:21.476Z" },
+]
+
+[[package]]
+name = "imbalanced-learn"
+version = "0.14.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "joblib" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "scikit-learn" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "sklearn-compat" },
+    { name = "threadpoolctl" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ad/35/d12fc1e8e2c2d8862104c4527641fe2d839324c50db0e6340dc73513faba/imbalanced_learn-0.14.2.tar.gz", hash = "sha256:f80ce7eafbcece8686e32571bd12978546c729c3f277215bead61a906ce9afe4", size = 19172446, upload-time = "2026-06-07T21:41:16.638Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/91/54/760ccac7d8feeea0c191767a6b025d3ca5014084443ff48afb6fb24ef056/imbalanced_learn-0.14.2-py3-none-any.whl", hash = "sha256:f9b81c47231aa1e3a71a1e4b3cc85b42e3b14f85e3a36922f3323c4da23605ef", size = 236073, upload-time = "2026-06-07T21:41:12.384Z" },
 ]
 
 [[package]]
@@ -588,6 +616,8 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "cplex" },
+    { name = "dill" },
+    { name = "imbalanced-learn" },
     { name = "jinja2" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -612,8 +642,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cplex", specifier = ">=22.1.2.1" },
+    { name = "dill" },
+    { name = "imbalanced-learn" },
     { name = "jinja2", specifier = ">=3.1.6" },
-    { name = "numpy", specifier = ">=1.26" },
+    { name = "numpy", specifier = ">=2.2" },
     { name = "packaging" },
     { name = "pandas" },
     { name = "prettytable" },
@@ -875,6 +907,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
+]
+
+[[package]]
+name = "sklearn-compat"
+version = "0.1.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "scikit-learn" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bf/7e/302cb51f8735bad67f5ce088d027a1e299789d8555967c9642656fa36da0/sklearn_compat-0.1.6.tar.gz", hash = "sha256:8fd4731b4f709b66641b8f49c954dafec7e3b60afc48f2cfd298356c713277c6", size = 178018, upload-time = "2026-06-07T19:00:28.409Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b0/20/47a7e947757008be1b77f1c6a6861d26a84ef4b4ea3e6ebf4eff24f24d5d/sklearn_compat-0.1.6-py3-none-any.whl", hash = "sha256:b555db6c09d21eb50ee4a767dc08478a865f33f0e42b3ff8fc33f33c616bd7c1", size = 22868, upload-time = "2026-06-07T19:00:27.242Z" },
 ]
 
 [[package]]

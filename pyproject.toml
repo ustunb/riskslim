@@ -13,7 +13,7 @@ authors = [
   { name = "Berk Ustun", email = "berk@ucsd.edu" },
 ]
 dependencies = [
-  "numpy>=1.26",
+  "numpy>=2.2",
   "scipy",
   "pandas",
   "scikit-learn>=1.6",
@@ -21,6 +21,8 @@ dependencies = [
   "cplex>=22.1.2.1",
   "packaging",
   "jinja2>=3.1.6",
+  "imbalanced-learn",
+  "dill",
 ]
 
 classifiers = [
