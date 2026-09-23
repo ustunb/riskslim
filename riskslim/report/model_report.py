@@ -26,7 +26,7 @@ Conventions
 import html
 import json
 import math
-from functools import cache, cached_property
+from functools import cache
 from importlib.resources import files
 from itertools import cycle
 from pathlib import Path
@@ -56,17 +56,8 @@ SCRIPTS = ("model_card.js", "summary_table.js", "roc_plot.js", "calibration_plot
 # them before drawing (see drawFigure in assets/mount_report.js), so assets/styles.css
 # is the only place a colour, the font or the plot height is written.
 # ---------------------------------------------------------------------------
-STYLE = {
-    "ink": "var(--rs-ink)",
-    "muted": "var(--rs-muted)",
-    "grid": "var(--rs-grid)",
-    "stripe": "var(--rs-stripe)",
-    "bg": "var(--rs-bg)",
-    "font": "var(--pico-font-family)",
-    "height": "var(--rs-plot-height)",
-    "samples": ["var(--rs-sample-1)", "var(--rs-sample-2)", "var(--rs-sample-3)"],
-    "bubble_px": (14, 34),  # calibration bubble diameter for the smallest and largest n
-}
+SAMPLE_COLORS = ["var(--rs-sample-1)", "var(--rs-sample-2)", "var(--rs-sample-3)"]
+BUBBLE_PX = (14, 34)  # calibration bubble diameter for the smallest and largest n
 
 
 class ModelReport:
@@ -97,15 +88,11 @@ class ModelReport:
 
     def __init__(self, rho, variable_names, outcome_name, samples, training=None,
                  constraints=None, model_type=None):
-        self.rho = np.asarray(rho, dtype=float).ravel()
-        self.variable_names = list(variable_names)
+        self.rho, self.variable_names = checked_coefficients(rho, variable_names)
         self.outcome_name = str(outcome_name)
         self.training = training
         self.constraints = dict(constraints or {})
-        if model_type is not None and model_type not in MODEL_TYPES:
-            raise ValueError(f"model_type must be one of {tuple(MODEL_TYPES)}; got {model_type!r}")
-        self.check_inputs()
-        self.model_type = infer_model_type(self.rho[1:]) if model_type is None else model_type
+        self.model_type = checked_model_type(model_type, self.rho[1:])
 
         # samples stay local: the page needs only what they produce, and holding them would pin
         # a float64 copy of every X for the report's lifetime
@@ -135,20 +122,9 @@ class ModelReport:
         self.data["figures"] = {"roc": roc_figure(names, roc),
                                 "calibration": calibration_figure(names, calibration)}
 
-    def check_inputs(self):
-        """Check the coefficients and their names; raise on the first problem."""
-        rho, names = self.rho, self.variable_names
-        if len(names) != len(rho) or not names or names[0] != INTERCEPT_NAME:
-            raise ValueError(
-                f"rho and variable_names must have the same length with {INTERCEPT_NAME!r} first; "
-                f"got {len(rho)} coefficients and names {names[:3]}..."
-            )
-        if not np.all(np.isfinite(rho)):
-            raise ValueError(f"rho must be finite; got {rho.tolist()}")
-
-    @cached_property
+    @property
     def html(self):
-        """The report page as a string, rendered once."""
+        """The report page as a string."""
         shell, styles, scripts = load_assets()
         return shell.render(title=self.data["title"], styles=styles, scripts=scripts,
                             data=Markup(json_for_script(self.data)))
@@ -174,6 +150,29 @@ def infer_model_type(points):
     if nonzero.size > 0 and np.all(np.abs(nonzero) == 1):
         return "checklist"
     return "risk_score"
+
+
+def checked_coefficients(rho, variable_names):
+    """Validate the coefficients and their names; return them as an array and a list."""
+    rho = np.asarray(rho, dtype=float).ravel()
+    names = list(variable_names)
+    if len(names) != len(rho) or not names or names[0] != INTERCEPT_NAME:
+        raise ValueError(
+            f"rho and variable_names must have the same length with {INTERCEPT_NAME!r} first; "
+            f"got {len(rho)} coefficients and names {names[:3]}..."
+        )
+    if not np.all(np.isfinite(rho)):
+        raise ValueError(f"rho must be finite; got {rho.tolist()}")
+    return rho, names
+
+
+def checked_model_type(model_type, points):
+    """Validate the model type, or infer it from the coefficients when None."""
+    if model_type is None:
+        return infer_model_type(points)
+    if model_type not in MODEL_TYPES:
+        raise ValueError(f"model_type must be one of {tuple(MODEL_TYPES)}; got {model_type!r}")
+    return model_type
 
 
 def checked_samples(samples, n_features):
@@ -348,7 +347,7 @@ def fmt(value, template):
 
 def sample_colors(names):
     """One palette colour per sample, in order."""
-    return [color for _, color in zip(names, cycle(STYLE["samples"]))]
+    return [color for _, color in zip(names, cycle(SAMPLE_COLORS))]
 
 
 def roc_figure(names, sections):
@@ -373,7 +372,7 @@ def roc_figure(names, sections):
 def calibration_figure(names, sections):
     """Bubbles per score, sized by n and labelled with the score; CAL box top-left."""
     n_max = max(n for name in names for n in sections[name]["n"])
-    d_min, d_max = STYLE["bubble_px"]
+    d_min, d_max = BUBBLE_PX
     colors = sample_colors(names)
     traces = []
     for name, color in zip(names, colors):
@@ -383,9 +382,9 @@ def calibration_figure(names, sections):
             "x": cal["predicted"], "y": cal["observed"],
             "text": [str(s) for s in cal["scores"]], "customdata": [[n] for n in cal["n"]],
             "textposition": "middle center",
-            "textfont": {"size": 9, "color": STYLE["bg"]},
+            "textfont": {"size": 9, "color": "var(--rs-bg)"},
             "cliponaxis": False,
-            "marker": {"color": color, "opacity": 0.85, "line": {"color": STYLE["bg"], "width": 1},
+            "marker": {"color": color, "opacity": 0.85, "line": {"color": "var(--rs-bg)", "width": 1},
                        "size": [round(d_min + (d_max - d_min) * math.sqrt(n / n_max), 2)
                                 for n in cal["n"]]},
             "hovertemplate": "score %{text}<br>predicted risk %{x:.1%}<br>"
@@ -401,10 +400,10 @@ def calibration_figure(names, sections):
 def figure_layout(x_title, y_title, box_label, metrics, colors, axis_overrides=None):
     """Shared axes, fonts, diagonal and the top-left metrics box."""
     axis = {
-        "showgrid": True, "gridcolor": STYLE["grid"], "zeroline": False, "showline": True,
-        "linecolor": STYLE["ink"], "ticks": "outside", "ticklen": 3, "fixedrange": True,
-        "tickfont": {"size": 11, "color": STYLE["muted"]},
-        "title": {"font": {"size": 12, "color": STYLE["ink"]}},
+        "showgrid": True, "gridcolor": "var(--rs-grid)", "zeroline": False, "showline": True,
+        "linecolor": "var(--rs-ink)", "ticks": "outside", "ticklen": 3, "fixedrange": True,
+        "tickfont": {"size": 11, "color": "var(--rs-muted)"},
+        "title": {"font": {"size": 12, "color": "var(--rs-ink)"}},
         "range": [-0.02, 1.02], "dtick": 0.2,
         **(axis_overrides or {}),
     }
@@ -413,22 +412,22 @@ def figure_layout(x_title, y_title, box_label, metrics, colors, axis_overrides=N
         for (name, value), color in zip(metrics, colors)
     ]
     return {
-        "height": STYLE["height"], "autosize": True,
+        "autosize": True,
         "margin": {"t": 36, "r": 12, "b": 48, "l": 56},
-        "font": {"family": STYLE["font"], "size": 11, "color": STYLE["ink"]},
-        "paper_bgcolor": STYLE["bg"], "plot_bgcolor": STYLE["bg"],
+        "font": {"family": "var(--pico-font-family)", "size": 11, "color": "var(--rs-ink)"},
+        "paper_bgcolor": "var(--rs-bg)", "plot_bgcolor": "var(--rs-bg)",
         "xaxis": {**axis, "title": {**axis["title"], "text": x_title}},
         "yaxis": {**axis, "title": {**axis["title"], "text": y_title}},
         "hovermode": "closest", "dragmode": False,
         "legend": {"orientation": "h", "x": 1, "xanchor": "right", "y": 1.01,
                    "yanchor": "bottom"},
         "shapes": [{"type": "line", "x0": 0, "y0": 0, "x1": 1, "y1": 1, "layer": "below",
-                    "line": {"color": STYLE["muted"], "width": 1, "dash": "dash"}}],
+                    "line": {"color": "var(--rs-muted)", "width": 1, "dash": "dash"}}],
         "annotations": [{
             "xref": "paper", "yref": "paper", "x": 0.02, "y": 0.98,
             "xanchor": "left", "yanchor": "top", "align": "left", "showarrow": False,
-            "text": "<br>".join(lines), "bgcolor": STYLE["stripe"],
-            "bordercolor": STYLE["grid"], "borderpad": 4,
+            "text": "<br>".join(lines), "bgcolor": "var(--rs-stripe)",
+            "bordercolor": "var(--rs-grid)", "borderpad": 4,
         }],
     }
 

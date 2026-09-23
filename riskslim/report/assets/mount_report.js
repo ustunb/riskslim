@@ -3,25 +3,31 @@
 // data block to the components.
 
 // Both plot components draw their figure the same way; only the figure differs.
-// Python names the page's CSS custom properties -- "var(--rs-ink)", "var(--rs-plot-height)" --
-// and they are resolved against :root here, so styles.css stays the one place a value is written.
-function resolveStyleTokens(value, styles) {
+// Python names the page's CSS custom properties -- "var(--rs-ink)" -- and they are resolved
+// against :root here, so styles.css stays the one place a value is written.
+const cssValues = new Map();
+
+function resolveStyleTokens(value) {
   if (typeof value === "string") {
-    const resolved = value.replace(/var\((--[\w-]+)\)/g,
-      (_, token) => styles.getPropertyValue(token).trim());
-    return /^-?\d*\.?\d+px$/.test(resolved) ? parseFloat(resolved) : resolved;
+    if (!value.includes("var(")) return value;  // data arrays and labels carry no tokens
+    return value.replace(/var\((--[\w-]+)\)/g, (_, token) => {
+      if (!cssValues.has(token)) {
+        cssValues.set(token, getComputedStyle(document.documentElement)
+          .getPropertyValue(token).trim());
+      }
+      return cssValues.get(token);
+    });
   }
-  if (Array.isArray(value)) return value.map((item) => resolveStyleTokens(item, styles));
+  if (Array.isArray(value)) return value.map(resolveStyleTokens);
   if (value && typeof value === "object") {
     return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, resolveStyleTokens(item, styles)]));
+      Object.entries(value).map(([key, item]) => [key, resolveStyleTokens(item)]));
   }
   return value;
 }
 
 function drawFigure(element, figure) {
-  const styles = getComputedStyle(document.documentElement);
-  const spec = resolveStyleTokens(structuredClone(figure), styles);
+  const spec = resolveStyleTokens(figure);  // returns fresh containers; Plotly may write into it
   Plotly.newPlot(element, spec.data, spec.layout,
     { displayModeBar: false, responsive: true, scrollZoom: false });
 }

@@ -69,16 +69,11 @@ DATA_BLOCK = re.compile(r'<script type="application/json" id="report-data">(.*?)
 HOSTILE_NAMES = ["(Intercept)", "a</script><script>alert(1)</script>", "b<!-- c", "c"]
 
 
-def with_tokens_resolved(value):
-    """A figure with its ``var(--token)`` strings filled in, as the browser fills them."""
-    if isinstance(value, str):
-        resolved = re.sub(r"var\(--rs-plot-height\)", "360", value)
-        return 360 if resolved == "360" else re.sub(r"var\(--[\w-]+\)", "#000000", resolved)
-    if isinstance(value, list):
-        return [with_tokens_resolved(item) for item in value]
-    if isinstance(value, dict):
-        return {key: with_tokens_resolved(item) for key, item in value.items()}
-    return value
+def with_tokens_resolved(figure):
+    """The figure as the browser resolves it, from the page's own ``:root`` tokens."""
+    tokens = dict(re.findall(r"(--[\w-]+):\s*([^;]+);", (ASSETS / "styles.css").read_text()))
+    return json.loads(re.sub(r"var\((--[\w-]+)\)", lambda m: tokens[m.group(1)].strip(),
+                             json.dumps(figure)))
 
 
 def make_report(rho, names=NAMES, samples=None, **kwargs):
@@ -256,7 +251,7 @@ def test_figure_plots_each_sample_section_with_a_top_left_metrics_box(report, ke
     (box,) = figure["layout"]["annotations"]
     assert (box["xref"], box["yref"], box["xanchor"], box["yanchor"]) == (
         "paper", "paper", "left", "top")
-    assert box["x"] <= 0.05 and box["y"] >= 0.95  # top-left corner of the plot area
+    assert box["x"] <= 0.05 and box["y"] >= 0.95
     assert all(text in box["text"] for text in metrics_text), box["text"]
 
 
