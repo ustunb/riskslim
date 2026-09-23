@@ -63,7 +63,7 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
     """
     def __init__(self, max_coef = 5, max_size = None, coef_set = None,
                  variable_names = None, outcome_name = None, c0_value = 1e-6,
-                 verbose = True,  **kwargs):
+                 verbose = True, solver = "cplex", **kwargs):
         """
         Parameters
         ----------
@@ -85,6 +85,8 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
             separately when an array.
         verbose : bool, optional, default: True
             Prints out log information if True, supresses if False.
+        solver : str, optional, default: "cplex"
+            MIP solver. Only "cplex" is available.
         **kwargs
             Settings for warmstart (keys: 'init_*'), cplex (keys: 'cplex_*'), and lattice CPA.
             Defaults are defined in ``defaults.DEFAULT_LCPA_SETTINGS``.
@@ -96,6 +98,7 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         self.outcome_name = outcome_name
         self.c0_value = c0_value
         self.verbose = verbose
+        self.solver = solver
         self._settings = kwargs
 
     def get_params(self, deep=True):
@@ -196,6 +199,7 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
             max_size = self.max_size_,
             c0_value = self.c0_value,
             verbose = self.verbose,
+            solver = self.solver,
             **settings,
         )
         self.optimizer_.optimize()

@@ -2,12 +2,12 @@
 
 import pytest
 import numpy as np
-from cplex import Cplex
 from sklearn.datasets import load_breast_cancer
 from riskslim.coefficient_set import CoefficientSet
 from riskslim.utils import Stats
 from riskslim.bounds import Bounds
 from riskslim.classifier import RiskSLIMClassifier
+from riskslim.opt.mip import RiskSLIMMIP
 
 
 @pytest.mark.parametrize('use_coef_set', [True, False])
@@ -37,7 +37,7 @@ def test_fit_builds_optimizer(generated_normal_data, use_coef_set):
     assert isinstance(rs.optimizer.min_coef, np.ndarray)
     assert isinstance(rs.optimizer.max_coef, np.ndarray)
 
-    assert isinstance(rs.optimizer.mip, Cplex)
+    assert isinstance(rs.optimizer.mip, RiskSLIMMIP)
     assert isinstance(rs.optimizer.mip_indices, dict)
 
     assert isinstance(rs.optimizer.bounds, Bounds)

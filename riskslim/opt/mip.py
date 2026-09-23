@@ -2,8 +2,9 @@
 
 ``RiskSLIMMIP`` is the contract every solver backend implements. Its method set is exactly
 the set of operations that ``riskslim/optimizer.py`` and ``riskslim/warmstart.py`` perform on
-the CPLEX model and its solution; the CPLEX *callback* API used by ``riskslim/callbacks.py``
-stays inside each backend's callback classes, which ``register_callbacks`` attaches.
+the CPLEX model and its solution; the CPLEX *callback* API used by
+``riskslim/opt/cpx/callbacks.py`` stays inside each backend's callback classes, which
+``register_callbacks`` attaches.
 
 Each method docstring records how a CPLEX subclass and a SCIP (PySCIPOpt) subclass would
 satisfy it. Only the CPLEX backend exists (``riskslim.opt.cpx.solver``); the SCIP notes are a
@@ -240,10 +241,10 @@ class RiskSLIMMIP(ABC):
         """Build the RiskSLIM surrogate MIP (no loss cuts yet).
 
         Must set ``self.indices`` and return that same dict. Variable and constraint names
-        follow the module naming scheme; ``settings`` holds the formulation settings of
-        ``riskslim.mip.create_risk_slim`` (``C_0``, bounds, ``relax_integer_variables``,
-        ``drop_variables``, ``include_auxillary_variable_for_*``, ``set_cplex_cutoffs``) and
-        receives their defaults in place.
+        follow the module naming scheme; ``settings`` holds the formulation settings
+        (``C_0``, bounds, ``relax_integer_variables``, ``drop_variables``,
+        ``include_auxillary_variable_for_*``, ``set_cplex_cutoffs``) and receives their
+        defaults in place.
 
         CPLEX: ``Cplex()``, ``variables.add``, ``linear_constraints.add/delete``,
             ``variables.delete``; LP via ``set_problem_type(LP)``; cutoffs via

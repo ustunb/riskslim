@@ -2,11 +2,11 @@
 
 import pytest
 from riskslim.optimizer import RiskSLIMOptimizer
-from riskslim.mip import create_risk_slim
+from riskslim.opt.cpx.solver import CplexRiskSLIMMIP
 from riskslim.solution_pool import FastSolutionPool
 from riskslim.coefficient_set import CoefficientSet
 from riskslim.heuristics import discrete_descent, sequential_rounding
-from riskslim.callbacks import LossCallback, PolishAndRoundCallback
+from riskslim.opt.cpx.callbacks import LossCallback, PolishAndRoundCallback
 from riskslim.defaults import DEFAULT_LCPA_SETTINGS
 from riskslim.data import ClassificationDataset
 
@@ -32,14 +32,15 @@ def test_losscallback(generated_normal_data, cut_queue, polish_queue):
         "include_auxillary_variable_for_objval": DEFAULT_LCPA_SETTINGS["include_auxillary_variable_for_objval"],
     }
 
-    mip, indices = create_risk_slim(coef_set=coef_set, settings=mip_settings)
+    mip = CplexRiskSLIMMIP()
+    indices = mip.build(coef_set=coef_set, settings=mip_settings)
 
     # Create required attributes
     opt = RiskSLIMOptimizer(data, coef_set, 5)
 
     indices.update({"C_0_nnz": opt.C_0_nnz, "L0_reg_ind": opt.L0_reg_ind})
 
-    loss_cb = mip.register_callback(LossCallback)
+    loss_cb = mip.cpx.register_callback(LossCallback)
 
     loss_cb.initialize(
         indices=indices,
@@ -81,7 +82,8 @@ def test_polish_and_round_callback(generated_normal_data):
         "include_auxillary_variable_for_objval": DEFAULT_LCPA_SETTINGS["include_auxillary_variable_for_objval"],
     }
 
-    mip, indices = create_risk_slim(coef_set=coef_set, settings=mip_settings)
+    mip = CplexRiskSLIMMIP()
+    mip.build(coef_set=coef_set, settings=mip_settings)
 
     # Create required attributes
     opt = RiskSLIMOptimizer(data, coef_set, 5)
@@ -110,7 +112,7 @@ def test_polish_and_round_callback(generated_normal_data):
         cutoff
     )
 
-    polish_cb = mip.register_callback(PolishAndRoundCallback)
+    polish_cb = mip.cpx.register_callback(PolishAndRoundCallback)
 
     polish_cb.initialize(
         indices=opt.mip_indices,

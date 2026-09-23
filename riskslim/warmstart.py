@@ -1,6 +1,6 @@
 import time
 import numpy as np
-from cplex import Cplex, SparsePair, infinity as CPX_INFINITY
+from riskslim.opt.mip import RiskSLIMMIP
 from riskslim.solution_pool import SolutionPool
 from riskslim.bounds import Bounds, chained_updates, \
     chained_updates_for_lp
@@ -9,14 +9,14 @@ from riskslim.defaults import DEFAULT_CPA_SETTINGS
 from riskslim.utils import print_log, validate_settings
 
 
-def run_standard_cpa(cpx,
+def run_standard_cpa(mip,
                      cpx_indices,
                      compute_loss,
                      compute_loss_cut,
                      settings = DEFAULT_CPA_SETTINGS,
                      print_flag = True):
 
-    assert isinstance(cpx, Cplex)
+    assert isinstance(mip, RiskSLIMMIP)
     assert isinstance(cpx_indices, dict)
     assert callable(compute_loss)
     assert callable(compute_loss_cut)
@@ -39,17 +39,20 @@ def run_standard_cpa(cpx,
         loss_idx = loss_idx[0]
 
     if len(alpha_idx) > 0:
-        get_alpha = lambda: np.array(cpx.solution.get_values(alpha_idx))
+        get_alpha = lambda: mip.get_values(alpha_idx)
     else:
         get_alpha = lambda: np.array([])
 
+    loss_min, loss_max = mip.get_variable_bounds(loss_idx)
+    objval_min, objval_max = mip.get_variable_bounds(objval_idx)
+    min_size, max_size = mip.get_variable_bounds(L0_idx)
     bounds = Bounds(
-        loss_min=cpx.variables.get_lower_bounds(loss_idx),
-        loss_max=cpx.variables.get_upper_bounds(loss_idx),
-        objval_min=cpx.variables.get_lower_bounds(objval_idx),
-        objval_max=cpx.variables.get_upper_bounds(objval_idx),
-        min_size=cpx.variables.get_lower_bounds(L0_idx),
-        max_size=cpx.variables.get_upper_bounds(L0_idx),
+        loss_min=loss_min,
+        loss_max=loss_max,
+        objval_min=objval_min,
+        objval_max=objval_max,
+        min_size=min_size,
+        max_size=max_size,
     )
 
     if settings['update_bounds'] and settings['type'] == 'cvx':
@@ -60,7 +63,7 @@ def run_standard_cpa(cpx,
         update_bounds = lambda bounds, lb, ub: bounds
 
     objval = 0.0
-    upperbound = CPX_INFINITY
+    upperbound = float('inf')
     lowerbound = 0.0
     n_iterations = 0
     n_simplex_iterations = 0
@@ -82,32 +85,32 @@ def run_standard_cpa(cpx,
     while True:
 
         iteration_start_time = time.time()
-        cpx.parameters.timelimit.set(min(remaining_total_time, max_cplex_time))
-        cpx.solve()
-        solution_status = cpx.solution.status[cpx.solution.get_status()]
+        mip.set_time_limit(min(remaining_total_time, max_cplex_time))
+        mip.solve()
 
         # get solution
-        if solution_status not in ('optimal', 'optimal_tolerance', 'MIP_optimal'):
+        if not mip.is_optimal():
+            solution_status = mip.status_name()
             stop_reason = solution_status
             stop_msg = 'stopping CPA | solution is infeasible (status = %s)' % solution_status
             break
 
         # get solution
-        rho = np.array(cpx.solution.get_values(rho_idx))
+        rho = mip.get_values(rho_idx)
         alpha = get_alpha()
-        simplex_iterations = int(cpx.solution.progress.get_num_iterations())
+        simplex_iterations = mip.simplex_iteration_count()
 
         # compute cut
         cut_start_time = time.time()
         loss_value, loss_slope = compute_loss_cut(rho)
-        cut_lhs = [float(loss_value - loss_slope.dot(rho))]
-        cut_constraint = [SparsePair(ind = cut_idx, val = [1.0] + (-loss_slope).tolist())]
+        cut_rhs = float(loss_value - loss_slope.dot(rho))
+        cut_coefs = [1.0] + (-loss_slope).tolist()
         cut_time = time.time() - cut_start_time
 
         # compute objective bounds
         objval = float(loss_value + alpha.dot(C_0_alpha))
         upperbound = min(upperbound, objval)
-        lowerbound = cpx.solution.get_objective_value()
+        lowerbound = mip.objective_value()
         relative_gap = (upperbound - lowerbound)/(upperbound + np.finfo('float').eps)
         bounds = update_bounds(bounds, lb = lowerbound, ub = upperbound)
 
@@ -166,16 +169,12 @@ def run_standard_cpa(cpx,
 
         # switch bounds
         if settings['update_bounds']:
-            cpx.variables.set_lower_bounds(L0_idx, bounds.min_size
-                                           )
-            cpx.variables.set_upper_bounds(L0_idx, bounds.max_size)
-            cpx.variables.set_lower_bounds(loss_idx, bounds.loss_min)
-            cpx.variables.set_upper_bounds(loss_idx, bounds.loss_max)
-            cpx.variables.set_lower_bounds(objval_idx, bounds.objval_min)
-            cpx.variables.set_upper_bounds(objval_idx, bounds.objval_max)
+            mip.set_variable_bounds(L0_idx, bounds.min_size, bounds.max_size)
+            mip.set_variable_bounds(loss_idx, bounds.loss_min, bounds.loss_max)
+            mip.set_variable_bounds(objval_idx, bounds.objval_min, bounds.objval_max)
 
         # add loss cut
-        cpx.linear_constraints.add(lin_expr = cut_constraint, senses = ["G"], rhs = cut_lhs)
+        mip.add_cut(cut_idx, cut_coefs, cut_rhs)
 
     if print_flag:
         print_log(stop_msg)
@@ -203,11 +202,7 @@ def run_standard_cpa(cpx,
         stats.update(progress_stats)
 
     #collect cuts
-    idx = list(range(cpx_indices['n_constraints'], cpx.linear_constraints.get_num(), 1))
-    cuts = {
-        'coefs': cpx.linear_constraints.get_rows(idx),
-        'lhs': cpx.linear_constraints.get_rhs(idx)
-        }
+    cuts = mip.get_cuts()
 
     #create solution pool
     pool = SolutionPool(P)

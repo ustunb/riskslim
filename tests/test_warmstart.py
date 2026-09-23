@@ -2,7 +2,7 @@
 
 import pytest
 import numpy as np
-from riskslim.mip import create_risk_slim
+from riskslim.opt.cpx.solver import CplexRiskSLIMMIP
 from riskslim.coefficient_set import CoefficientSet
 from riskslim.loss_functions.log_loss import (
     log_loss_value, log_loss_value_and_slope, log_loss_value_from_scores
@@ -39,7 +39,8 @@ def test_run_standard_cpa(generated_normal_data, cpa_type, maxes):
         "drop_variables": True,
     }
 
-    mip, indices = create_risk_slim(coef_set, mip_settings)
+    mip = CplexRiskSLIMMIP()
+    indices = mip.build(coef_set, mip_settings)
 
     compute_loss_cut = lambda rho: log_loss_value_and_slope(Z, rho)
 

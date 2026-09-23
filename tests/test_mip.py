@@ -7,7 +7,7 @@ from riskslim.coefficient_set import CoefficientSet
 from riskslim.defaults import DEFAULT_CPLEX_SETTINGS
 from riskslim.solution_pool import SolutionPool
 from riskslim.loss_functions.log_loss import log_loss_value
-from riskslim.mip import create_risk_slim, set_cplex_mip_parameters, add_mip_starts
+from riskslim.opt.cpx.solver import CplexRiskSLIMMIP
 
 
 @pytest.mark.parametrize("relax_integer_variables", [True, False])
@@ -26,12 +26,13 @@ def test_create_risk_slim(generated_normal_data, relax_integer_variables):
         "drop_variables": True,
     }
 
-    mip, indices = create_risk_slim(coef_set, mip_settings)
+    mip = CplexRiskSLIMMIP()
+    indices = mip.build(coef_set, mip_settings)
 
-    assert isinstance(mip, Cplex)
+    assert isinstance(mip.cpx, Cplex)
 
     # Variables
-    mip_vars = mip.variables.get_names()
+    mip_vars = mip.cpx.variables.get_names()
     for i in range(len(variable_names)):
         assert 'rho_' + str(i) in mip_vars
         if i == 0:
@@ -44,7 +45,7 @@ def test_create_risk_slim(generated_normal_data, relax_integer_variables):
         assert other_var in mip_vars
 
     # Constaints
-    mip_constr = mip.linear_constraints.get_names()
+    mip_constr = mip.cpx.linear_constraints.get_names()
     for i in range(1, len(variable_names)):
         assert 'L0_norm_lb_' + str(i) in mip_constr
         assert 'L0_norm_ub_' + str(i) in mip_constr
@@ -82,7 +83,8 @@ def test_set_cplex_mip_parameters(
         "drop_variables": True,
     }
 
-    mip, _ = create_risk_slim(coef_set, mip_settings)
+    mip = CplexRiskSLIMMIP()
+    mip.build(coef_set, mip_settings)
 
     cplex_settings = DEFAULT_CPLEX_SETTINGS.copy()
     expected_optimality_tolerance = DEFAULT_CPLEX_SETTINGS["optimality_tolerance"]
@@ -92,13 +94,12 @@ def test_set_cplex_mip_parameters(
     else:
         cplex_settings.pop("optimality_tolerance")
 
-    mip = set_cplex_mip_parameters(
-        mip,
+    mip.set_parameters(
         cplex_settings,
-        display_cplex_progress=False,
+        display_progress=False,
     )
     assert (
-        mip.parameters.simplex.tolerances.optimality.get() == expected_optimality_tolerance
+        mip.cpx.parameters.simplex.tolerances.optimality.get() == expected_optimality_tolerance
     )
 
 
@@ -121,7 +122,8 @@ def test_add_mip_starts(generated_normal_data):
     }
 
     # Create CPLEX MIP
-    mip, indices = create_risk_slim(coef_set, mip_settings)
+    mip = CplexRiskSLIMMIP()
+    mip.build(coef_set, mip_settings)
 
     # Solutin pool
     solution = np.zeros_like(Z[0])
@@ -129,5 +131,5 @@ def test_add_mip_starts(generated_normal_data):
     pool = SolutionPool(len(Z[0]))
     pool.add(objvals=objval, solutions=solution)
 
-    cpx = add_mip_starts(mip, indices, pool)
-    assert cpx.MIP_starts.get_num() > 0
+    mip.add_mip_starts(pool)
+    assert mip.cpx.MIP_starts.get_num() > 0

@@ -138,6 +138,58 @@ def check_cplex():
         raise ImportError("CPLEX must be installed.")
     return True
 
+
+def check_cplex_installation() -> dict[str, str]:
+    """Validate the installed CPLEX package and native runtime.
+
+    Returns:
+        dict[str, str]: Versions under the ``python`` and ``runtime`` keys.
+
+    Raises:
+        RuntimeError: If the package version is unsupported or the solver cannot
+            produce a feasible solution.
+    """
+    from importlib import metadata
+
+    from cplex import Cplex
+    from packaging.requirements import Requirement
+
+    project_requirements = [
+        Requirement(requirement)
+        for requirement in metadata.requires("riskslim") or []
+    ]
+    cplex_requirement = next(
+        requirement
+        for requirement in project_requirements
+        if requirement.name.lower() == "cplex"
+    )
+    package_version = metadata.version("cplex")
+    if package_version not in cplex_requirement.specifier:
+        raise RuntimeError(
+            f"Installed CPLEX package version {package_version} does not satisfy "
+            f"the project requirement {cplex_requirement}. Install a compatible version."
+        )
+
+    with Cplex() as model:
+        model.set_results_stream(None)
+        model.set_log_stream(None)
+        model.set_warning_stream(None)
+        model.set_error_stream(None)
+        runtime_version = model.get_version()
+        model.variables.add(names=["x"], types=["B"], lb=[0.0], ub=[1.0])
+        model.solve()
+
+        if not model.solution.is_primal_feasible():
+            raise RuntimeError(
+                "CPLEX did not produce a feasible solution for the installation check "
+                f"(package {package_version}, runtime {runtime_version})."
+            )
+
+    return {
+        "python": package_version,
+        "runtime": runtime_version,
+    }
+
 # File IO
 def open_file(file_name):
     """

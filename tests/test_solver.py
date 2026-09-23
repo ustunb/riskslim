@@ -1,6 +1,6 @@
 """Smoke-test that CPLEX is installed and can solve a bounded binary model."""
 
-from riskslim.cplex_utils import check_cplex_installation
+from riskslim.utils import check_cplex_installation
 
 
 def test_cplex_can_solve():

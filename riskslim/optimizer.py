@@ -2,11 +2,10 @@
 
 import numpy as np
 
-from cplex.exceptions import CplexError
 from riskslim.loss_computation import get_loss_functions
 from riskslim.utils import Stats, validate_settings, print_log
 from riskslim.defaults import DEFAULT_INITIALIZATION_SETTINGS, DEFAULT_LCPA_SETTINGS
-from riskslim.mip import add_mip_starts, create_risk_slim, set_cplex_mip_parameters
+from riskslim.opt.mip import load
 from riskslim.solution_pool import SolutionPool, FastSolutionPool
 from riskslim.heuristics import discrete_descent, sequential_rounding
 from riskslim.bounds import Bounds, chained_updates, compute_loss_bounds
@@ -16,7 +15,6 @@ from riskslim.warmstart import (
     sequential_round_solution_pool,
     discrete_descent_solution_pool,
     )
-from riskslim.callbacks import LossCallback, PolishAndRoundCallback
 
 
 class RiskSLIMOptimizer:
@@ -34,6 +32,8 @@ class RiskSLIMOptimizer:
         Lower and upper bounds on objective value, loss, and model size.
     stats : riskslim.data.Stats
         Cplex solution statistics.
+    mip : riskslim.opt.mip.RiskSLIMMIP
+        RiskSLIM MIP on the chosen solver.
     solution : cplex SolutionInterface
         Solved cplex solution.
     solution_info : dict
@@ -46,7 +46,7 @@ class RiskSLIMOptimizer:
         Whether model has be fit.
     """
 
-    def __init__(self, data, coef_set, max_size, c0_value=1e-6, max_abs_offset=None, verbose=True, **kwargs):
+    def __init__(self, data, coef_set, max_size, c0_value=1e-6, max_abs_offset=None, verbose=True, solver="cplex", **kwargs):
         """
         Parameters
         ----------
@@ -59,6 +59,8 @@ class RiskSLIMOptimizer:
             provides a convenient way to set bounds on the offset.
         verbose : bool, optional, default: True
             Prints out log information if True, supresses if False.
+        solver : str, optional, default: "cplex"
+            MIP solver. Only "cplex" is available.
         **kwargs
             May include key value pairs:
 
@@ -79,6 +81,10 @@ class RiskSLIMOptimizer:
         # Empty fields
         self.fitted = False
         self.has_warmstart = False
+
+        # solver backend
+        self.solver = solver
+        mip_class = load(solver)
 
         # attach main inputs
         self.data = data
@@ -169,10 +175,12 @@ class RiskSLIMOptimizer:
             self.bounds = bounds
 
 
-        # create riskslim mip
+        # create the RiskSLIM MIP
         mip_settings.update(bounds.asdict())
-        cpx, indices = create_risk_slim(coef_set=self.coef_set, settings= mip_settings)
+        mip = mip_class()
+        indices = mip.build(coef_set=self.coef_set, settings=mip_settings)
         indices.update({"C_0_nnz": self.C_0_nnz, "L0_reg_ind": self.L0_reg_ind})
+        self.mip = mip
         self.mip_indices = indices
 
         # add constraints
@@ -182,24 +190,10 @@ class RiskSLIMOptimizer:
         #     name = f"con_{cons.get_num()}" if name is None else name
         #     cons.add(names=[name], lin_expr=[cplex.SparsePair(ind=var_inds, val=values)], senses=[sense],rhs=[rhs])
 
-        # todo: remove this
-        loss_cb = cpx.register_callback(LossCallback)
-        loss_cb.initialize(indices=indices,
-                           stats=self.stats,
-                           settings=settings,
-                           compute_loss_cut=self.compute_loss_cut,
-                           get_alpha=self.get_alpha,
-                           get_L0_penalty_from_alpha=self.get_L0_penalty_from_alpha,
-                           initial_cuts=initial_cuts,
-                           cut_queue=self.cut_queue,
-                           polish_queue=self.polish_queue,
-                           verbose=self.verbose,
-                           )
-
-        # add heuristic callback if rounding or polishing
-        heuristic_cb = None
+        # polishing and rounding handles for the heuristic callback
+        polisher = None
+        rounder = None
         if settings["round_flag"] or settings["polish_flag"]:
-            heuristic_cb = cpx.register_callback(PolishAndRoundCallback)
             active_set_flag = self.max_size <= self.n_variables
             polisher = lambda rho: discrete_descent(
                     rho,
@@ -221,19 +215,24 @@ class RiskSLIMOptimizer:
                     cutoff,
                     )
 
-            heuristic_cb.initialize(
-                    indices=indices,
-                    control=self.stats,
-                    settings=settings,
-                    cut_queue=self.cut_queue,
-                    polish_queue=self.polish_queue,
-                    get_objval=self.get_objval,
-                    get_L0_norm=self.get_L0_norm,
-                    is_feasible=self.is_feasible,
-                    polishing_handle=polisher,
-                    rounding_handle=rounder,
-                    )
-
+        # loss cut callback, plus heuristic callback if rounding or polishing
+        loss_cb, heuristic_cb = mip.register_callbacks(
+                stats=self.stats,
+                settings=settings,
+                compute_loss_cut=self.compute_loss_cut,
+                get_alpha=self.get_alpha,
+                get_L0_penalty_from_alpha=self.get_L0_penalty_from_alpha,
+                cut_queue=self.cut_queue,
+                polish_queue=self.polish_queue,
+                initial_cuts=initial_cuts,
+                get_objval=self.get_objval,
+                get_L0_norm=self.get_L0_norm,
+                is_feasible=self.is_feasible,
+                polishing_handle=polisher,
+                rounding_handle=rounder,
+                verbose=self.verbose,
+                )
+        if heuristic_cb is not None:
             self.heuristic_callback = heuristic_cb
 
         # initialize solution pool
@@ -241,12 +240,12 @@ class RiskSLIMOptimizer:
             if settings["polish_flag"]:
                 self.polish_queue.add(self.pool.objvals[0], self.pool.solutions[0])
             else:
-                cpx = add_mip_starts(cpx, self.mip_indices, self.pool, mip_start_effort_level=cpx.MIP_starts.effort_level.repair)
+                mip.add_mip_starts(self.pool)
             if settings["add_cuts_at_heuristic_solutions"] and len(self.pool) > 1:
                 self.cut_queue.add(self.pool.objvals[1:], self.pool.solutions[1:])
 
         # finalize
-        self.mip = set_cplex_mip_parameters(cpx, parsed['cplex'], display_cplex_progress=settings["display_cplex_progress"])
+        mip.set_parameters(parsed['cplex'], display_progress=settings["display_cplex_progress"])
         self.mip_settings = mip_settings
         self.loss_callback = loss_cb
         self.heuristic_cb = heuristic_cb
@@ -266,13 +265,14 @@ class RiskSLIMOptimizer:
         # Construct LP relaxation
         lp_settings = dict(mip_settings)
         lp_settings["relax_integer_variables"] = True
-        cpx, cpx_indices = create_risk_slim(coef_set=self.coef_set, settings=lp_settings)
-        cpx = set_cplex_mip_parameters(cpx, self.cplex_settings, display_cplex_progress=settings["display_cplex_progress"])
+        lp = load(self.solver)()
+        lp_indices = lp.build(coef_set=self.coef_set, settings=lp_settings)
+        lp.set_parameters(self.cplex_settings, display_progress=settings["display_cplex_progress"])
 
         # Solve RiskSLIM LP using standard CPA
         stats, cuts, pool = run_standard_cpa(
-                cpx=cpx,
-                cpx_indices=cpx_indices,
+                mip=lp,
+                cpx_indices=lp_indices,
                 compute_loss=self.compute_loss_real,
                 compute_loss_cut=self.compute_loss_cut_real,
                 settings=settings,
@@ -381,8 +381,8 @@ class RiskSLIMOptimizer:
     def optimize(self):
         """Solve the RiskSLIM MIP built at initialization, within the max_runtime setting."""
 
-        # Set cplex parameters and runtime
-        self.mip.parameters.timelimit.set(self.settings["max_runtime"])
+        # Set runtime
+        self.mip.set_time_limit(self.settings["max_runtime"])
         self.mip.solve()
         self.fitted = True
 
@@ -440,7 +440,7 @@ class RiskSLIMOptimizer:
         cplex SolutionInterface
         """
         # todo add wrapper if solution does not exist
-        return self.mip.solution
+        return self.mip.cpx.solution
 
     @property
     def coefficients(self):
@@ -451,9 +451,8 @@ class RiskSLIMOptimizer:
             C
             oefficients of the linear classifier
         """
-        s = self.solution
-        if s.is_primal_feasible():
-            coefs = np.array(s.get_values(self.mip_indices["rho"]))
+        if self.mip.has_solution():
+            coefs = self.mip.get_values(self.mip_indices["rho"])
         else:
             coefs = np.repeat(np.nan, self.n_variables)
         return coefs
@@ -468,20 +467,18 @@ class RiskSLIMOptimizer:
             Contains best solution info.
         """
         # Record mip solution statistics
-        solution = self.solution
+        mip = self.mip
 
-        try:
-            self.stats.incumbent = np.array(
-                    solution.get_values(self.mip_indices["rho"])
-                    )
-            self.stats.upperbound = solution.get_objective_value()
-            self.stats.lowerbound = solution.MIP.get_best_objective()
-            self.stats.relative_gap = solution.MIP.get_mip_relative_gap()
+        if mip.has_solution():
+            self.stats.incumbent = mip.get_values(self.mip_indices["rho"])
+            self.stats.upperbound = mip.objective_value()
+            self.stats.lowerbound = mip.best_bound()
+            self.stats.relative_gap = mip.relative_gap()
             self.stats.found_solution = True
-        except CplexError:
+        else:
             self.stats.found_solution = False
 
-        self.stats.cplex_status = solution.get_status_string()
+        self.stats.cplex_status = mip.status_string()
         self.stats.total_callback_time = (
                 self.stats.total_cut_callback_time
                 + self.stats.total_heuristic_callback_time

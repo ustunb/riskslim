@@ -186,7 +186,7 @@ class StatsCallback(MIPInfoCallback):
 # --- end BLM StatsCallback
 
 
-# --- riskslim callbacks
+# --- RiskSLIM callbacks
 
 
 class LossCallback(LazyConstraintCallback):
