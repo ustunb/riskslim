@@ -61,6 +61,7 @@ REMOVED_ENUMERATION_FIELDS = {
     "intercept_tie_multiplicities",
 }
 
+
 def pytest_addoption(parser):
     """Register --report-dir for the opt-in browser test's screenshots and HTML."""
     parser.addoption(
