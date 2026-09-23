@@ -46,13 +46,13 @@ BASELINE_QUERY_KEYS = {
 QUERY_FIELDS = {
     "query_identity",
     "query_identity_digest",
-    "representative_rho",
+    "representative_weights",
     "pure_logistic_loss",
     "objective",
     "representative_tie_count",
     "proven_complete",
 }
-REMOVED_SYNTHETIC_DATA_FIELDS = {"X", "y", "rho_true", "source_rho_true"}
+REMOVED_SYNTHETIC_DATA_FIELDS = {"X", "y", "weights_true", "source_weights_true"}
 REMOVED_ENUMERATION_FIELDS = {
     "feature_coefficients",
     "optimal_intercepts",
@@ -145,15 +145,17 @@ def validate_synthetic_oracles(synthetic_oracles):
         if not has_fractional_truth and continuous_reference is not None:
             raise ValueError(f"{case_id} should not have a continuous reference")
         if has_fractional_truth:
-            continuous_rho = (
-                continuous_reference.get("rho") if isinstance(continuous_reference, dict) else None
+            continuous_weights = (
+                continuous_reference.get("weights")
+                if isinstance(continuous_reference, dict)
+                else None
             )
             if (
                 not isinstance(continuous_reference, dict)
                 or continuous_reference.get("converged") is not True
-                or not isinstance(continuous_rho, np.ndarray)
-                or continuous_rho.shape != (n_features + 1,)
-                or not np.isfinite(continuous_rho).all()
+                or not isinstance(continuous_weights, np.ndarray)
+                or continuous_weights.shape != (n_features + 1,)
+                or not np.isfinite(continuous_weights).all()
                 or not np.isfinite(continuous_reference.get("pure_logistic_loss", np.nan))
                 or not np.isfinite(continuous_reference.get("gradient_infinity_norm", np.nan))
                 or continuous_reference["gradient_infinity_norm"] > 1e-6
@@ -193,7 +195,7 @@ def validate_synthetic_oracles(synthetic_oracles):
                 if not np.isfinite(c0_value) or c0_value <= 0.0 or max_size != n_features:
                     raise ValueError(f"{case_id} {model_type} query keys are invalid")
             for query_key, query in queries.items():
-                rho = query.get("representative_rho") if isinstance(query, dict) else None
+                weights = query.get("representative_weights") if isinstance(query, dict) else None
                 query_identity = query.get("query_identity") if isinstance(query, dict) else None
                 expected_query_identity = {
                     "loss_identity_digest": task.get("loss_identity_digest"),
@@ -206,9 +208,9 @@ def validate_synthetic_oracles(synthetic_oracles):
                     or query_identity != expected_query_identity
                     or query.get("query_identity_digest")
                     != identity_digest(expected_query_identity)
-                    or not isinstance(rho, np.ndarray)
-                    or rho.shape != (n_features + 1,)
-                    or not np.isfinite(rho).all()
+                    or not isinstance(weights, np.ndarray)
+                    or weights.shape != (n_features + 1,)
+                    or not np.isfinite(weights).all()
                     or not np.isfinite(query.get("pure_logistic_loss", np.nan))
                     or not np.isfinite(query.get("objective", np.nan))
                     or not isinstance(query.get("representative_tie_count"), (int, np.integer))
@@ -351,21 +353,21 @@ def generated_normal_data():
     random_state = np.random.get_state()
     try:
         X = np.zeros((n_iters, n_rows, n_columns))
-        rho_true = np.zeros((n_iters, n_columns))
+        weights_true = np.zeros((n_iters, n_columns))
         for i, seed in enumerate(range(n_iters)):
             # Simulate data
-            _data, _rho_true = generate_random_normal(n_rows, n_columns, n_targets, seed)
+            _data, _weights_true = generate_random_normal(n_rows, n_columns, n_targets, seed)
 
-            # Track features and true rho
+            # Track features and true weights
             X[i] = _data["X"]
-            rho_true[i] = _rho_true
+            weights_true[i] = _weights_true
     finally:
         np.random.set_state(random_state)
 
     # Labels
     y = np.ravel(_data["y"])
 
-    rho = np.ones(n_columns)
+    weights = np.ones(n_columns)
 
     Z = X * y[:, None]
 
@@ -375,8 +377,8 @@ def generated_normal_data():
         "X": X,
         "y": y,
         "Z": Z,
-        "rho": rho,
-        "rho_true": rho_true,
+        "weights": weights,
+        "weights_true": weights_true,
         "variable_names": names,
         "outcome_name": _data["outcome_name"],
     }

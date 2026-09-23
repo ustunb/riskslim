@@ -23,10 +23,10 @@ def run_standard_cpa(mip,
     settings = validate_settings(settings, defaults=DEFAULT_CPA_SETTINGS, raise_key_error=False)
 
     indices = mip.indices
-    rho_idx = indices["rho"]
+    weights_idx = indices["rho"]
     loss_idx = indices["loss"]
     alpha_idx = indices["alpha"]
-    cut_idx = loss_idx + rho_idx
+    cut_idx = loss_idx + weights_idx
     objval_idx = indices["objval"]
     L0_idx = indices["L0_norm"]
 
@@ -95,14 +95,14 @@ def run_standard_cpa(mip,
             break
 
         # get solution
-        rho = mip.get_values(rho_idx)
+        weights = mip.get_values(weights_idx)
         alpha = get_alpha()
         simplex_iterations = mip.simplex_iteration_count()
 
         # compute cut
         cut_start_time = time.time()
-        loss_value, loss_slope = compute_loss_cut(rho)
-        cut_rhs = float(loss_value - loss_slope.dot(rho))
+        loss_value, loss_slope = compute_loss_cut(weights)
+        cut_rhs = float(loss_value - loss_slope.dot(weights))
         cut_coefs = [1.0] + (-loss_slope).tolist()
         cut_time = time.time() - cut_start_time
 
@@ -114,7 +114,7 @@ def run_standard_cpa(mip,
         bounds = update_bounds(bounds, lb = lowerbound, ub = upperbound)
 
         #store solutions
-        solutions.append(rho)
+        solutions.append(weights)
         objvals.append(objval)
 
         # update run stats
@@ -144,9 +144,9 @@ def run_standard_cpa(mip,
             break
 
         if n_iterations >= settings['min_iterations_before_coefficient_gap_check']:
-            prior_rho = solutions[-2]
-            coef_gap = np.abs(np.max(rho - prior_rho))
-            if np.all(np.round(rho) == np.round(prior_rho)) and coef_gap < settings['max_coefficient_gap']:
+            prior_weights = solutions[-2]
+            coef_gap = np.abs(np.max(weights - prior_weights))
+            if np.all(np.round(weights) == np.round(prior_weights)) and coef_gap < settings['max_coefficient_gap']:
                 stop_reason = 'aborted:coefficient_gap_within_tolerance'
                 stop_msg = 'stopping CPA | coef gap is within tolerance (%1.4f < %1.4f)' % (coef_gap, settings['max_coefficient_gap'])
                 break
@@ -180,7 +180,7 @@ def run_standard_cpa(mip,
 
     #collect stats
     stats = {
-        'solution': rho,
+        'solution': weights,
         'stop_reason': stop_reason,
         'n_iterations': n_iterations,
         'n_simplex_iterations': n_simplex_iterations,
@@ -243,20 +243,20 @@ def round_solution_pool(pool,
     total_rounded = 0
     rounded_pool = SolutionPool(P)
 
-    for rho in pool.solutions:
+    for weights in pool.solutions:
 
         start_time = time.time()
         # sort from largest to smallest coefficients
-        feature_order = np.argsort([-abs(x) for x in rho])
+        feature_order = np.argsort([-abs(x) for x in weights])
         rounded_solution = np.zeros(shape = (1, P))
         l0_norm_count = 0
 
         for k in range(P):
             j = feature_order[k]
             if not L0_reg_ind[j]:
-                rounded_solution[0, j] = np.round(rho[j], 0)
+                rounded_solution[0, j] = np.round(weights[j], 0)
             elif l0_norm_count < max_size:
-                rounded_solution[0, j] = np.round(rho[j], 0)
+                rounded_solution[0, j] = np.round(weights[j], 0)
                 l0_norm_count += L0_reg_ind[j]
 
         total_runtime += time.time() - start_time
@@ -309,12 +309,12 @@ def sequential_round_solution_pool(pool,
 
     # if model size constraint is non-trivial, remove solutions that violate the model size constraint beforehand
     pool = pool.distinct().sort()
-    rounding_handle = lambda rho: sequential_rounding(rho = rho,
-                                                      Z = Z,
-                                                      C_0 = C_0,
-                                                      compute_loss_from_scores = compute_loss_from_scores,
-                                                      get_L0_penalty = get_L0_penalty,
-                                                      objval_cutoff = objval_cutoff)
+    rounding_handle = lambda weights: sequential_rounding(weights = weights,
+                                                          Z = Z,
+                                                          C_0 = C_0,
+                                                          compute_loss_from_scores = compute_loss_from_scores,
+                                                          get_L0_penalty = get_L0_penalty,
+                                                          objval_cutoff = objval_cutoff)
 
 
     # apply sequential rounding to all solutions
@@ -322,10 +322,10 @@ def sequential_round_solution_pool(pool,
     total_rounded = 0
     rounded_pool = SolutionPool(pool.P)
 
-    for rho in pool.solutions:
+    for weights in pool.solutions:
 
         start_time = time.time()
-        solution, objval, early_stop = rounding_handle(rho)
+        solution, objval, early_stop = rounding_handle(weights)
         total_runtime += time.time() - start_time
         total_rounded += 1
 
@@ -376,24 +376,24 @@ def discrete_descent_solution_pool(pool,
     assert callable(get_L0_penalty)
     assert callable(compute_loss_from_scores)
 
-    rho_ub = constraints['coef_set'].ub
-    rho_lb = constraints['coef_set'].lb
+    weights_ub = constraints['coef_set'].ub
+    weights_lb = constraints['coef_set'].lb
 
-    polishing_handle = lambda rho: discrete_descent(rho,
-                                                    Z = Z,
-                                                    C_0 = C_0,
-                                                    rho_ub = rho_ub,
-                                                    rho_lb = rho_lb,
-                                                    get_L0_penalty = get_L0_penalty,
-                                                    compute_loss_from_scores = compute_loss_from_scores)
+    polishing_handle = lambda weights: discrete_descent(weights,
+                                                        Z = Z,
+                                                        C_0 = C_0,
+                                                        weights_ub = weights_ub,
+                                                        weights_lb = weights_lb,
+                                                        get_L0_penalty = get_L0_penalty,
+                                                        compute_loss_from_scores = compute_loss_from_scores)
     pool = pool.distinct().sort()
 
     polished_pool = SolutionPool(pool.P)
     total_runtime = 0.0
     total_polished = 0
     start_time = time.time()
-    for rho in pool.solutions:
-        polished_solution, _, polished_objval = polishing_handle(rho)
+    for weights in pool.solutions:
+        polished_solution, _, polished_objval = polishing_handle(weights)
         total_runtime = time.time() - start_time
         total_polished += 1
         polished_pool = polished_pool.add(objvals = polished_objval, solutions = polished_solution)

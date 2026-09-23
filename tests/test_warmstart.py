@@ -42,7 +42,7 @@ def test_run_standard_cpa(generated_normal_data, cpa_type, maxes):
     mip = CplexRiskSLIMMIP()
     mip.build(coef_set, mip_settings)
 
-    compute_loss_cut = lambda rho: log_loss_value_and_slope(Z, rho)
+    compute_loss_cut = lambda weights: log_loss_value_and_slope(Z, weights)
 
     settings = DEFAULT_CPA_SETTINGS.copy()
     settings["type"] = cpa_type
@@ -70,11 +70,11 @@ def test_run_standard_cpa(generated_normal_data, cpa_type, maxes):
 def test_round_solution_pool(generated_normal_data):
 
     Z = generated_normal_data['Z'][0].copy()
-    rho = generated_normal_data['rho_true'][0].copy()
+    weights = generated_normal_data['weights_true'][0].copy()
 
     # Add small amount of noise to move from ints to floats
-    inds = np.where(rho != 0.)[0]
-    rho[inds] = rho[inds] + (np.random.rand(len(inds))) * .1
+    inds = np.where(weights != 0.)[0]
+    weights[inds] = weights[inds] + (np.random.rand(len(inds))) * .1
 
     variable_names = generated_normal_data['variable_names'].copy()
     coef_set = CoefficientSet(variable_names)
@@ -85,35 +85,35 @@ def test_round_solution_pool(generated_normal_data):
         "coef_set": coef_set,
     }
 
-    objvals = log_loss_value(Z, rho)
+    objvals = log_loss_value(Z, weights)
 
-    pool = SolutionPool({'objvals': objvals, 'solutions':rho})
+    pool = SolutionPool({'objvals': objvals, 'solutions':weights})
 
     rounded_pool, total_runtime, total_rounded = round_solution_pool(pool, constraints)
 
 
-    assert np.all(rounded_pool.solutions[0] == generated_normal_data['rho_true'][0])
+    assert np.all(rounded_pool.solutions[0] == generated_normal_data['weights_true'][0])
     assert total_runtime > 0
     assert total_rounded > 0
 
 
 def test_sequential_round_solution_pool(generated_normal_data):
     Z = generated_normal_data['Z'][0].copy()
-    rho = generated_normal_data['rho_true'][0].copy()
+    weights = generated_normal_data['weights_true'][0].copy()
 
     # Add small amount of noise
-    inds = np.where(rho != 0.)[0]
-    rho = rho + (np.random.rand(len(Z[0]))) * .1
+    inds = np.where(weights != 0.)[0]
+    weights = weights + (np.random.rand(len(Z[0]))) * .1
 
     # Pool
-    objvals = log_loss_value(Z, rho)
-    pool = SolutionPool({'objvals': objvals, 'solutions':rho})
+    objvals = log_loss_value(Z, weights)
+    pool = SolutionPool({'objvals': objvals, 'solutions':weights})
 
     # Args
     C_0 = np.zeros(len(Z[0])) + .1
 
-    get_L0_penalty = lambda rho: np.sum(
-        C_0 * (rho != 0.0)
+    get_L0_penalty = lambda weights: np.sum(
+        C_0 * (weights != 0.0)
     )
 
     compute_loss_from_scores = (
@@ -129,7 +129,7 @@ def test_sequential_round_solution_pool(generated_normal_data):
     )
 
     sol = rounded_pool.solutions[0]
-    assert (sol -  generated_normal_data['rho_true'][0].copy()).mean() < .2
+    assert (sol -  generated_normal_data['weights_true'][0].copy()).mean() < .2
     assert total_runtime > 0
     assert total_rounded > 0
 
@@ -138,13 +138,13 @@ def test_sequential_round_solution_pool(generated_normal_data):
 def test_discrete_descent_solution_pool(generated_normal_data, non_integral):
 
     Z = generated_normal_data['Z'][0].copy()
-    rho = generated_normal_data['rho_true'][0].copy()
-    rho[0] += 1
+    weights = generated_normal_data['weights_true'][0].copy()
+    weights[0] += 1
     # Add small amount of noise to move from ints to floats
-    inds = np.where(rho != 0.)[0]
+    inds = np.where(weights != 0.)[0]
 
     if non_integral:
-        rho[inds] = rho[inds] + (np.random.rand(len(inds)))
+        weights[inds] = weights[inds] + (np.random.rand(len(inds)))
 
     variable_names = generated_normal_data['variable_names'].copy()
     coef_set = CoefficientSet(variable_names)
@@ -155,14 +155,14 @@ def test_discrete_descent_solution_pool(generated_normal_data, non_integral):
         "coef_set": coef_set,
     }
 
-    objvals = log_loss_value(Z, rho)
+    objvals = log_loss_value(Z, weights)
 
-    pool = SolutionPool({'objvals': objvals, 'solutions':rho})
+    pool = SolutionPool({'objvals': objvals, 'solutions':weights})
 
     C_0 = np.zeros(len(Z[0])) + .1e-16
 
-    get_L0_penalty = lambda rho: np.sum(
-        C_0 * (rho != 0.0)
+    get_L0_penalty = lambda weights: np.sum(
+        C_0 * (weights != 0.0)
     )
 
     compute_loss_from_scores = (

@@ -187,8 +187,8 @@ def test_get_score_bounds(use_L0):
 
     Z_min = np.ones(10)
     Z_max = np.ones(10) + 9
-    rho_lb = np.repeat(-5, 10)
-    rho_ub = np.repeat(-5, 10)
+    weights_lb = np.repeat(-5, 10)
+    weights_ub = np.repeat(-5, 10)
 
     L0_reg_ind = None
     max_size = None
@@ -197,7 +197,7 @@ def test_get_score_bounds(use_L0):
         L0_max = 1
 
     s_min, s_max = get_score_bounds(
-        Z_min, Z_max, rho_lb, rho_ub, L0_reg_ind=L0_reg_ind, max_size=max_size
+        Z_min, Z_max, weights_lb, weights_ub, L0_reg_ind=L0_reg_ind, max_size=max_size
     )
 
     assert s_min <= s_max

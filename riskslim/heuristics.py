@@ -1,51 +1,51 @@
 import numpy as np
 
 
-def sequential_rounding(rho, Z, C_0, compute_loss_from_scores, get_L0_penalty, objval_cutoff = float('Inf')):
+def sequential_rounding(weights, Z, C_0, compute_loss_from_scores, get_L0_penalty, objval_cutoff = float('Inf')):
     """
 
     Parameters
     ----------
-    rho:                                P x 1 vector of continuous coefficients
+    weights:                            P x 1 vector of continuous coefficients
     Z:                                  N x P data matrix computed as X * Y
-    C_0:                                N x 1 vector of L0 penalties. C_0[j] = L0 penalty for rho[j] for j = 0,..., P.
-    compute_loss_from_scores:      function handle to compute loss using N x 1 vector of scores, where scores = Z.dot(rho)
-    get_L0_penalty:                     function handle to compute L0_penalty from rho
+    C_0:                                N x 1 vector of L0 penalties. C_0[j] = L0 penalty for weights[j] for j = 0,..., P.
+    compute_loss_from_scores:      function handle to compute loss using N x 1 vector of scores, where scores = Z.dot(weights)
+    get_L0_penalty:                     function handle to compute L0_penalty from weights
     objval_cutoff:                      objective value used for early stopping.
                                         the procedure will stop if the objective value achieved by an intermediate solution will exceeds objval_cutoff
 
     Returns
     -------
 
-    rho:                                P x 1 vector of integer coefficients (if early_stop_flag = False, otherwise continuous solution)
-    best_objval:                        objective value achieved by rho (if early_stop_flag = False, otherwise NaN)
-    early_stop_flag:                    True if procedure was stopped early (in which case rho is not integer feasible)
+    weights:                            P x 1 vector of integer coefficients (if early_stop_flag = False, otherwise continuous solution)
+    best_objval:                        objective value achieved by weights (if early_stop_flag = False, otherwise NaN)
+    early_stop_flag:                    True if procedure was stopped early (in which case weights is not integer feasible)
 
     """
 
     assert callable(compute_loss_from_scores)
     assert callable(get_L0_penalty)
 
-    rho = np.copy(rho)
-    d = rho.shape[0]
+    weights = np.copy(weights)
+    d = weights.shape[0]
 
-    rho_floor = np.floor(rho)
-    floor_is_zero = np.equal(rho_floor, 0)
-    dist_from_start_to_floor = rho_floor - rho
+    weights_floor = np.floor(weights)
+    floor_is_zero = np.equal(weights_floor, 0)
+    dist_from_start_to_floor = weights_floor - weights
 
-    rho_ceil = np.ceil(rho)
-    ceil_is_zero = np.equal(rho_ceil, 0)
-    dist_from_start_to_ceil = rho_ceil - rho
+    weights_ceil = np.ceil(weights)
+    ceil_is_zero = np.equal(weights_ceil, 0)
+    dist_from_start_to_ceil = weights_ceil - weights
 
-    dimensions_to_round = np.flatnonzero(np.not_equal(rho_floor, rho_ceil)).tolist()
+    dimensions_to_round = np.flatnonzero(np.not_equal(weights_floor, weights_ceil)).tolist()
 
-    scores = Z.dot(rho)
-    best_objval = compute_loss_from_scores(scores) + get_L0_penalty(rho)
+    scores = Z.dot(weights)
+    best_objval = compute_loss_from_scores(scores) + get_L0_penalty(weights)
     while len(dimensions_to_round) > 0 and best_objval < objval_cutoff:
 
         objvals_at_floor = np.repeat(np.nan, d)
         objvals_at_ceil = np.repeat(np.nan, d)
-        current_penalty = get_L0_penalty(rho)
+        current_penalty = get_L0_penalty(weights)
 
         for idx in dimensions_to_round:
 
@@ -73,38 +73,38 @@ def sequential_rounding(rho, Z, C_0, compute_loss_from_scores, get_L0_penalty, o
         if best_objval_at_ceil <= best_objval_at_floor:
             best_objval = best_objval_at_ceil
             best_dim = np.nanargmin(objvals_at_ceil)
-            rho[best_dim] += dist_from_start_to_ceil[best_dim]
+            weights[best_dim] += dist_from_start_to_ceil[best_dim]
             scores += dist_from_start_to_ceil[best_dim] * Z[:, best_dim]
         else:
             best_objval = best_objval_at_floor
             best_dim = np.nanargmin(objvals_at_floor)
-            rho[best_dim] += dist_from_start_to_floor[best_dim]
+            weights[best_dim] += dist_from_start_to_floor[best_dim]
             scores += dist_from_start_to_floor[best_dim] * Z[:, best_dim]
 
         dimensions_to_round.remove(best_dim)
-        #assert(np.all(np.isclose(scores, Z.dot(rho))))
+        #assert(np.all(np.isclose(scores, Z.dot(weights))))
 
     early_stop_flag = best_objval > objval_cutoff
-    return rho, best_objval, early_stop_flag
+    return weights, best_objval, early_stop_flag
 
 
-def discrete_descent(rho, Z, C_0, rho_ub, rho_lb, get_L0_penalty, compute_loss_from_scores, descent_dimensions = None, active_set_flag = True):
+def discrete_descent(weights, Z, C_0, weights_ub, weights_lb, get_L0_penalty, compute_loss_from_scores, descent_dimensions = None, active_set_flag = True):
 
     """
-    Given a initial feasible solution, rho, produces an improved solution that is 1-OPT
+    Given a initial feasible solution, weights, produces an improved solution that is 1-OPT
     (i.e. the objective value does not decrease by moving in any single dimension)
     at each iteration, the algorithm moves in the dimension that yields the greatest decrease in objective value
     the best step size is each dimension is computed using a directional search strategy that saves computation
 
     Parameters
     ----------
-    rho:                                P x 1 vector of continuous coefficients
+    weights:                            P x 1 vector of continuous coefficients
     Z:                                  N x P data matrix computed as X * Y
-    C_0:                                N x 1 vector of L0 penalties. C_0[j] = L0 penalty for rho[j] for j = 0,..., P.
-    rho_ub
-    rho_lb
-    compute_loss_from_scores:      function handle to compute loss using N x 1 vector of scores, where scores = Z.dot(rho)
-    get_L0_penalty:                     function handle to compute L0_penalty from rho
+    C_0:                                N x 1 vector of L0 penalties. C_0[j] = L0 penalty for weights[j] for j = 0,..., P.
+    weights_ub
+    weights_lb
+    compute_loss_from_scores:      function handle to compute loss using N x 1 vector of scores, where scores = Z.dot(weights)
+    get_L0_penalty:                     function handle to compute L0_penalty from weights
     descent_dimensions
 
     Returns
@@ -118,10 +118,10 @@ def discrete_descent(rho, Z, C_0, rho_ub, rho_lb, get_L0_penalty, compute_loss_f
     # initialize key variables
     MAX_ITERATIONS = 500
     MIN_IMPROVEMENT_PER_STEP = float(1e-8)
-    d = len(rho)
+    d = len(weights)
 
     # convert solution to integer
-    rho = np.require(np.require(rho, dtype = np.int_), dtype = np.float64)
+    weights = np.require(np.require(weights, dtype = np.int_), dtype = np.float64)
 
     # convert descent dimensions to integer values
     if descent_dimensions is None:
@@ -130,16 +130,16 @@ def discrete_descent(rho, Z, C_0, rho_ub, rho_lb, get_L0_penalty, compute_loss_f
         descent_dimensions = np.require(descent_dimensions, dtype = np.int_)
 
     if active_set_flag:
-        descent_dimensions = np.intersect1d(np.flatnonzero(rho), descent_dimensions)
+        descent_dimensions = np.intersect1d(np.flatnonzero(weights), descent_dimensions)
 
     descent_dimensions = descent_dimensions.tolist()
 
-    base_scores = Z.dot(rho)
+    base_scores = Z.dot(weights)
     base_loss = compute_loss_from_scores(base_scores)
-    base_objval = base_loss + get_L0_penalty(rho)
+    base_objval = base_loss + get_L0_penalty(weights)
     n_iterations = 0
 
-    coefficient_values = {k: np.arange(int(rho_lb[k]), int(rho_ub[k]) + 1) for k in descent_dimensions}
+    coefficient_values = {k: np.arange(int(weights_lb[k]), int(weights_ub[k]) + 1) for k in descent_dimensions}
     search_dimensions = descent_dimensions
     while n_iterations < MAX_ITERATIONS and len(search_dimensions) > 0:
 
@@ -149,7 +149,7 @@ def discrete_descent(rho, Z, C_0, rho_ub, rho_lb, get_L0_penalty, compute_loss_f
 
         for k in search_dimensions:
 
-            dim_objvals = _compute_objvals_at_dim(base_rho = rho,
+            dim_objvals = _compute_objvals_at_dim(base_weights = weights,
                                                   base_scores = base_scores,
                                                   base_loss = base_loss,
                                                   dim_idx = k,
@@ -171,10 +171,10 @@ def discrete_descent(rho, Z, C_0, rho_ub, rho_lb, get_L0_penalty, compute_loss_f
         if next_objval >= threshold_objval:
             break
 
-        best_step = best_coef_by_dim[best_idx] - rho[best_idx]
-        rho[best_idx] += best_step
+        best_step = best_coef_by_dim[best_idx] - weights[best_idx]
+        weights[best_idx] += best_step
         base_objval = next_objval
-        base_loss = base_objval - get_L0_penalty(rho)
+        base_loss = base_objval - get_L0_penalty(weights)
         base_scores = base_scores + (best_step * Z[:, best_idx])
 
         # remove the current best direction from the set of directions to explore
@@ -182,19 +182,19 @@ def discrete_descent(rho, Z, C_0, rho_ub, rho_lb, get_L0_penalty, compute_loss_f
         search_dimensions.remove(best_idx)
         n_iterations += 1
 
-    return rho, base_loss, base_objval
+    return weights, base_loss, base_objval
 
 
-def _compute_objvals_at_dim(Z, C_0, base_rho, base_scores, base_loss, dim_coefs, dim_idx, compute_loss_from_scores):
+def _compute_objvals_at_dim(Z, C_0, base_weights, base_scores, base_loss, dim_coefs, dim_idx, compute_loss_from_scores):
 
     """
-    finds the value of rho[j] in dim_coefs that minimizes log_loss(rho) + C_0j
+    finds the value of weights[j] in dim_coefs that minimizes log_loss(weights) + C_0j
 
     Parameters
     ----------
     Z
     C_0
-    base_rho
+    base_weights
     base_scores
     base_loss
     dim_coefs
@@ -210,8 +210,8 @@ def _compute_objvals_at_dim(Z, C_0, base_rho, base_scores, base_loss, dim_coefs,
     scores = np.copy(base_scores)
 
     # initialize parameters
-    P = base_rho.shape[0]
-    base_coef_value = base_rho[dim_idx]
+    P = base_weights.shape[0]
+    base_coef_value = base_weights[dim_idx]
     base_index = np.flatnonzero(dim_coefs == base_coef_value)
     loss_at_coef_value = np.repeat(np.nan, len(dim_coefs))
     loss_at_coef_value[base_index] = float(base_loss)
@@ -266,7 +266,7 @@ def _compute_objvals_at_dim(Z, C_0, base_rho, base_scores, base_loss, dim_coefs,
 
     # compute objective values by adding penalty values to all other indices
     other_dim_idx = np.flatnonzero(dim_idx != np.arange(P))
-    other_dim_penalty = np.sum(C_0[other_dim_idx] * (base_rho[other_dim_idx] != 0))
+    other_dim_penalty = np.sum(C_0[other_dim_idx] * (base_weights[other_dim_idx] != 0))
     objval_at_coef_values = loss_at_coef_value + other_dim_penalty
 
     if C_0[dim_idx] > 0.0:

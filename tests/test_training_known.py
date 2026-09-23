@@ -35,10 +35,10 @@ def test_training_matches_known_reference(known_dataset_name, training_test_case
         "integer optimal solution",
         "integer optimal, tolerance",
     }
-    rho = np.insert(clf.coef_, 0, clf.intercept_)
+    weights = np.insert(clf.coef_, 0, clf.intercept_)
     assert np.count_nonzero(clf.coef_) <= 5
-    assert np.all(np.abs(rho[1:]) <= 5)
-    assert np.all(rho == np.rint(rho))
+    assert np.all(np.abs(weights[1:]) <= 5)
+    assert np.all(weights == np.rint(weights))
     assert np.mean(clf.predict(X) == np.asarray(expected["predictions"])) >= 0.99
 
 

@@ -92,19 +92,19 @@ def test_polish_and_round_callback(generated_normal_data):
     opt.cut_queue = FastSolutionPool(12)
     opt.polish_queue = FastSolutionPool(12)
 
-    polisher = lambda rho: discrete_descent(
-        rho,
+    polisher = lambda weights: discrete_descent(
+        weights,
         opt.Z,
         opt.C_0,
-        opt.rho_max,
-        opt.rho_min,
+        opt.weights_max,
+        opt.weights_min,
         opt.get_L0_penalty,
         opt.compute_loss_from_scores,
         True,
     )
 
-    rounder = lambda rho, cutoff: sequential_rounding(
-        rho,
+    rounder = lambda weights, cutoff: sequential_rounding(
+        weights,
         opt.Z,
         opt.C_0,
         opt.compute_loss_from_scores,

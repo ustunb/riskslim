@@ -65,10 +65,10 @@ def test_time_limited_fit_matches_solver_objective():
 
     rs.fit(X, y)
 
-    rho = np.r_[rs.intercept_, rs.coef_]
-    signed_scores = (1.0 - 2.0 * y) * (rho[0] + X @ rho[1:])
+    weights = np.r_[rs.intercept_, rs.coef_]
+    signed_scores = (1.0 - 2.0 * y) * (weights[0] + X @ weights[1:])
     mean_logistic_loss = float(np.mean(np.logaddexp(0.0, signed_scores)))
-    expected_objective = mean_logistic_loss + c0_value * np.count_nonzero(rho[1:])
+    expected_objective = mean_logistic_loss + c0_value * np.count_nonzero(weights[1:])
     raw_objective = rs.optimizer.solution.get_objective_value()
 
     np.testing.assert_allclose(raw_objective, expected_objective, rtol=0.0, atol=1e-6)

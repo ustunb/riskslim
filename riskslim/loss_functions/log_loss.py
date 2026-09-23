@@ -1,6 +1,6 @@
 import numpy as np
 
-def log_loss_value(Z, rho):
+def log_loss_value(Z, weights):
     """Computes the value and slope of the logistic loss in a numerically stable way.
 
     Parameters
@@ -8,19 +8,19 @@ def log_loss_value(Z, rho):
     Z : 2d array
         Containing training data with shape = (n_rows, n_cols)
         Inner product of X and y.
-    rho : 1d array
+    weights : 1d array
         Coefficients with shape = (n_cols,)
 
     Returns
     -------
     loss_value : float
-        Loss as 1/n_rows * sum(log( 1 .+ exp(-Z*rho)).
+        Loss as 1/n_rows * sum(log( 1 .+ exp(-Z*weights)).
 
     Notes
     -----
     See also: http://stackoverflow.com/questions/20085768/.
     """
-    scores = Z.dot(rho)
+    scores = Z.dot(weights)
     pos_idx = scores > 0
     loss_value = np.empty_like(scores)
     loss_value[pos_idx] = np.log1p(np.exp(-scores[pos_idx]))
@@ -28,7 +28,7 @@ def log_loss_value(Z, rho):
     loss_value = loss_value.mean()
     return loss_value
 
-def log_loss_value_and_slope(Z, rho):
+def log_loss_value_and_slope(Z, weights):
     """Computes the value and slope of the logistic loss in a numerically stable way
     this function should only be used when generating cuts in cutting-plane algorithms
     (computing both the value and the slope at the same time is slightly cheaper).
@@ -38,21 +38,21 @@ def log_loss_value_and_slope(Z, rho):
     Z : 2d array
         Containing training data with shape = (n_rows, n_cols)
         Inner product of X and y.
-    rho : 1d array
+    weights : 1d array
         Coefficients with shape = (n_cols,)
 
     Returns
     -------
     loss_value : float
-        Loss as 1/n_rows * sum(log( 1 .+ exp(-Z*rho)).
+        Loss as 1/n_rows * sum(log( 1 .+ exp(-Z*weights)).
     loss_slope : 1d array
-        Gradient as (n_cols x 1) vector = 1/n_rows * sum(-Z*rho ./ (1+exp(-Z*rho)).
+        Gradient as (n_cols x 1) vector = 1/n_rows * sum(-Z*weights ./ (1+exp(-Z*weights)).
 
     Notes
     -----
     See also: http://stackoverflow.com/questions/20085768/
     """
-    scores = Z.dot(rho)
+    scores = Z.dot(weights)
     pos_idx = scores > 0
     exp_scores_pos = np.exp(-scores[pos_idx])
     exp_scores_neg = np.exp(scores[~pos_idx])
@@ -73,17 +73,17 @@ def log_loss_value_and_slope(Z, rho):
 
 def log_loss_value_from_scores(scores):
     """Computes the logistic loss value from a vector of scores in a numerically stable way
-    where scores = Z.dot(rho).
+    where scores = Z.dot(weights).
 
     Parameters
     ----------
     scores : 1d array
-        Dot product between Z and rho.
+        Dot product between Z and weights.
 
     Returns
     -------
     loss_value : float
-        Loss as 1/n_rows * sum(log( 1 .+ exp(-Z*rho)).
+        Loss as 1/n_rows * sum(log( 1 .+ exp(-Z*weights)).
 
     Notes
     -----
@@ -102,7 +102,7 @@ def log_loss_value_from_scores(scores):
     loss_value = loss_value.mean()
     return loss_value
 
-def log_probs(Z, rho):
+def log_probs(Z, weights):
     """Compute the probabilities of the logistic loss function in a way that is numerically stable.
 
     Parameters
@@ -110,7 +110,7 @@ def log_probs(Z, rho):
     Z : 2d array
         Containing training data with shape = (n_rows, n_cols)
         Inner product of X and y.
-    rho : 1d array
+    weights : 1d array
         Coefficients with shape = (n_cols,).
 
     Returns
@@ -123,7 +123,7 @@ def log_probs(Z, rho):
     See also: http://stackoverflow.com/questions/20085768/
     """
 
-    scores = Z.dot(rho)
+    scores = Z.dot(weights)
     pos_idx = scores > 0
     log_probs = np.empty_like(scores)
     log_probs[pos_idx]  = 1.0 / (1.0 + np.exp(-scores[pos_idx]))

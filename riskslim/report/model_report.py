@@ -8,10 +8,10 @@ displays what Python computed.
 
 Conventions
 -----------
-- ``rho`` and ``variable_names`` follow riskslim's convention and **include the intercept** at
+- ``weights`` and ``variable_names`` follow riskslim's convention and **include the intercept** at
   index 0, named ``"(Intercept)"``. ``X`` in each sample **excludes** the intercept column (it is
   the matrix passed to ``fit``).
-- The **score** of a row is ``X @ rho[1:]`` (points only, no intercept). Its risk is
+- The **score** of a row is ``X @ weights[1:]`` (points only, no intercept). Its risk is
   ``1 / (1 + exp(-(score + intercept)))``.
 - A row is predicted positive when ``score + intercept > 0`` (risk strictly above 0.5), the same
   rule as ``RiskSLIMClassifier.predict``.
@@ -159,16 +159,16 @@ class ModelReport:
                  y_test=None):
         check_is_fitted(classifier)
         dataset = checked_dataset(data, classifier)
-        self.rho, self.variable_names = checked_coefficients(classifier, dataset)
+        self.weights, self.variable_names = checked_coefficients(classifier, dataset)
         self.outcome_name = str(dataset.names.y)
         self.training = classifier.solution_info_
         self.constraints = fitted_constraints(classifier)
-        self.model_type = checked_model_type(model_type, self.rho[1:])
+        self.model_type = checked_model_type(model_type, self.weights[1:])
 
         # samples stay local: the page needs only what they produce, and holding them would pin
         # a float64 copy of every X for the report's lifetime
         samples = split_samples(classifier, data, X_test, y_test)
-        intercept, points = float(self.rho[0]), self.rho[1:]
+        intercept, points = float(self.weights[0]), self.weights[1:]
 
         # {name: (y, score, intercept)}: the model scores each split; a CV row is scored by its
         # own fold model, so the CV sample carries one intercept per row
@@ -248,10 +248,10 @@ def checked_dataset(data, classifier):
 
 def checked_coefficients(classifier, dataset):
     """The coefficients, intercept first, and their names from the dataset."""
-    rho = np.asarray(classifier._rho, dtype=float)
-    if not np.all(np.isfinite(rho)):
-        raise ValueError(f"rho must be finite; got {rho.tolist()}")
-    return rho, [INTERCEPT_NAME, *dataset.names.X]
+    weights = np.asarray(classifier._weights, dtype=float)
+    if not np.all(np.isfinite(weights)):
+        raise ValueError(f"weights must be finite; got {weights.tolist()}")
+    return weights, [INTERCEPT_NAME, *dataset.names.X]
 
 
 def fitted_constraints(classifier):
@@ -360,7 +360,12 @@ def display_name(name):
 
 
 def model_section(points, intercept, names, outcome_name, model_type, X_train, scores):
-    """Items, score range, score-to-risk row and (for checklists) M and the rule."""
+    """Items, score range, score-to-risk strip and (for checklists) M and the rule.
+
+    ``points_header`` is the item table's points column, and None when there is no such column
+    (a checklist whose items are all ``+1``: every box counts the same, so a column of ``+`` says
+    nothing). ``score_header`` and ``risk_header`` label the score-to-risk strip.
+    """
     items = []
     value_sets = []
     for j in np.flatnonzero(points):

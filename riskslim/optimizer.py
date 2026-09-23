@@ -43,7 +43,7 @@ class RiskSLIMOptimizer:
         Additional solution information.
     pool : riskslim.solution_pool.SolutionPool
         Pool of solutions and associated objective values.
-    coefficients, rho : 1d array
+    coefficients, weights : 1d array
         Solved cofficients.
     fitted : bool
         Whether model has be fit.
@@ -101,7 +101,7 @@ class RiskSLIMOptimizer:
         assert np.greater(c0_value, 0.0), "c0_value should be positive"
         self.c0_value = c0_value
 
-        # design matrix: the intercept is rho[0], so a ones column goes first; data.d does not count it
+        # design matrix: the intercept is weights[0], so a ones column goes first; data.d does not count it
         X_with_intercept = np.column_stack([np.ones(data.n), data.X])
         y_signed = np.where(data.y == data.classes[0], -1, 1)
         self.n_variables = data.d + 1
@@ -152,11 +152,11 @@ class RiskSLIMOptimizer:
             self.__setattr__(f"compute_{name}", handle)
 
         # other handles
-        self.get_L0_norm = lambda rho: np.count_nonzero(rho[self.L0_reg_ind])
-        self.get_L0_penalty = lambda rho: np.sum(self.C_0_nnz * (rho[self.L0_reg_ind] != 0.0))
-        self.get_alpha = lambda rho: np.array(abs(rho[self.L0_reg_ind]) > 0.0, dtype=np.float64)
+        self.get_L0_norm = lambda weights: np.count_nonzero(weights[self.L0_reg_ind])
+        self.get_L0_penalty = lambda weights: np.sum(self.C_0_nnz * (weights[self.L0_reg_ind] != 0.0))
+        self.get_alpha = lambda weights: np.array(abs(weights[self.L0_reg_ind]) > 0.0, dtype=np.float64)
         self.get_L0_penalty_from_alpha = lambda alpha: np.sum(self.C_0_nnz * alpha)
-        self.get_objval = lambda rho: self.compute_loss(rho) + np.sum(self.C_0_nnz * (rho[self.L0_reg_ind] != 0.0))
+        self.get_objval = lambda weights: self.compute_loss(weights) + np.sum(self.C_0_nnz * (weights[self.L0_reg_ind] != 0.0))
 
         # set up bounds
         bounds = Bounds(min_size = self.min_size, max_size=self.max_size)
@@ -210,8 +210,8 @@ class RiskSLIMOptimizer:
         rounder = None
         if settings["round_flag"] or settings["polish_flag"]:
             active_set_flag = self.max_size <= self.n_variables
-            polisher = lambda rho: discrete_descent(
-                    rho,
+            polisher = lambda weights: discrete_descent(
+                    weights,
                     self.Z,
                     self.C_0,
                     self.coef_set.ub,
@@ -221,8 +221,8 @@ class RiskSLIMOptimizer:
                     active_set_flag,
                     )
 
-            rounder = lambda rho, cutoff: sequential_rounding(
-                    rho,
+            rounder = lambda weights, cutoff: sequential_rounding(
+                    weights,
                     self.Z,
                     self.C_0,
                     self.compute_loss_from_scores,
@@ -306,12 +306,12 @@ class RiskSLIMOptimizer:
             }
 
         # todo move into factory function
-        def rounded_model_size_is_ok(rho):
-            zero_idx_rho_ceil = np.equal(np.ceil(rho), 0)
-            zero_idx_rho_floor = np.equal(np.floor(rho), 0)
-            cannot_round_to_zero = np.logical_not(np.logical_or(zero_idx_rho_ceil, zero_idx_rho_floor))
+        def rounded_model_size_is_ok(weights):
+            zero_idx_weights_ceil = np.equal(np.ceil(weights), 0)
+            zero_idx_weights_floor = np.equal(np.floor(weights), 0)
+            cannot_round_to_zero = np.logical_not(np.logical_or(zero_idx_weights_ceil, zero_idx_weights_floor))
             rounded_min_coef_size = np.count_nonzero(cannot_round_to_zero[self.L0_reg_ind])
-            rounded_max_coef_size = np.count_nonzero(rho[self.L0_reg_ind])
+            rounded_max_coef_size = np.count_nonzero(weights[self.L0_reg_ind])
             return (
                     rounded_min_coef_size >= self.min_size >= 0
                     and rounded_max_coef_size <= self.max_size
@@ -531,12 +531,12 @@ class RiskSLIMOptimizer:
         return info
 
     # helper functions
-    def is_feasible(self, rho):
+    def is_feasible(self, weights):
         """Ensure constraints are obeyed.
 
         Parameters
         ----------
         """
-        flag = np.greater_equal(self.coef_set.ub, rho).all() and np.less_equal(self.coef_set.lb, rho).all()
-        flag = (self.min_size <= np.count_nonzero(rho[self.L0_reg_ind]) <= self.max_size)
+        flag = np.greater_equal(self.coef_set.ub, weights).all() and np.less_equal(self.coef_set.lb, weights).all()
+        flag = (self.min_size <= np.count_nonzero(weights[self.L0_reg_ind]) <= self.max_size)
         return flag

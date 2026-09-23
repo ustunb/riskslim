@@ -11,16 +11,16 @@ from .defaults import INTERCEPT_NAME
 
 
 # MODEL PRINTING
-def print_model(rho, variable_names, outcome_name, show_omitted_variables=False, return_only=False):
+def print_model(weights, variable_names, outcome_name, show_omitted_variables=False, return_only=False):
 
-    rho_values = np.copy(rho)
-    rho_names = list(variable_names)
+    weights_values = np.copy(weights)
+    weights_names = list(variable_names)
 
-    if INTERCEPT_NAME in rho_names:
+    if INTERCEPT_NAME in weights_names:
         intercept_ind = variable_names.index(INTERCEPT_NAME)
-        intercept_val = int(rho[intercept_ind])
-        rho_values = np.delete(rho_values, intercept_ind)
-        rho_names.remove(INTERCEPT_NAME)
+        intercept_val = int(weights[intercept_ind])
+        weights_values = np.delete(weights_values, intercept_ind)
+        weights_names.remove(INTERCEPT_NAME)
     else:
         intercept_val = 0
 
@@ -30,25 +30,25 @@ def print_model(rho, variable_names, outcome_name, show_omitted_variables=False,
         predict_string = "Pr(%s = +1) = 1.0/(1.0 + exp(-(%d + score))" % (outcome_name.upper(), intercept_val)
 
     if not show_omitted_variables:
-        selected_ind = np.flatnonzero(rho_values)
-        rho_values = rho_values[selected_ind]
-        rho_names = [rho_names[i] for i in selected_ind]
+        selected_ind = np.flatnonzero(weights_values)
+        weights_values = weights_values[selected_ind]
+        weights_names = [weights_names[i] for i in selected_ind]
 
         #sort by most positive to most negative
-        sort_ind = np.argsort(-np.array(rho_values))
-        rho_values = [rho_values[j] for j in sort_ind]
-        rho_names = [rho_names[j] for j in sort_ind]
-        rho_values = np.array(rho_values)
+        sort_ind = np.argsort(-np.array(weights_values))
+        weights_values = [weights_values[j] for j in sort_ind]
+        weights_names = [weights_names[j] for j in sort_ind]
+        weights_values = np.array(weights_values)
 
-    rho_values_string = [str(int(i)) + " points" for i in rho_values]
-    n_variable_rows = len(rho_values)
+    weights_values_string = [str(int(i)) + " points" for i in weights_values]
+    n_variable_rows = len(weights_values)
     if n_variable_rows > 0:
         total_string = "ADD POINTS FROM ROWS %d to %d" % (1, n_variable_rows)
     else:
         total_string = "NO VARIABLES: SCORE IS 0"
 
-    max_name_col_length = max(map(len, [predict_string, total_string, *rho_names])) + 2
-    max_value_col_length = max(7, max(map(len, rho_values_string), default=0) + len("points")) + 2
+    max_name_col_length = max(map(len, [predict_string, total_string, *weights_names])) + 2
+    max_value_col_length = max(7, max(map(len, weights_values_string), default=0) + len("points")) + 2
 
     m = pt.PrettyTable()
     m.field_names = ["Variable", "Points", "Tally"]
@@ -56,7 +56,7 @@ def print_model(rho, variable_names, outcome_name, show_omitted_variables=False,
     m.add_row([predict_string, "", ""])
     m.add_row(['=' * max_name_col_length, "=" * max_value_col_length, "========="])
 
-    for name, value_string in zip(rho_names, rho_values_string):
+    for name, value_string in zip(weights_names, weights_values_string):
         m.add_row([name, value_string, "+ ....."])
 
     m.add_row(['=' * max_name_col_length, "=" * max_value_col_length, "========="])

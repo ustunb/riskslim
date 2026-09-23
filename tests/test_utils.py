@@ -19,9 +19,9 @@ from riskslim.utils import (
 @pytest.mark.parametrize('outcome_name', ['Outcome',None])
 def test_print_model(variable_names, outcome_name):
 
-    rho = np.random.rand(10)
+    weights = np.random.rand(10)
 
-    print_model(rho, variable_names, outcome_name)
+    print_model(weights, variable_names, outcome_name)
 
 
 @pytest.mark.parametrize('log_to_console', [True, False])

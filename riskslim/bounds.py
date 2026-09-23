@@ -269,9 +269,9 @@ def compute_loss_bounds(Z, coef_set, max_size):
     return min_loss, max_loss
 
 
-def get_score_bounds(Z_min, Z_max, rho_lb, rho_ub, L0_reg_ind = None, max_size = None):
+def get_score_bounds(Z_min, Z_max, weights_lb, weights_ub, L0_reg_ind = None, max_size = None):
 
-    edge_values = np.vstack([Z_min * rho_lb, Z_max * rho_lb, Z_min * rho_ub, Z_max * rho_ub])
+    edge_values = np.vstack([Z_min * weights_lb, Z_max * weights_lb, Z_min * weights_ub, Z_max * weights_ub])
 
     if (max_size is None) or (L0_reg_ind is None) or (max_size == Z_min.shape[0]):
         s_min = np.sum(np.min(edge_values, axis=0))

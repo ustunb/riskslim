@@ -59,15 +59,15 @@ def get_oracle(case, model_type, c0_value, max_size):
         f"Precondition: {case['case_id']} {model_type} query is not exact. Run "
         f"`{regeneration_command}`."
     )
-    oracle_rho = query["representative_rho"]
-    oracle_support = int(np.count_nonzero(oracle_rho[1:]))
-    oracle_signed_scores = (1.0 - 2.0 * case["y"]) * (oracle_rho[0] + case["X"] @ oracle_rho[1:])
+    oracle_weights = query["representative_weights"]
+    oracle_support = int(np.count_nonzero(oracle_weights[1:]))
+    oracle_signed_scores = (1.0 - 2.0 * case["y"]) * (oracle_weights[0] + case["X"] @ oracle_weights[1:])
     oracle_loss = float(np.mean(np.logaddexp(0.0, oracle_signed_scores)))
     oracle_objective = oracle_loss + c0_value * oracle_support
-    assert np.isfinite(oracle_rho).all()
-    np.testing.assert_allclose(oracle_rho, np.rint(oracle_rho), rtol=0.0, atol=0.0)
-    assert np.all(oracle_rho >= task["coefficient_set_lower_bounds"])
-    assert np.all(oracle_rho <= task["coefficient_set_upper_bounds"])
+    assert np.isfinite(oracle_weights).all()
+    np.testing.assert_allclose(oracle_weights, np.rint(oracle_weights), rtol=0.0, atol=0.0)
+    assert np.all(oracle_weights >= task["coefficient_set_lower_bounds"])
+    assert np.all(oracle_weights <= task["coefficient_set_upper_bounds"])
     assert oracle_support <= max_size
     np.testing.assert_allclose(query["pure_logistic_loss"], oracle_loss, rtol=0.0, atol=1e-12)
     np.testing.assert_allclose(query["objective"], oracle_objective, rtol=0.0, atol=1e-12)
@@ -112,9 +112,9 @@ def fit_and_assert_global_optimum(
     optimizer = classifier.optimizer
     solution = optimizer.solution
     solution_info = optimizer.solution_info
-    rho = np.r_[classifier.intercept_, classifier.coef_]
-    support = int(np.count_nonzero(rho[1:]))
-    signed_scores = (1.0 - 2.0 * case["y"]) * (rho[0] + case["X"] @ rho[1:])
+    weights = np.r_[classifier.intercept_, classifier.coef_]
+    support = int(np.count_nonzero(weights[1:]))
+    signed_scores = (1.0 - 2.0 * case["y"]) * (weights[0] + case["X"] @ weights[1:])
     pure_logistic_loss = float(np.mean(np.logaddexp(0.0, signed_scores)))
     recomputed_objective = pure_logistic_loss + c0_value * support
     raw_objective = solution.get_objective_value()
@@ -132,15 +132,15 @@ def fit_and_assert_global_optimum(
         rtol=0.0,
         atol=1e-12,
     )
-    assert np.isfinite(rho).all()
-    np.testing.assert_allclose(rho, np.rint(rho), rtol=0.0, atol=1e-8)
-    assert np.all(rho >= task["coefficient_set_lower_bounds"])
-    assert np.all(rho <= task["coefficient_set_upper_bounds"])
+    assert np.isfinite(weights).all()
+    np.testing.assert_allclose(weights, np.rint(weights), rtol=0.0, atol=1e-8)
+    assert np.all(weights >= task["coefficient_set_lower_bounds"])
+    assert np.all(weights <= task["coefficient_set_upper_bounds"])
     assert support <= oracle_max_size
     np.testing.assert_allclose(
         recomputed_objective, oracle["objective"], rtol=0.0, atol=OBJECTIVE_TOLERANCE
     )
-    raw_rho = solution.get_values(optimizer.mip_indices["rho"])
+    raw_weights = solution.get_values(optimizer.mip_indices["rho"])
     native_alpha = solution.get_values(optimizer.mip_indices["alpha"])
     native_loss = solution.get_values(optimizer.mip_indices["loss"])
     np.testing.assert_allclose(
@@ -149,7 +149,7 @@ def fit_and_assert_global_optimum(
         rtol=0.0,
         atol=OBJECTIVE_TOLERANCE,
         err_msg=(
-            f"raw rho={raw_rho!r}; alpha={native_alpha!r}; "
+            f"raw weights={raw_weights!r}; alpha={native_alpha!r}; "
             f"loss={native_loss!r}; status={solution.get_status_string()!r}"
         ),
     )
@@ -175,7 +175,7 @@ def fit_and_assert_global_optimum(
         "loss": pure_logistic_loss,
         "objective": recomputed_objective,
         "support": support,
-        "rho": rho,
+        "weights": weights,
         "oracle": oracle,
     }
 
@@ -256,10 +256,10 @@ def test_solver_drops_redundant_features_at_global_optimum(
     task = case["tasks"][model_type]
     c0_value, max_size = next(iter(task["queries"]))
     oracle = task["queries"][(c0_value, max_size)]
-    assert np.count_nonzero(oracle["representative_rho"][1:]) > 0
+    assert np.count_nonzero(oracle["representative_weights"][1:]) > 0
     result = fit_and_assert_global_optimum(
         case, model_type, warm_start, c0_value, max_size, max_size
     )
-    feature_coefficients = result["rho"][1:]
+    feature_coefficients = result["weights"][1:]
     assert result["support"] > 0
     assert not np.any((feature_coefficients[:4] != 0.0) & (feature_coefficients[4:] != 0.0))

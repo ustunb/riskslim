@@ -13,8 +13,8 @@ X_TRAIN = np.array([
 Y_TRAIN = np.array([1, 1, 1, 0, 0, 0, 1, 0])
 X_TEST = np.array([[1, 1, 0], [0, 0, 0], [1, 0, 0], [0, 0, 1]])
 Y_TEST = np.array([1, 0, 1, 0])
-RISK_SCORE_RHO = [-2, 2, 1, -1]  # train scores: 3, 2, 2, 1, 0, 1, 0, -1
-CHECKLIST_RHO = [-1, 1, 1, 0]
+RISK_SCORE_WEIGHTS = [-2, 2, 1, -1]  # train scores: 3, 2, 2, 1, 0, 1, 0, -1
+CHECKLIST_WEIGHTS = [-1, 1, 1, 0]
 TRAINING = {"objective_value": 0.5, "optimality_gap": float("inf"), "run_time": 1.25}
 
 
@@ -36,7 +36,7 @@ def generate_random_normal(n_rows, n_columns, n_targets, seed):
     -------
     data : dict
         Contains features and labels.
-    rho : 1d array
+    weights : 1d array
         True weights.
     """
     np.random.seed(seed)
@@ -76,11 +76,11 @@ def generate_random_normal(n_rows, n_columns, n_targets, seed):
     data['outcome_name'] = '1'
 
    # True weights
-    rho = np.zeros(n_columns)
-    rho[selected] = -1
+    weights = np.zeros(n_columns)
+    weights[selected] = -1
 
     # Get predictions
-    true_preds = np.count_nonzero(np.sign(np.dot(X, rho)) == y[:, 0])
+    true_preds = np.count_nonzero(np.sign(np.dot(X, weights)) == y[:, 0])
 
     # Compute accuracy
     acc = true_preds / len(y)
@@ -89,4 +89,4 @@ def generate_random_normal(n_rows, n_columns, n_targets, seed):
     #   Sometimes outliers in the tails of the distributions will be miss-classified.
     assert acc > .95
 
-    return data, rho
+    return data, weights

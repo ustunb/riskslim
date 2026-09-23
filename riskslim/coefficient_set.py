@@ -102,8 +102,8 @@ class CoefficientSet:
         # get smallest / largest score
         s_min, s_max = get_score_bounds(Z_min = Z_min[variable_idx],
                                         Z_max = Z_max[variable_idx],
-                                        rho_lb = self.lb[variable_idx],
-                                        rho_ub = self.ub[variable_idx],
+                                        weights_lb = self.lb[variable_idx],
+                                        weights_ub = self.ub[variable_idx],
                                         L0_reg_ind = L0_reg_ind,
                                         max_size = max_L0_value)
 

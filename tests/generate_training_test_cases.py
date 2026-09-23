@@ -166,7 +166,7 @@ def build_data_generation_spec(case_id: str) -> dict:
         "random_number_generator": RANDOM_NUMBER_GENERATOR,
         "case_id": case_id,
         "feature_distribution": feature_distribution,
-        "rho_true": list(TRUTHS[truth_name]),
+        "weights_true": list(TRUTHS[truth_name]),
         "n_samples": N_SAMPLES,
         "feature_seed": SEED,
         "label_seed": list(CASE_LABEL_SEEDS.get(case_id, LABEL_SEED_SEQUENCE)),
@@ -234,7 +234,7 @@ def build_redundant_data_generation_spec(source: dict, redundant_features: str) 
         "source_case_id": source["case_id"],
         "source_data_digest": source["data_digest"],
         "feature_distribution": feature_distribution,
-        "rho_true": list(source_spec["rho_true"]),
+        "weights_true": list(source_spec["weights_true"]),
         "n_samples": N_SAMPLES,
         "redundant_features": redundant_features,
         "perturbation": redundant_perturbation(redundant_features, feature_distribution),
@@ -278,7 +278,7 @@ def generate_data(case_id: str, generation_spec: dict | None = None) -> dict:
     if not values_match(spec, expected_spec):
         raise ValueError(f"{case_id} has an unsupported baseline generation specification")
     feature_distribution = spec["feature_distribution"]
-    truth = np.asarray(spec["rho_true"], dtype=np.float64)
+    truth = np.asarray(spec["weights_true"], dtype=np.float64)
     feature_rng = np.random.RandomState(spec["feature_seed"])
     if feature_distribution == "binary":
         X = feature_rng.binomial(
@@ -329,7 +329,7 @@ def generate_data(case_id: str, generation_spec: dict | None = None) -> dict:
         "data_digest": data_digest,
         "data_identity": data_identity,
         "generation_spec": spec,
-        "rho_true": truth,
+        "weights_true": truth,
     }
 
 
@@ -391,8 +391,8 @@ def generate_redundant_data(
         "data_digest": data_digest,
         "data_identity": data_identity,
         "generation_spec": spec,
-        "rho_true": np.r_[spec["rho_true"], np.zeros(BASE_FEATURE_COUNT)],
-        "source_rho_true": np.asarray(spec["rho_true"], dtype=np.float64),
+        "weights_true": np.r_[spec["weights_true"], np.zeros(BASE_FEATURE_COUNT)],
+        "source_weights_true": np.asarray(spec["weights_true"], dtype=np.float64),
     }
 
 
@@ -749,7 +749,7 @@ def select_query(
     return {
         "query_identity": query_identity,
         "query_identity_digest": identity_digest(query_identity),
-        "representative_rho": np.r_[intercepts[index], coefficients[index]].astype(np.int16),
+        "representative_weights": np.r_[intercepts[index], coefficients[index]].astype(np.int16),
         "pure_logistic_loss": float(losses[index]),
         "penalty": float(c0_value * supports[index]),
         "objective": objective,
@@ -792,7 +792,7 @@ def validate_query_paths(queries: dict, max_sizes=MAX_SIZES) -> None:
 
 def fit_continuous_reference(data: dict) -> dict | None:
     """Fit the diagnostic unconstrained model for fractional planted truths."""
-    truth = data["rho_true"]
+    truth = data["weights_true"]
     if np.array_equal(truth, np.rint(truth)):
         return None
     settings = {
@@ -817,16 +817,16 @@ def fit_continuous_reference(data: dict) -> dict | None:
         )
         warnings.simplefilter("error", ConvergenceWarning)
         model.fit(data["X"], data["y"])
-    rho = np.r_[model.intercept_[0], model.coef_[0]]
-    probabilities = expit(rho[0] + data["X"] @ rho[1:])
+    weights = np.r_[model.intercept_[0], model.coef_[0]]
+    probabilities = expit(weights[0] + data["X"] @ weights[1:])
     augmented_X = np.column_stack((np.ones(len(data["X"])), data["X"]))
     gradient = augmented_X.T @ (probabilities - data["y"]) / len(data["y"])
-    signed_scores = (1.0 - 2.0 * data["y"]) * (rho[0] + data["X"] @ rho[1:])
+    signed_scores = (1.0 - 2.0 * data["y"]) * (weights[0] + data["X"] @ weights[1:])
     converged = bool(model.n_iter_[0] < model.max_iter)
     gradient_infinity_norm = float(np.max(np.abs(gradient)))
     if (
         not converged
-        or not np.isfinite(rho).all()
+        or not np.isfinite(weights).all()
         or gradient_infinity_norm > CONTINUOUS_GRADIENT_TOLERANCE
     ):
         raise AssertionError("continuous diagnostic did not reach a finite stationary fit")
@@ -834,7 +834,7 @@ def fit_continuous_reference(data: dict) -> dict | None:
     return {
         "identity": identity,
         "identity_digest": identity_digest(identity),
-        "rho": rho,
+        "weights": weights,
         "pure_logistic_loss": float(np.mean(np.logaddexp(0.0, signed_scores))),
         "converged": converged,
         "gradient_infinity_norm": gradient_infinity_norm,
@@ -1076,7 +1076,7 @@ def build_redundancy_certificate(
     gap = violating_objective - query["objective"]
     empty_objective = float(np.min(task["pure_logistic_losses"][supports == 0]))
     empty_gap = empty_objective - query["objective"]
-    representative = query["representative_rho"][1:]
+    representative = query["representative_weights"][1:]
     selected_pair_members = [
         [
             int(representative[index] != 0),
@@ -1122,7 +1122,7 @@ def compact_query(query: dict) -> dict:
     return {
         "query_identity": query["query_identity"],
         "query_identity_digest": query["query_identity_digest"],
-        "representative_rho": query["representative_rho"],
+        "representative_weights": query["representative_weights"],
         "pure_logistic_loss": query["pure_logistic_loss"],
         "objective": query["objective"],
         "representative_tie_count": query["representative_tie_count"],
@@ -1213,7 +1213,7 @@ def validate_continuous_reference(record: dict) -> None:
     case_id = record["case_id"]
     data_digest = record["data_digest"]
     continuous_reference = record.get("continuous_reference")
-    fractional_truth = not np.array_equal(record["rho_true"], np.rint(record["rho_true"]))
+    fractional_truth = not np.array_equal(record["weights_true"], np.rint(record["weights_true"]))
     if not fractional_truth:
         if continuous_reference is not None:
             raise ValueError(f"{case_id} should not have a continuous diagnostic")
@@ -1221,11 +1221,11 @@ def validate_continuous_reference(record: dict) -> None:
         not isinstance(continuous_reference, dict)
         or not continuous_reference.get("converged")
         or not np.isfinite(continuous_reference.get("pure_logistic_loss", np.nan))
-        or not np.isfinite(continuous_reference.get("rho", np.nan)).all()
+        or not np.isfinite(continuous_reference.get("weights", np.nan)).all()
         or continuous_reference.get("gradient_infinity_norm", np.inf)
         > CONTINUOUS_GRADIENT_TOLERANCE
         or continuous_reference.get("identity", {}).get("data_digest") != data_digest
-        or np.asarray(continuous_reference.get("rho", [])).shape != (record["X"].shape[1] + 1,)
+        or np.asarray(continuous_reference.get("weights", [])).shape != (record["X"].shape[1] + 1,)
     ):
         raise ValueError(f"{case_id} continuous diagnostic is invalid")
 
@@ -1261,7 +1261,7 @@ def validate_stored_query(data: dict, task: dict, key: tuple[float, int], query:
     expected_fields = {
         "query_identity",
         "query_identity_digest",
-        "representative_rho",
+        "representative_weights",
         "pure_logistic_loss",
         "objective",
         "representative_tie_count",
@@ -1275,21 +1275,21 @@ def validate_stored_query(data: dict, task: dict, key: tuple[float, int], query:
         or query["proven_complete"] is not True
     ):
         raise ValueError(f"query {key} identity does not match")
-    rho = query["representative_rho"]
+    weights = query["representative_weights"]
     lower = np.asarray(task["loss_identity"]["effective_integer_lower_bounds"])
     upper = np.asarray(task["loss_identity"]["effective_integer_upper_bounds"])
     if (
-        not isinstance(rho, np.ndarray)
-        or rho.shape != lower.shape
-        or not np.equal(rho, np.rint(rho)).all()
-        or np.any(rho < lower)
-        or np.any(rho > upper)
+        not isinstance(weights, np.ndarray)
+        or weights.shape != lower.shape
+        or not np.equal(weights, np.rint(weights)).all()
+        or np.any(weights < lower)
+        or np.any(weights > upper)
     ):
         raise ValueError(f"query {key} representative is outside its integer bounds")
-    cardinality = int(np.count_nonzero(rho[1:]))
+    cardinality = int(np.count_nonzero(weights[1:]))
     if cardinality > max_size:
         raise ValueError(f"query {key} representative exceeds its size limit")
-    signed_scores = (1.0 - 2.0 * data["y"]) * (rho[0] + data["X"] @ rho[1:])
+    signed_scores = (1.0 - 2.0 * data["y"]) * (weights[0] + data["X"] @ weights[1:])
     loss = float(np.mean(np.logaddexp(0.0, signed_scores)))
     objective = loss + c0_value * cardinality
     if not np.isclose(
@@ -1379,7 +1379,7 @@ def validate_stored_task(data: dict, model_type: str) -> None:
         ):
             raise ValueError(f"{case_id} {model_type} certifying query is not approved")
         result = validate_stored_query(data, task, key, queries[key])
-        representative = queries[key]["representative_rho"][1:]
+        representative = queries[key]["representative_weights"][1:]
         if result["cardinality"] == 0 or np.any(
             (representative[:BASE_FEATURE_COUNT] != 0) & (representative[BASE_FEATURE_COUNT:] != 0)
         ):

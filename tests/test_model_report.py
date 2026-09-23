@@ -30,7 +30,7 @@ Dimensions:
                                       plain label is the same path with nothing to escape, so it
                                       is not a separate case)
 
-Rejection paths owned here (one invalid mutation of a valid call each): non-finite rho, unknown
+Rejection paths owned here (one invalid mutation of a valid call each): non-finite weights, unknown
 model_type, X_test column count != the fitted feature count, y_test row count != X_test row
 count, y_test labels outside the classes seen in fit, and a sample with a single class.
 n/a: non-binary features for the checklist -- the score range rule is shared with the risk score.
@@ -57,9 +57,9 @@ import plotly.graph_objects as go
 import plotly.io as pio
 import pytest
 from utils import (
-    CHECKLIST_RHO,
+    CHECKLIST_WEIGHTS,
     NAMES,
-    RISK_SCORE_RHO,
+    RISK_SCORE_WEIGHTS,
     TRAINING,
     X_TEST,
     X_TRAIN,
@@ -99,11 +99,11 @@ def fitted():
     return fit_classifier()
 
 
-def make_report(classifier, rho, test=(X_TEST, Y_TEST), **kwargs):
-    """A report on a copy of ``classifier`` with coefficients ``rho`` (intercept first) and the
+def make_report(classifier, weights, test=(X_TEST, Y_TEST), **kwargs):
+    """A report on a copy of ``classifier`` with coefficients ``weights`` (intercept first) and the
     shared solver statistics, so expected values do not depend on what the solver found."""
     model = copy.copy(classifier)
-    model.intercept_, model.coef_ = float(rho[0]), np.asarray(rho[1:], dtype=float)
+    model.intercept_, model.coef_ = float(weights[0]), np.asarray(weights[1:], dtype=float)
     model.solution_info_ = dict(TRAINING)
     X_test, y_test = test
     return ModelReport(model, X_test=X_test, y_test=y_test, **kwargs)
@@ -112,11 +112,11 @@ def make_report(classifier, rho, test=(X_TEST, Y_TEST), **kwargs):
 @pytest.fixture(scope="module")
 def report(fitted):
     """The default risk-score report."""
-    return make_report(fitted, RISK_SCORE_RHO)
+    return make_report(fitted, RISK_SCORE_WEIGHTS)
 
 
 def test_risk_score_model_has_items_and_score_range(fitted):
-    model = make_report(fitted, RISK_SCORE_RHO).data["model"]
+    model = make_report(fitted, RISK_SCORE_WEIGHTS).data["model"]
 
     assert model["type"] == "risk_score"
     assert [(item["name"], item["points"]) for item in model["items"]] == [
@@ -132,35 +132,35 @@ def fitted_wide():
 
 
 def test_non_binary_feature_score_range_spans_points_times_value_range(fitted_wide):
-    model = make_report(fitted_wide, RISK_SCORE_RHO, test=(None, None)).data["model"]
+    model = make_report(fitted_wide, RISK_SCORE_WEIGHTS, test=(None, None)).data["model"]
 
     assert model["items"][0] == {"name": "a", "points": 2, "binary": False,
                                  "value_range": [1, 8]}
     assert model["score_range"] == [1, 17]
 
 
-@pytest.mark.parametrize("wide, rho, expected", [
-    pytest.param(False, RISK_SCORE_RHO,
+@pytest.mark.parametrize("wide, weights, expected", [
+    pytest.param(False, RISK_SCORE_WEIGHTS,
                  [("-1", "4.7%"), ("0", "11.9%"), ("1", "26.9%"), ("2", "50.0%"), ("3", "73.1%")],
                  id="narrow-range-keeps-one-cell-per-score"),
-    pytest.param(True, RISK_SCORE_RHO,
+    pytest.param(True, RISK_SCORE_WEIGHTS,
                  [("1", "26.9%"), ("2", "50.0%"), ("3", "73.1%"), ("4", "88.1%"), ("5", "95.3%"),
                   ("6", "98.2%"), ("7 to 17", "> 99.0%")],
                  id="wide-range-collapses-the-high-tail"),
     pytest.param(False, [-9, 2, 1, -1], [("-1 to 3", "< 1.0%")],
                  id="every-risk-below-one-percent-collapses-to-one-cell"),
 ])
-def test_score_to_risk_collapses_the_tails_of_the_strip(fitted, fitted_wide, wide, rho, expected):
+def test_score_to_risk_collapses_the_tails_of_the_strip(fitted, fitted_wide, wide, weights, expected):
     classifier, test = (fitted_wide, (None, None)) if wide else (fitted, (X_TEST, Y_TEST))
 
-    model = make_report(classifier, rho, test=test).data["model"]
+    model = make_report(classifier, weights, test=test).data["model"]
 
     assert [(cell["score"], cell["risk"]) for cell in model["score_to_risk"]] == expected
     assert not any(cell["positive"] for cell in model["score_to_risk"])
 
 
-@pytest.mark.parametrize("rho, expected_m, expected_rule", [
-    pytest.param(CHECKLIST_RHO, 2, "Predict y if at least 2 of 2 items are checked",
+@pytest.mark.parametrize("weights, expected_m, expected_rule", [
+    pytest.param(CHECKLIST_WEIGHTS, 2, "Predict y if at least 2 of 2 items are checked",
                  id="positive-items"),
     pytest.param([0, 1, 1, -1], 1,
                  "Predict y if the number of checked (+) items minus the number of checked "
@@ -169,9 +169,9 @@ def test_score_to_risk_collapses_the_tails_of_the_strip(fitted, fitted_wide, wid
                  "Never predict y (no set of checked items reaches the threshold)",
                  id="threshold-out-of-reach"),
 ])
-def test_checklist_m_is_smallest_net_count_with_positive_prediction(fitted, rho, expected_m,
+def test_checklist_m_is_smallest_net_count_with_positive_prediction(fitted, weights, expected_m,
                                                                     expected_rule):
-    model = make_report(fitted, rho).data["model"]
+    model = make_report(fitted, weights).data["model"]
 
     assert model["type"] == "checklist"
     assert model["checklist_m"] == expected_m
@@ -179,7 +179,7 @@ def test_checklist_m_is_smallest_net_count_with_positive_prediction(fitted, rho,
 
 
 def test_risk_score_type_can_be_forced_for_unit_coefficients(fitted):
-    report = make_report(fitted, CHECKLIST_RHO, model_type="risk_score")
+    report = make_report(fitted, CHECKLIST_WEIGHTS, model_type="risk_score")
 
     assert report.data["model"]["type"] == "risk_score"
 
@@ -189,7 +189,7 @@ def test_calibration_bins_count_rows_per_score(negative_label):
     y_train = np.where(Y_TRAIN == 1, 1, negative_label)
     y_test = np.where(Y_TEST == 1, 1, negative_label)
 
-    data = make_report(fit_classifier(X_TRAIN, y_train), RISK_SCORE_RHO, test=(X_TEST, y_test)).data
+    data = make_report(fit_classifier(X_TRAIN, y_train), RISK_SCORE_WEIGHTS, test=(X_TEST, y_test)).data
     train, test = data["calibration"]["Training"], data["calibration"]["Test"]
 
     assert train["scores"] == [-1, 0, 1, 2, 3]
@@ -227,16 +227,16 @@ def test_summary_has_four_blocks_of_formatted_values(report):
     }
 
 
-@pytest.mark.parametrize("rho", [RISK_SCORE_RHO, CHECKLIST_RHO], ids=["risk-score", "checklist"])
-def test_data_is_strict_json(fitted, rho):
-    data = make_report(fitted, rho).data
+@pytest.mark.parametrize("weights", [RISK_SCORE_WEIGHTS, CHECKLIST_WEIGHTS], ids=["risk-score", "checklist"])
+def test_data_is_strict_json(fitted, weights):
+    data = make_report(fitted, weights).data
 
     assert json.loads(json.dumps(data, allow_nan=False)) == data
     assert data["schema_version"] == 1
 
 
 @pytest.mark.parametrize("invalid, match", [
-    pytest.param({"rho": [float("nan"), 2, 1, -1]}, "rho must be finite", id="non-finite-rho"),
+    pytest.param({"weights": [float("nan"), 2, 1, -1]}, "weights must be finite", id="non-finite-weights"),
     pytest.param({"model_type": "decision_tree"}, "model_type must be one of",
                  id="unknown-model-type"),
     pytest.param({"test": (X_TEST[:, :2], Y_TEST)}, "expecting 3 features", id="column-count"),
@@ -248,7 +248,7 @@ def test_data_is_strict_json(fitted, rho):
                  id="single-class"),
 ])
 def test_invalid_inputs_are_rejected(fitted, invalid, match):
-    call = {"rho": RISK_SCORE_RHO, **invalid}
+    call = {"weights": RISK_SCORE_WEIGHTS, **invalid}
     with pytest.raises(ValueError, match=match):
         make_report(fitted, **call)
 
@@ -256,7 +256,7 @@ def test_invalid_inputs_are_rejected(fitted, invalid, match):
 def test_html_holds_one_data_block_that_round_trips(fitted):
     hostile_data = BinaryClassificationDataset(X=X_TRAIN, y=Y_TRAIN, X_names=HOSTILE_NAMES,
                                                y_name="y", n_folds=())
-    hostile_report = make_report(fitted, RISK_SCORE_RHO, data=hostile_data)
+    hostile_report = make_report(fitted, RISK_SCORE_WEIGHTS, data=hostile_data)
 
     blocks = DATA_BLOCK.findall(hostile_report.html)
 
@@ -337,7 +337,7 @@ def test_calibration_bubbles_are_labelled_with_scores_and_sized_by_n(report):
 
 
 def test_calibration_bubbles_pool_the_rows_of_a_collapsed_tail(fitted_wide):
-    report = make_report(fitted_wide, RISK_SCORE_RHO, test=(None, None))
+    report = make_report(fitted_wide, RISK_SCORE_WEIGHTS, test=(None, None))
     (train,) = report.data["figures"]["calibration"]["data"]
     section = report.data["calibration"]["Training"]
 
@@ -393,8 +393,8 @@ def report_dir(request, tmp_path_factory):
 @pytest.fixture(scope="module", params=["risk_score", "checklist"])
 def saved_report(request, fitted, report_dir):
     """One saved report page per model type, built and written once for all viewport widths."""
-    rho = {"risk_score": RISK_SCORE_RHO, "checklist": CHECKLIST_RHO}[request.param]
-    return make_report(fitted, rho).save(report_dir / f"{request.param}_report.html")
+    weights = {"risk_score": RISK_SCORE_WEIGHTS, "checklist": CHECKLIST_WEIGHTS}[request.param]
+    return make_report(fitted, weights).save(report_dir / f"{request.param}_report.html")
 
 
 @pytest.fixture(scope="module")
