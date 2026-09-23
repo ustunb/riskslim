@@ -7,12 +7,7 @@
   - remove cvindices from repository (make sure it's saved as a version)
   - add flags for current status?
   
-## ClassificationDataset
-- add "load data as CSV" as method for this object?
-- add "check_data" as function in this object
-
 ## Implement `check_data_for_riskslim` to check (X, y) in `RiskSLIM`Classifier`
-  - could build off `check_data`
   - X should be all finite - (n_variables x n_samples matrix)
   - y should be all finite and in 0,1 or -1,1 (flat n_samples array)
   - sample_weights should be all finite, positive (flat n_samples array)
@@ -23,8 +18,6 @@
      - This will rule out intercept
 
 ## RiskScores
-- Consider renaming to "RiskScoreReporter"?
-  - We don't seem to be using the other functionality
 - Add/Label Decision Points on ROC Curve and Reliability Diagram
   - "O" to Show Decision Points on ROC Curve
   - "O" with Scores
@@ -57,7 +50,6 @@
   - Turn into Standalone class (rather than super class for RiskSLIM) 
     - variable_names, min_coef, max_coef <- should be passed in via coefficient_set
     - outcome_name <- optimizer doesn't need outcome_name
-  - Use helper functions in cplex utils instead of in mip
   - Move "initialization code" in optimize() to init() 
     - **init__ doesn't have to comply to scikit-learn (confirm?).** 
   - Optimize should be designed to be called multiple times

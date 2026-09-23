@@ -9,13 +9,10 @@ Calibrate RiskSLIMClassifier probability estimates.
 
 from pathlib import Path
 
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-
 import numpy as np
-
+from plotly.io import show
+from plotly.subplots import make_subplots
 from sklearn import clone
-from sklearn.calibration import CalibratedClassifierCV
 
 from riskslim import RiskSLIMClassifier, load_data_from_csv
 
@@ -78,7 +75,8 @@ rs_base = RiskSLIMClassifier(max_coef = 5, max_size = 10,
 # Fit
 # ---
 #
-# After ``.fit`` of ``.fit_cv`` is called, ``.recalibrate`` may be used to fit a post-hoc calibrator.
+# After ``.fit`` of ``.fit_cv`` is called, ``.recalibrate`` may be used to fit a post-hoc
+# calibrator.
 # After calibrating, the ``.predict`` and ``.predict_proba`` use the output from the calibrator
 # (``.calibrated_estimator``) trained on all of the data passed. If ``.fit_cv`` is used, calibrator
 # estimators (``.cv_calibrated_estimators_``) are trained on the train sets and the plots will show
@@ -139,6 +137,5 @@ fig.update_layout({
 fig.show()
 
 # sphinx_gallery_start_ignore
-from plotly.io import show
 show(fig)
 # sphinx_gallery_end_ignore

@@ -8,10 +8,11 @@ Adding constraints to the MIP.
 ###################################################################################################
 
 from pathlib import Path
-import numpy as np
-from sklearn import clone
-from riskslim import RiskSLIMClassifier, load_data_from_csv
 
+from plotly.io import show
+from sklearn import clone
+
+from riskslim import RiskSLIMClassifier, load_data_from_csv
 
 ###################################################################################################
 # Load Data
@@ -55,7 +56,7 @@ rs_base = RiskSLIMClassifier(max_coef = 5, max_size = 5,
 rs = clone(rs_base)
 rs.fit(X, y)
 
-rs.scores
+rs.scores  # noqa: B018 (sphinx-gallery shows the last expression)
 
 
 ###################################################################################################
@@ -89,7 +90,7 @@ rs_constrained.add_constraint(
 
 rs_constrained.fit(X, y)
 
-rs_constrained.scores
+rs_constrained.scores  # noqa: B018 (sphinx-gallery shows the last expression)
 
 ###################################################################################################
 #
@@ -114,9 +115,8 @@ rs_constrained.add_constraint(
 
 rs_constrained.fit(X, y)
 
-rs_constrained.scores
+rs_constrained.scores  # noqa: B018 (sphinx-gallery shows the last expression)
 
 # sphinx_gallery_start_ignore
-from plotly.io import show
 show(rs_constrained.create_report(only_table=True, show=False))
 # sphinx_gallery_end_ignore

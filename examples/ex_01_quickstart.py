@@ -7,12 +7,14 @@ A minimial example for learning risk scores.
 
 ###################################################################################################
 
-from pathlib import Path
-import numpy as np
-from riskslim import RiskSLIMClassifier, load_data_from_csv
 import os
+from pathlib import Path
+
+import numpy as np
 from IPython.display import IFrame
 from plotly.io import show
+
+from riskslim import RiskSLIMClassifier, load_data_from_csv
 
 ###################################################################################################
 # Load Data
@@ -129,7 +131,7 @@ rs.fit(X, y)
 # Reports may be generated using the ``.report()`` method.
 #
 
-rs.scores
+rs.scores  # noqa: B018 (sphinx-gallery shows the last expression)
 
 
 ###################################################################################################

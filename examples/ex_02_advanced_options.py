@@ -8,7 +8,10 @@ Advanced settings for riskslim.
 ###################################################################################################
 
 from pathlib import Path
+
 import numpy as np
+from plotly.io import show
+
 from riskslim import RiskSLIMClassifier, load_data_from_csv
 
 ###################################################################################################
@@ -192,6 +195,5 @@ rs.fit_cv(
 rs.create_report()
 
 # sphinx_gallery_start_ignore
-from plotly.io import show
 show(rs.create_report())
 # sphinx_gallery_end_ignore

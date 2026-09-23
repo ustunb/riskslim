@@ -59,6 +59,31 @@ Class to represent and specify constraints on coefficients of input variables.
 
    CoefficientSet
 
+Data
+----
+
+Binary classification dataset: reads a CSV, binarizes features into items, holds the CV folds.
+
+.. currentmodule:: riskslim.data
+
+.. autosummary::
+   :toctree: generated/
+
+   BinaryClassificationDataset
+   NumericBinarizer
+
+Report
+------
+
+HTML report of a fitted model: the model, a summary table, ROC and calibration plots.
+
+.. currentmodule:: riskslim.report
+
+.. autosummary::
+   :toctree: generated/
+
+   ModelReport
+
 
 
 
