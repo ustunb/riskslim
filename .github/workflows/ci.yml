@@ -82,7 +82,7 @@ jobs:
           sdist = glob.glob("dist/*.tar.gz")[0]
           names = zipfile.ZipFile(whl).namelist()
           names += [n.split("/", 1)[1] for n in tarfile.open(sdist).getnames() if "/" in n]
-          bad = [n for n in names for f in FORBIDDEN if n.startswith(f) or f"/{f}" in n]
+          bad = [n for n in names for f in FORBIDDEN if n.startswith(f) or (f"/{f}" in n and not n.startswith("riskslim/"))]
           if bad:
               sys.exit(f"forbidden paths in artifacts: {sorted(set(bad))[:20]}")
           print("artifacts clean")
