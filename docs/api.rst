@@ -65,19 +65,24 @@ Class to represent and specify constraints on coefficients of input variables.
 MIP
 ---
 
-RiskSLIM MIP formulation with CPLEX.
+RiskSLIM MIP formulation: the solver-agnostic problem and its CPLEX backend.
 
-.. currentmodule:: riskslim.mip
+.. currentmodule:: riskslim.opt.mip
 
 .. autosummary::
    :toctree: generated/
 
-   create_risk_slim
-   set_cplex_mip_parameters
-   set_cpx_display_options
-   add_mip_starts
+   RiskSLIMMIP
+   load
    cast_mip_start
-   convert_to_risk_slim_cplex_solution
+   convert_to_risk_slim_solution
+
+.. currentmodule:: riskslim.opt.cpx.solver
+
+.. autosummary::
+   :toctree: generated/
+
+   CplexRiskSLIMMIP
 
 Loss Functions
 --------------
@@ -98,7 +103,7 @@ Callbacks
 
 Calls when CPLEX finds an integer feasible solution.
 
-.. currentmodule:: riskslim.callbacks
+.. currentmodule:: riskslim.opt.cpx.callbacks
 
 .. autosummary::
    :toctree: generated/
