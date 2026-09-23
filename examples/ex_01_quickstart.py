@@ -50,8 +50,6 @@ settings = {
     "max_runtime": 30.0,
     # tolerance to stop LCPA (set to 0 to return provably optimal solution)
     "max_tolerance": np.finfo("float").eps,
-    # how to compute the loss function ("normal","fast","lookup")
-    "loss_computation": "fast",
 
     # LCPA Improvements
     # -----------------

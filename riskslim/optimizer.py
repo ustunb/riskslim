@@ -147,7 +147,7 @@ class RiskSLIMOptimizer:
         self.C_0_nnz = self.C_0[self.L0_reg_ind]
 
         # loss functions
-        handles = get_loss_functions(self.Z, loss_computation = settings["loss_computation"])
+        handles = get_loss_functions(self.Z)
         for name, handle in handles.items():
             self.__setattr__(f"compute_{name}", handle)
 
@@ -225,7 +225,7 @@ class RiskSLIMOptimizer:
                     rho,
                     self.Z,
                     self.C_0,
-                    self.compute_loss_from_scores_real,
+                    self.compute_loss_from_scores,
                     self.get_L0_penalty,
                     cutoff,
                     )
@@ -287,8 +287,8 @@ class RiskSLIMOptimizer:
         # Solve RiskSLIM LP using standard CPA
         stats, cuts, pool = run_standard_cpa(
                 mip=lp,
-                compute_loss=self.compute_loss_real,
-                compute_loss_cut=self.compute_loss_cut_real,
+                compute_loss=self.compute_loss,
+                compute_loss_cut=self.compute_loss_cut,
                 settings=settings,
                 print_flag=self.verbose,
                 )
@@ -346,7 +346,7 @@ class RiskSLIMOptimizer:
                     pool=pool,
                     Z=self.Z,
                     C_0=self.C_0,
-                    compute_loss_from_scores_real=self.compute_loss_from_scores_real,
+                    compute_loss_from_scores=self.compute_loss_from_scores,
                     get_L0_penalty=self.get_L0_penalty,
                     max_runtime=settings["sequential_rounding_max_runtime"],
                     max_solutions=settings["sequential_rounding_max_solutions"],

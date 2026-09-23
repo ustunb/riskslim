@@ -55,7 +55,6 @@ outcome_name = data["outcome_name"]
 settings = {
     "max_runtime": 30.0,
     "max_tolerance": np.finfo("float").eps,
-    "loss_computation": "fast",
     "round_flag": True,
     "polish_flag": True,
     "chained_updates_flag": True,

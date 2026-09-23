@@ -16,7 +16,6 @@ import riskslim
 
 # Testing Strategy
 #
-# loss_computation  normal, fast, lookup
 # max_coefficient   0, 1, >1
 # max_size      0, 1, >1
 # max_offset        0, 1, Inf
@@ -41,7 +40,6 @@ default_settings = {
     'max_runtime': 300.0,                               # max runtime for LCPA
     'max_tolerance': np.finfo('float').eps,             # tolerance to stop LCPA (set to 0 to return provably optimal solution)
     'display_cplex_progress': True,                     # set to True to print CPLEX progress
-    'loss_computation': 'normal',                       # how to compute the loss function ('normal','fast','lookup')
     'tight_formulation': True,                          # use a slightly formulation of surrogate MIP that provides a slightly improved formulation
     #
     # Other LCPA Heuristics

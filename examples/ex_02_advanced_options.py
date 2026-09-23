@@ -48,8 +48,6 @@ settings = {
     "max_tolerance": np.finfo("float").eps,
     # set to True to print CPLEX progress
     "display_cplex_progress": False,
-    # how to compute the loss function ("normal","fast","lookup")
-    "loss_computation": "fast",
 
     ## Other LCPA Heuristics
     # use chained updates

@@ -107,7 +107,7 @@ def test_polish_and_round_callback(generated_normal_data):
         rho,
         opt.Z,
         opt.C_0,
-        opt.compute_loss_from_scores_real,
+        opt.compute_loss_from_scores,
         opt.get_L0_penalty,
         cutoff
     )

@@ -14,7 +14,6 @@ DEFAULT_LCPA_SETTINGS = {
     'max_runtime': 300.0,  # max runtime for LCPA
     'max_tolerance': 0.000001,  # tolerance to stop LCPA
     'display_cplex_progress': True,  # setting to True shows CPLEX progress
-    'loss_computation': 'normal',  # type of loss computation to use ('normal','fast','lookup')
     'chained_updates_flag': True,  # use chained updates
     'initialization_flag': False,  # use initialization procedure
     'initial_bound_updates': True, # update bounds before solving

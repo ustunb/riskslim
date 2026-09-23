@@ -273,7 +273,7 @@ def round_solution_pool(pool,
 def sequential_round_solution_pool(pool,
                                    Z,
                                    C_0,
-                                   compute_loss_from_scores_real,
+                                   compute_loss_from_scores,
                                    get_L0_penalty,
                                    max_runtime = float('inf'),
                                    max_solutions = float('inf'),
@@ -288,7 +288,7 @@ def sequential_round_solution_pool(pool,
     pool
     Z
     C_0
-    compute_loss_from_scores_real
+    compute_loss_from_scores
     get_L0_penalty
     max_runtime
     max_solutions
@@ -305,14 +305,14 @@ def sequential_round_solution_pool(pool,
         return pool, 0.0, 0
 
     assert callable(get_L0_penalty)
-    assert callable(compute_loss_from_scores_real)
+    assert callable(compute_loss_from_scores)
 
     # if model size constraint is non-trivial, remove solutions that violate the model size constraint beforehand
     pool = pool.distinct().sort()
     rounding_handle = lambda rho: sequential_rounding(rho = rho,
                                                       Z = Z,
                                                       C_0 = C_0,
-                                                      compute_loss_from_scores_real = compute_loss_from_scores_real,
+                                                      compute_loss_from_scores = compute_loss_from_scores,
                                                       get_L0_penalty = get_L0_penalty,
                                                       objval_cutoff = objval_cutoff)
 

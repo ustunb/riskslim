@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def sequential_rounding(rho, Z, C_0, compute_loss_from_scores_real, get_L0_penalty, objval_cutoff = float('Inf')):
+def sequential_rounding(rho, Z, C_0, compute_loss_from_scores, get_L0_penalty, objval_cutoff = float('Inf')):
     """
 
     Parameters
@@ -9,7 +9,7 @@ def sequential_rounding(rho, Z, C_0, compute_loss_from_scores_real, get_L0_penal
     rho:                                P x 1 vector of continuous coefficients
     Z:                                  N x P data matrix computed as X * Y
     C_0:                                N x 1 vector of L0 penalties. C_0[j] = L0 penalty for rho[j] for j = 0,..., P.
-    compute_loss_from_scores_real:      function handle to compute loss using N x 1 vector of scores, where scores = Z.dot(rho)
+    compute_loss_from_scores:      function handle to compute loss using N x 1 vector of scores, where scores = Z.dot(rho)
     get_L0_penalty:                     function handle to compute L0_penalty from rho
     objval_cutoff:                      objective value used for early stopping.
                                         the procedure will stop if the objective value achieved by an intermediate solution will exceeds objval_cutoff
@@ -23,7 +23,7 @@ def sequential_rounding(rho, Z, C_0, compute_loss_from_scores_real, get_L0_penal
 
     """
 
-    assert callable(compute_loss_from_scores_real)
+    assert callable(compute_loss_from_scores)
     assert callable(get_L0_penalty)
 
     rho = np.copy(rho)
@@ -40,7 +40,7 @@ def sequential_rounding(rho, Z, C_0, compute_loss_from_scores_real, get_L0_penal
     dimensions_to_round = np.flatnonzero(np.not_equal(rho_floor, rho_ceil)).tolist()
 
     scores = Z.dot(rho)
-    best_objval = compute_loss_from_scores_real(scores) + get_L0_penalty(rho)
+    best_objval = compute_loss_from_scores(scores) + get_L0_penalty(rho)
     while len(dimensions_to_round) > 0 and best_objval < objval_cutoff:
 
         objvals_at_floor = np.repeat(np.nan, d)
@@ -52,11 +52,11 @@ def sequential_rounding(rho, Z, C_0, compute_loss_from_scores_real, get_L0_penal
             # scores go from center to ceil -> center + dist_from_start_to_ceil
             Z_dim = Z[:, idx]
             base_scores = scores + dist_from_start_to_ceil[idx] * Z_dim
-            objvals_at_ceil[idx] = compute_loss_from_scores_real(base_scores)
+            objvals_at_ceil[idx] = compute_loss_from_scores(base_scores)
 
             # move from ceil to floor => -1*Z_j
             base_scores -= Z_dim
-            objvals_at_floor[idx] = compute_loss_from_scores_real(base_scores)
+            objvals_at_floor[idx] = compute_loss_from_scores(base_scores)
 
             if ceil_is_zero[idx]:
                 objvals_at_ceil[idx] -= C_0[idx]
@@ -103,7 +103,7 @@ def discrete_descent(rho, Z, C_0, rho_ub, rho_lb, get_L0_penalty, compute_loss_f
     C_0:                                N x 1 vector of L0 penalties. C_0[j] = L0 penalty for rho[j] for j = 0,..., P.
     rho_ub
     rho_lb
-    compute_loss_from_scores_real:      function handle to compute loss using N x 1 vector of scores, where scores = Z.dot(rho)
+    compute_loss_from_scores:      function handle to compute loss using N x 1 vector of scores, where scores = Z.dot(rho)
     get_L0_penalty:                     function handle to compute L0_penalty from rho
     descent_dimensions
 
