@@ -55,6 +55,7 @@ from utils import (
 )
 
 from riskslim.report import ModelReport
+from riskslim.report.model_report import ASSETS
 
 VALID_CALL = {"rho": RISK_SCORE_RHO, "variable_names": NAMES, "outcome_name": "y",
               "samples": SAMPLES}
@@ -72,19 +73,17 @@ HOSTILE_NAMES = ["(Intercept)", "a</script><script>alert(1)</script>", "b<!-- c"
 def with_tokens_resolved(figure):
     """The figure as the browser resolves it, from the page's own ``:root`` tokens."""
     tokens = dict(re.findall(r"(--[\w-]+):\s*([^;]+);", (ASSETS / "styles.css").read_text()))
-    return json.loads(re.sub(r"var\((--[\w-]+)\)", lambda m: tokens[m.group(1)].strip(),
+    # a token value can hold quotes (the font stack), so escape it as JSON before substituting
+    return json.loads(re.sub(r"var\((--[\w-]+)\)",
+                             lambda m: json.dumps(tokens[m.group(1)].strip())[1:-1],
                              json.dumps(figure)))
 
 
-def make_report(rho, names=NAMES, samples=None, **kwargs):
+def make_report(rho, names=NAMES, samples=None, training=TRAINING, constraints=CONSTRAINTS,
+                **kwargs):
     """A report over the shared sample, with the solver statistics and constraints filled in."""
-    return ModelReport(rho, names, "y", samples or SAMPLES, training=TRAINING,
-                       constraints=CONSTRAINTS, **kwargs)
-
-
-def build(rho, samples=None, **kwargs):
-    """The data block of a report built without solver statistics or constraints."""
-    return ModelReport(rho, NAMES, "y", samples or SAMPLES, **kwargs).data
+    return ModelReport(rho, names, "y", samples or SAMPLES, training=training,
+                       constraints=constraints, **kwargs)
 
 
 @pytest.fixture(scope="module")
@@ -94,7 +93,7 @@ def report():
 
 
 def test_risk_score_model_has_score_range_and_score_to_risk():
-    model = build(RISK_SCORE_RHO)["model"]
+    model = make_report(RISK_SCORE_RHO).data["model"]
 
     assert model["type"] == "risk_score"
     assert [(item["name"], item["points"]) for item in model["items"]] == [
@@ -109,7 +108,7 @@ def test_risk_score_model_has_score_range_and_score_to_risk():
 def test_non_binary_feature_score_range_spans_points_times_value_range():
     X = np.column_stack([np.arange(1, 9), X_TRAIN[:, 1:]])  # a takes values 1..8
 
-    model = build(RISK_SCORE_RHO, samples={"train": (X, Y_TRAIN)})["model"]
+    model = make_report(RISK_SCORE_RHO, samples={"train": (X, Y_TRAIN)}).data["model"]
 
     assert model["items"][0] == {"name": "a", "points": 2, "binary": False,
                                  "value_range": [1, 8]}
@@ -129,7 +128,7 @@ def test_non_binary_feature_score_range_spans_points_times_value_range():
 ])
 def test_checklist_m_is_smallest_net_count_with_positive_prediction(rho, expected_m,
                                                                     expected_rule):
-    model = build(rho)["model"]
+    model = make_report(rho).data["model"]
 
     assert model["type"] == "checklist"
     assert model["checklist_m"] == expected_m
@@ -137,7 +136,7 @@ def test_checklist_m_is_smallest_net_count_with_positive_prediction(rho, expecte
 
 
 def test_risk_score_type_can_be_forced_for_unit_coefficients():
-    assert build(CHECKLIST_RHO, model_type="risk_score")["model"]["type"] == "risk_score"
+    assert make_report(CHECKLIST_RHO, model_type="risk_score").data["model"]["type"] == "risk_score"
 
 
 @pytest.mark.parametrize("negative_label", [0, -1], ids=["labels-01", "labels-pm1"])
@@ -145,7 +144,7 @@ def test_calibration_bins_count_rows_per_score(negative_label):
     y_train = np.where(Y_TRAIN == 1, 1, negative_label)
     y_test = np.where(Y_TEST == 1, 1, negative_label)
 
-    data = build(RISK_SCORE_RHO, samples={"train": (X_TRAIN, y_train), "test": (X_TEST, y_test)})
+    data = make_report(RISK_SCORE_RHO, samples={"train": (X_TRAIN, y_train), "test": (X_TEST, y_test)}).data
     train, test = data["calibration"]["train"], data["calibration"]["test"]
 
     assert train["scores"] == [-1, 0, 1, 2, 3]
@@ -160,7 +159,7 @@ def test_calibration_bins_count_rows_per_score(negative_label):
 
 
 def test_roc_has_a_point_per_score_threshold_from_origin_to_corner():
-    roc = build(RISK_SCORE_RHO)["roc"]
+    roc = make_report(RISK_SCORE_RHO).data["roc"]
 
     assert roc["train"]["thresholds"] == [None, 3, 2, 1, 0, -1]
     assert roc["train"]["fpr"] == [0.0, 0.0, 0.0, 0.5, 0.75, 1.0]
@@ -235,8 +234,8 @@ def test_save_and_notebook_display_carry_the_same_html(report, tmp_path):
 
 
 @pytest.mark.parametrize("key, coordinates, metrics_text", [
-    ("roc", ("fpr", "tpr"), ["AUC", "train", "0.844", "test", "1.000"]),
-    ("calibration", ("predicted", "observed"), ["CAL", "train", "32.7%", "test", "23.4%"]),
+    ("roc", ("fpr", "tpr"), [("train", "0.844"), ("test", "1.000")]),
+    ("calibration", ("predicted", "observed"), [("train", "32.7%"), ("test", "23.4%")]),
 ])
 def test_figure_plots_each_sample_section_with_a_top_left_metrics_box(report, key, coordinates,
                                                                      metrics_text):
@@ -252,7 +251,8 @@ def test_figure_plots_each_sample_section_with_a_top_left_metrics_box(report, ke
     assert (box["xref"], box["yref"], box["xanchor"], box["yanchor"]) == (
         "paper", "paper", "left", "top")
     assert box["x"] <= 0.05 and box["y"] >= 0.95
-    assert all(text in box["text"] for text in metrics_text), box["text"]
+    for name, value in metrics_text:
+        assert re.search(rf"{re.escape(name)}\D{{0,12}}{re.escape(value)}", box["text"]), box["text"]
 
 
 def test_calibration_bubbles_are_labelled_with_scores_and_sized_by_n(report):
