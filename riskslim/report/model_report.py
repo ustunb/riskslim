@@ -141,6 +141,21 @@ pio.templates[TEMPLATE_NAME] = go.layout.Template(layout=go.Layout(
     yaxis={**AXIS, "scaleanchor": "x", "scaleratio": 1, "constrain": "domain"},
 ))
 
+# A plot narrower than NARROW_PX (a phone, or a two-column page on a small screen) has no room for
+# the legend inside the panel: report.js applies these overrides to the figure there, and removes
+# them again when the plot is wider. The legend moves under the plot, the margins and axis type
+# tighten so the panel keeps its size, and the calibration circles shrink; report.js then grows
+# the figure by the legend's height, so the panel stays square.
+NARROW_PX = 480
+NARROW_LAYOUT = go.Layout(
+    legend={"orientation": "h", "xref": "paper", "x": 0, "xanchor": "left",
+            "yref": "container", "y": 0, "yanchor": "bottom"},
+    margin={"t": 24, "r": 16, "b": 56, "l": 56},
+    xaxis={"tickfont": {"size": 12}, "title": {"font": {"size": 13}}},
+    yaxis={"tickfont": {"size": 12}, "title": {"font": {"size": 13}}},
+)
+NARROW_CIRCLE_PX = 20
+
 
 class ModelReport:
     """An HTML report for a risk score or a checklist.
@@ -204,9 +219,9 @@ class ModelReport:
         scored = {name: (y, X @ points, intercept) for name, (X, y) in splits.items()}
         # the Model card reads the training rows only: a sample left off the page must not
         # change it
-        model = model_section(points, intercept, self.variable_names[1:], self.outcome_name,
-                              self.model_type, splits[TRAINING][0], scored[TRAINING][1],
-                              thresholds)
+        model, digits = model_section(points, intercept, self.variable_names[1:],
+                                      self.outcome_name, self.model_type, splits[TRAINING][0],
+                                      scored[TRAINING][1], thresholds)
         # {key: sample name} of every available sample, in page order: Training, the CV sample,
         # then the other splits
         available = {key: name for key, name in SPLIT_SAMPLES.items() if name in scored}
@@ -249,10 +264,10 @@ class ModelReport:
                 sample_keys, roc, sample_labels(summary, sample_keys, "auc"))
         if "calibration" in components:
             self.data["figures"]["calibration"] = calibration_figure(
-                sample_keys, {name: calibration_points(calibration[name], thresholds,
-                                                       model["score_digits"])
+                sample_keys, {name: calibration_points(calibration[name], thresholds, digits)
                               for name in sample_keys},
                 sample_labels(summary, sample_keys, "ece"))
+        self.data["narrow"] = narrow_overrides(self.data["figures"])
 
     @property
     def html(self):
@@ -281,7 +296,7 @@ class ModelReport:
 
 def is_binary(values):
     """True when every value is 0 or 1."""
-    return bool(set(np.unique(values).tolist()) <= {0.0, 1.0})
+    return bool(np.all((values == 0) | (values == 1)))
 
 
 def infer_model_type(points, X_train):
@@ -468,21 +483,21 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, t
     ``points_header`` is the item table's points column, and None when there is no such column
     (a checklist whose items are all ``+1``: every box counts the same, so a column of ``+`` says
     nothing). ``score_header`` and ``risk_header`` label the score-to-risk strip.
-    ``cell_by_total`` maps each total in the strip, keyed by ``total_key``, to the index of the
-    strip cell holding it: the Model card sums the points of its checked items, looks the total
-    up here and reads the risk that cell shows; ``total_labels`` is how its readout prints that
-    total. ``score_digits`` is the decimals every score label on the page prints.
+    ``cell_by_total`` maps each total in the strip, keyed by ``total_key``, to ``{"cell", "label"}``:
+    the index of the strip cell holding it and how the readout prints it. The Model card sums the
+    points of its checked items, looks the total up here and reads the risk that cell shows.
     ``thresholds`` is ``(low, high)``, where the strip collapses its tails. When the totals
     cannot be enumerated, the strip lists the training rows' scores (``train_scores``).
+
+    Returns the section and the decimals every score label on the page prints (``score_digits``).
     """
     items = []
     value_sets = []
     for j in np.flatnonzero(points):
-        values = np.unique(X_train[:, j])
+        column = X_train[:, j]
+        binary = is_binary(column)
+        values = np.array([0.0, 1.0]) if binary else np.unique(column)
         vmin, vmax = float(values.min()), float(values.max())
-        binary = is_binary(values)
-        if binary:
-            vmin, vmax, values = 0.0, 1.0, np.array([0.0, 1.0])
         p = float(points[j])
         value_sets.append(p * values)
         name, p, vmin, vmax = display_name(str(names[j])), number(p), number(vmin), number(vmax)
@@ -497,10 +512,11 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, t
     hi = sum(float(v.max()) for v in value_sets)
     totals = achievable_totals(value_sets)
     if totals is None:
-        # one total per key: summing in another order moves a score in its last bits
-        totals = sorted({total_key(s): s for s in np.unique(train_scores)}.values())
-    totals = [number(s) for s in totals]
-    digits = score_digits(totals)
+        totals = np.unique(train_scores)
+    # {total_key: total}, ascending: one total per key, since summing in another order moves a
+    # score in its last bits
+    totals = {total_key(s): number(s) for s in totals}
+    digits = score_digits(list(totals.values()))
     m = math.floor(-intercept) + 1 if model_type == "checklist" else None
     checklist = model_type == "checklist"
     shows_points = not checklist or any(item["points"] < 0 for item in items)
@@ -515,8 +531,6 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, t
         "score_range": [number(lo), number(hi)],
         "score_to_risk": cells,
         "cell_by_total": cell_by_total,
-        "total_labels": {total_key(s): score_label(s, s, digits) for s in totals},
-        "score_digits": digits,
         "checklist_m": None,
         "rule": None,
     }
@@ -535,7 +549,7 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, t
                     f"of checked (−) items is at least {m}")
         model["checklist_m"] = m
         model["rule"] = rule
-    return model
+    return model, digits
 
 
 def achievable_totals(value_sets):
@@ -574,25 +588,29 @@ def tail_groups(risks, thresholds):
     return groups
 
 
-def score_to_risk_cells(scores, intercept, checklist_m, thresholds, digits):
+def score_to_risk_cells(totals, intercept, checklist_m, thresholds, digits):
     """The score-to-risk strip: ``{"score", "risk", "positive"}`` per cell, tails collapsed; and
-    ``{total_key(score): cell index}``, the cell each score falls in.
+    ``{key: {"cell": index, "label": score label}}``, the cell each total falls in.
 
-    ``scores`` is ascending, so risk is too. A collapsed cell is labelled with the score range it
-    covers (``"0 to 1"``) and with the threshold it stays under (``"< 1.0%"``), as in the R's
-    ``get.risk.xtable``; every other cell shows its own score and risk.
+    ``totals`` is ``{total_key(score): score}``, ascending, so risk is too. A collapsed cell is
+    labelled with the score range it covers (``"0 to 1"``) and with the threshold it stays under
+    (``"< 1.0%"``), as in the R's ``get.risk.xtable``; every other cell shows its own score and
+    risk.
     """
+    keys, scores = list(totals), list(totals.values())
     risks = expit(np.asarray(scores, dtype=float) + intercept)
     low_risk, high_risk = thresholds
-    cells, cell_by_score = [], {}
+    cells, cell_by_total = [], {}
     for first, last, side in tail_groups(risks, thresholds):
         risk = (percent(risks[first]) if side is None
                 else f"< {percent(low_risk)}" if side == "low"
                 else f"> {percent(high_risk)}")
-        cell_by_score.update({total_key(score): len(cells) for score in scores[first:last + 1]})
+        cell_by_total.update({key: {"cell": len(cells), "label": score_label(score, score, digits)}
+                              for key, score in zip(keys[first:last + 1],
+                                                    scores[first:last + 1])})
         cells.append({"score": score_label(scores[first], scores[last], digits), "risk": risk,
                       "positive": checklist_m is not None and scores[first] >= checklist_m})
-    return cells, cell_by_score
+    return cells, cell_by_total
 
 
 def total_key(total):
@@ -611,9 +629,14 @@ def total_key(total):
 
 def score_digits(totals):
     """The fewest decimals that print every total apart: 0 when every total is integral, else
-    at least 1, and at most 6."""
+    at least 1, and at most 6.
+
+    ``totals`` is ascending, and rounding keeps that order, so two totals print alike only if
+    two neighbours do.
+    """
     digits = 0 if all(float(t).is_integer() for t in totals) else 1
-    while digits < 6 and len({f"{t:.{digits}f}" for t in totals}) < len(totals):
+    neighbours = list(zip(totals, totals[1:]))
+    while digits < 6 and any(f"{a:.{digits}f}" == f"{b:.{digits}f}" for a, b in neighbours):
         digits += 1
     return digits
 
@@ -772,6 +795,7 @@ def roc_figure(sample_keys, sections, labels):
     """One ROC curve per sample with a point at each score threshold; AUC in the legend.
 
     ``sample_keys`` is ``{sample name: key}`` in page order; the key picks the sample's colour.
+    Each trace carries its sample's name in ``meta``, which report.js matches across the figures.
     The traces run in reverse page order, so the first sample is drawn on top."""
     traces = []
     for name, key in reversed(sample_keys.items()):
@@ -780,7 +804,7 @@ def roc_figure(sample_keys, sections, labels):
         thresholds = ["None" if i == 0 else "Scores Differ by Fold" if t is None
                       else f"Score ≥ {t}" for i, t in enumerate(roc["thresholds"])]
         traces.append(go.Scatter(
-            mode="lines+markers", name=labels[name],
+            mode="lines+markers", name=labels[name], meta=name,
             x=roc["fpr"], y=roc["tpr"], customdata=thresholds,
             line={"width": 2, "color": color}, marker={"size": 12, "color": color},
             hovertemplate=f"<b>{name}</b><br>%{{customdata}}<br>"
@@ -830,14 +854,14 @@ def calibration_figure(sample_keys, points, labels):
 
     ``sample_keys`` is ``{sample name: key}`` in page order; the key picks the sample's colour.
     ``points`` is each sample's ``calibration_points``. The circles follow the R report: one size,
-    since n is in the hover, and a line in the sample's colour. The traces run in reverse page
-    order, so the first sample is drawn on top."""
+    since n is in the hover, and a line in the sample's colour. Each trace carries its sample's
+    name in ``meta``. The traces run in reverse page order, so the first sample is drawn on top."""
     traces = []
     for name, key in reversed(sample_keys.items()):
         cal = points[name]
         color = SAMPLE_COLORS[key]
         traces.append(go.Scatter(
-            mode="lines+markers+text", name=labels[name],
+            mode="lines+markers+text", name=labels[name], meta=name,
             x=cal["predicted"], y=cal["observed"],
             text=cal["labels"],
             customdata=[[s, n, e] for s, n, e in zip(cal["scores"], cal["n"], cal["local_error"])],
@@ -870,6 +894,48 @@ def figure_layout(x_title, y_title):
         shapes=[go.layout.Shape(type="line", x0=0, y0=0, x1=1, y1=1, layer="below",
                                 line={"color": GRID, "width": 1, "dash": "dash"})],
     )
+
+
+def narrow_overrides(figures):
+    """What report.js changes in each of ``figures`` on a plot narrower than ``max_width``.
+
+    Per figure, ``apply`` holds the ``traces`` (for ``Plotly.restyle``, every trace alike) and
+    the ``layout`` (for ``Plotly.relayout``): ``NARROW_LAYOUT``, and smaller calibration circles.
+    ``undo`` takes them back to the figure's own values, a layout key to None (Plotly then reads
+    it from the figure and its template again). Both are Plotly attribute strings
+    (``"legend.x"``), so they set just those attributes; the values are validated as Plotly
+    objects here.
+    """
+    layout = attribute_strings(NARROW_LAYOUT.to_plotly_json())
+    overrides = {}
+    for key in figures:
+        circles = key == "calibration"
+        overrides[key] = {
+            "apply": {"traces": circle_sizes(NARROW_CIRCLE_PX) if circles else {},
+                      "layout": layout},
+            "undo": {"traces": circle_sizes(CIRCLE_PX) if circles else {},
+                     "layout": dict.fromkeys(layout)},
+        }
+    return {"max_width": NARROW_PX, "figures": overrides}
+
+
+def circle_sizes(circle_px):
+    """The calibration circles' diameter, and the label inside scaled with it."""
+    return attribute_strings({
+        "marker": go.scatter.Marker(size=circle_px).to_plotly_json(),
+        "textfont": go.scatter.Textfont(size=LABEL_PX * circle_px / CIRCLE_PX).to_plotly_json(),
+    })
+
+
+def attribute_strings(spec, prefix=""):
+    """``{"legend": {"x": 0}}`` as Plotly attribute strings, ``{"legend.x": 0}``."""
+    flat = {}
+    for key, value in spec.items():
+        if isinstance(value, dict):
+            flat.update(attribute_strings(value, f"{prefix}{key}."))
+        else:
+            flat[f"{prefix}{key}"] = value
+    return flat
 
 
 # ---------------------------------------------------------------------------

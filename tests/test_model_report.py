@@ -80,7 +80,7 @@ from riskslim.report import ModelReport
 from riskslim.report.model_report import ASSETS, SAMPLE_COLORS, TEMPLATE_NAME
 
 DATA_KEYS = {"schema_version", "title", "outcome_name", "samples", "model", "summary", "roc",
-             "calibration", "settings", "figures"}
+             "calibration", "settings", "figures", "narrow"}
 CDN_URLS = [
     "https://cdn.jsdelivr.net/npm/plotly.js-basic-dist-min@4.1.1/plotly-basic.min.js",
     "https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.min.css",
@@ -162,7 +162,7 @@ def test_non_binary_feature_score_range_spans_points_times_value_range(fitted_wi
                                  "points_label": "2 × value"}
     assert model["score_range"] == [1, 17]
     # the Model card's lookup: a total in a collapsed tail reads the risk its cell shows
-    cells = [model["cell_by_total"][total] for total in ("6", "7", "17")]
+    cells = [model["cell_by_total"][total]["cell"] for total in ("6", "7", "17")]
     assert cells == [5, 6, 6]
     assert [model["score_to_risk"][cell]["risk"] for cell in cells] == ["98.2%", "> 99.0%",
                                                                          "> 99.0%"]
@@ -342,8 +342,9 @@ def test_report_of_a_classifier_fit_on_a_dataset_holds_every_component():
     for key in ("roc", "calibration"):
         # a trace is named for its legend entry: the sample, then its n, outcome rate and metric;
         # the traces run last sample first, so the first is drawn on top
-        assert [trace["name"].split("<br>")[0] for trace in data["figures"][key]["data"]] == \
-            data["samples"][::-1]
+        assert [trace["meta"] for trace in data["figures"][key]["data"]] == data["samples"][::-1]
+        assert all(trace["name"].startswith(f"{trace['meta']}<br>")
+                   for trace in data["figures"][key]["data"])
 
 
 def test_settings_choose_the_cards_the_samples_and_where_the_tails_collapse(fitted_wide):
@@ -538,34 +539,33 @@ def test_report_renders_in_browser_without_errors(chromium, saved_report, width)
         assert (fit["strip"], fit["card"], fit["page"]) == (0, 0, 0)
         assert (fit["rows"] == 1) != ((saved_report.stem, width) in STRIP_WRAPS)
 
-        # checking an item adds its points to the total; the readout and the outlined strip cell
-        # follow the total
+        def assert_readout_follows(before, added):
+            """The readout's total moved by ``added``; its risk and outlined cell follow it."""
+            total = page.locator("#rs-total").text_content()
+            assert float(total) == before + added
+            cell = model["cell_by_total"][total]["cell"]
+            assert page.locator("#rs-risk").text_content() == model["score_to_risk"][cell]["risk"]
+            assert page.locator(".rs-current").get_attribute("data-cell") == str(cell)
+            return float(total)
+
+        # checking an item adds its points to the total
         checkbox = page.locator(".rs-model-table input[type=checkbox]").first
         before = float(page.locator("#rs-total").text_content())
         checkbox.check()
-        total = page.locator("#rs-total").text_content()
-        assert float(total) == before + float(checkbox.get_attribute("data-points"))
-        cell = model["cell_by_total"][total]
-        assert page.locator("#rs-risk").text_content() == model["score_to_risk"][cell]["risk"]
-        assert page.locator(".rs-current").get_attribute("data-cell") == str(cell)
+        total = assert_readout_follows(before, float(checkbox.get_attribute("data-points")))
 
         # typing a non-binary item's largest value adds points x (largest - smallest)
         for box in page.locator(".rs-model-table input[type=number]").all():
-            before = float(total)
             box.fill(box.get_attribute("max"))
-            total = page.locator("#rs-total").text_content()
-            assert float(total) == before + float(box.get_attribute("data-points")) * (
-                float(box.get_attribute("max")) - float(box.get_attribute("min")))
-            cell = model["cell_by_total"][total]
-            assert page.locator("#rs-risk").text_content() == model["score_to_risk"][cell]["risk"]
-            assert page.locator(".rs-current").get_attribute("data-cell") == str(cell)
+            total = assert_readout_follows(total, float(box.get_attribute("data-points")) * (
+                float(box.get_attribute("max")) - float(box.get_attribute("min"))))
 
         # a sample clicked in one plot's legend is hidden in both plots (a single sample has no
         # legend)
         if len(data["samples"]) > 1:
             hidden = "[...document.querySelectorAll('[data-figure]')].map((plot) => plot.data" \
                      ".filter((trace) => trace.visible === 'legendonly')" \
-                     ".map((trace) => trace.name.split('<br>')[0]))"
+                     ".map((trace) => trace.meta))"
             page.locator("[data-figure=roc] .legend .traces").first.click()
             # Plotly waits out a possible double click before it acts on a click
             page.wait_for_function(f"{hidden}.flat().length > 0", timeout=5_000)
