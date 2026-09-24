@@ -12,13 +12,16 @@
 </style>
 </head>
 <body>
-{#- The page structure: a 2x2 grid of cards. Jinja writes every table here; report.js draws the
-    two figures into their [data-figure] boxes and wires the Model card's inputs. Dict keys that
+{#- The page structure: one grid of cards, two to a row, in the order of components. Jinja writes
+    every table here; report.js draws the figures into their [data-figure] boxes and wires the
+    Model card's inputs. Dict keys that
     share a name with a dict method (items, values) are read with [], which Jinja does not
     resolve to the method. #}
 <main class="container" id="report">
 <header class="rs-head"><h2>{{ title }}</h2></header>
-<section class="rs-row">
+<section class="rs-grid">
+{%- for component in components %}
+{%- if component == "model" %}
 <article class="rs-card">
 <header><h3>Model</h3></header>
   <table class="rs-model-table">
@@ -74,6 +77,7 @@
     {%- endfor %}
   </div>
 </article>
+{%- elif component == "summary" %}
 <article class="rs-card">
 <header><h3>Summary</h3></header>
   <table class="rs-summary-table">
@@ -97,16 +101,18 @@
     </tbody>
   </table>
 </article>
-</section>
-<section class="rs-row">
+{%- elif component == "roc" %}
 <article class="rs-card">
 <header><h3>ROC</h3></header>
 <div class="rs-plot" data-figure="roc"></div>
 </article>
+{%- elif component == "calibration" %}
 <article class="rs-card">
 <header><h3>Calibration</h3></header>
 <div class="rs-plot" data-figure="calibration"></div>
 </article>
+{%- endif %}
+{%- endfor %}
 </section>
 </main>
 <script type="application/json" id="report-data">{{ data }}</script>

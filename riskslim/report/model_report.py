@@ -17,7 +17,8 @@ Conventions
   rule as ``RiskSLIMClassifier.predict``.
 - **Samples:** ``Training``, then ``{k}-CV`` (the out-of-fold predictions of ``k`` fold models,
   each scoring its own test rows with its own points and intercept), then the dataset's other
-  splits (``Validation``, ``Test``).
+  splits (``Validation``, ``Test``). The ``samples`` argument names them by stable keys:
+  ``"training"``, ``"cv"``, ``"validation"``, ``"test"``.
 - **Item names:** a rule name ``feature_op_value`` (e.g. ``ClumpThickness_geq_5``) is shown as
   ``feature symbol value`` (``ClumpThickness ≥ 5``); any other name is shown as it is.
 - **Checklist M:** with k = (#checked +1 items) - (#checked -1 items), M is the smallest integer
@@ -26,7 +27,8 @@ Conventions
   item contributes ``points * [0, 1]``). The score-to-risk row lists every achievable total when
   all item values are integers, and otherwise the totals observed in the samples.
 - **Collapsed endpoints:** ``logit(k) ≈ logit(k + 1)`` once the risk is near 0 or 1, so the
-  scores whose risk falls outside 1%..99% collapse into one cell of the score-to-risk strip and
+  scores whose risk falls outside ``low_risk_threshold``..``high_risk_threshold`` (1%..99% by
+  default) collapse into one cell of the score-to-risk strip and
   one point of the calibration plot at each end, as they do in the R report (``tail_groups``).
   Display only: every reported number is computed per score bin, before any collapsing.
 - **Calibration error:** ``|predicted - observed|`` per score bin (``local_error``), and the
@@ -61,11 +63,11 @@ SCHEMA_VERSION = 2
 MAX_TOTALS = 10_000  # score totals to enumerate before falling back to observed scores
 MODEL_TYPES = {"risk_score": "Risk score", "checklist": "Checklist"}
 
-# where the strip and the calibration points collapse their endpoints: the R's
-# lower_risk_threshold and upper_risk_threshold, whose defaults every R call site also passes
-LOW_RISK, HIGH_RISK = 0.01, 0.99
+# the page's cards, in their default order
+COMPONENTS = ("model", "summary", "roc", "calibration")
 
-# sample names, in page order: the training sample, the CV sample ("5-CV"), then the other splits
+# sample names, in page order: the training sample, the CV sample ("5-CV"), then the other splits;
+# keyed by the stable names the samples argument takes (the CV sample's key is "cv")
 TRAINING = "Training"
 SPLIT_SAMPLES = {"training": TRAINING, "validation": "Validation", "test": "Test"}
 
@@ -152,11 +154,22 @@ class ModelReport:
     X_test, y_test : array-like, optional
         A held-out sample, shown as ``Test``. Ignored, with a warning, when ``data`` already has
         a test split.
+    components : sequence of {"model", "summary", "roc", "calibration"}, optional
+        The cards on the page, in this order; a component left out is not shown.
+    samples : sequence of {"training", "cv", "validation", "test"}, optional
+        The samples shown in the summary, ROC and calibration, in this order. None shows every
+        available sample. The Model card reads its value ranges from the training rows either way.
+    low_risk_threshold, high_risk_threshold : float, optional
+        Risks below the first (above the second) collapse into one ``< x%`` (``> y%``) cell of
+        the score-to-risk strip and one calibration point. The R's defaults, 0.01 and 0.99.
     """
 
     def __init__(self, classifier, data=None, cv_models=None, model_type=None, X_test=None,
-                 y_test=None):
+                 y_test=None, *, components=COMPONENTS, samples=None, low_risk_threshold=0.01,
+                 high_risk_threshold=0.99):
         check_is_fitted(classifier)
+        components = checked_selection("components", components, COMPONENTS)
+        thresholds = checked_risk_thresholds(low_risk_threshold, high_risk_threshold)
         dataset = checked_dataset(data, classifier)
         self.weights, self.variable_names = checked_coefficients(classifier, dataset)
         self.outcome_name = str(dataset.names.y)
@@ -164,21 +177,28 @@ class ModelReport:
         self.constraints = fitted_constraints(classifier)
         self.model_type = checked_model_type(model_type, self.weights[1:])
 
-        # samples stay local: the page needs only what they produce, and holding them would pin
+        # the splits stay local: the page needs only what they produce, and holding them would pin
         # a float64 copy of every X for the report's lifetime
-        samples = split_samples(classifier, data, X_test, y_test)
+        splits = split_samples(classifier, data, X_test, y_test)
         intercept, points = float(self.weights[0]), self.weights[1:]
 
         # {name: (y, score, intercept)}: the model scores each split; a CV row is scored by its
         # own fold model, so the CV sample carries one intercept per row
-        scored = {name: (y, X @ points, intercept) for name, (X, y) in samples.items()}
+        scored = {name: (y, X @ points, intercept) for name, (X, y) in splits.items()}
         model = model_section(points, intercept, self.variable_names[1:], self.outcome_name,
-                              self.model_type, samples[TRAINING][0],
-                              {name: score for name, (_, score, _) in scored.items()})
+                              self.model_type, splits[TRAINING][0],
+                              {name: score for name, (_, score, _) in scored.items()}, thresholds)
+        keys = {name: key for key, name in SPLIT_SAMPLES.items()}
         cv = cv_sample(classifier, cv_models)
         if cv is not None:
             cv_name, cv_scored = cv
             scored = {TRAINING: scored.pop(TRAINING), cv_name: cv_scored, **scored}
+            keys[cv_name] = "cv"
+        # {key: sample name} of every available sample, in page order; then only those shown
+        available = {keys[name]: name for name in scored}
+        shown = (list(available) if samples is None
+                 else checked_selection("samples", samples, tuple(available)))
+        scored = {available[key]: scored[available[key]] for key in shown}
         checked_classes(scored)
 
         roc = {name: roc_section(y, score, b) for name, (y, score, b) in scored.items()}
@@ -198,19 +218,27 @@ class ModelReport:
             "summary": summary,
             "roc": roc,
             "calibration": calibration,
+            "settings": {"components": components, "samples": shown,
+                         "low_risk_threshold": thresholds[0],
+                         "high_risk_threshold": thresholds[1]},
         }
-        self.data["figures"] = {
-            "roc": roc_figure(names, roc, sample_labels(summary, names, "auc")),
-            "calibration": calibration_figure(names, calibration,
-                                              sample_labels(summary, names, "ece")),
-        }
+        # only the figures on the page: the sections above hold their numbers either way
+        self.data["figures"] = {}
+        if "roc" in components:
+            self.data["figures"]["roc"] = roc_figure(names, roc,
+                                                     sample_labels(summary, names, "auc"))
+        if "calibration" in components:
+            self.data["figures"]["calibration"] = calibration_figure(
+                names, calibration, sample_labels(summary, names, "ece"), thresholds)
 
     @property
     def html(self):
         """The report page as a string."""
         shell, styles, scripts = load_assets()
         return shell.render(title=self.data["title"], model=self.data["model"],
-                            summary=self.data["summary"], styles=styles, scripts=scripts,
+                            summary=self.data["summary"],
+                            components=self.data["settings"]["components"],
+                            styles=styles, scripts=scripts,
                             data=Markup(json_for_script(self.data)))
 
     def save(self, path):
@@ -272,6 +300,28 @@ def checked_model_type(model_type, points):
     if model_type not in MODEL_TYPES:
         raise ValueError(f"model_type must be one of {tuple(MODEL_TYPES)}; got {model_type!r}")
     return model_type
+
+
+def checked_selection(argument, selection, choices):
+    """``selection`` as a list: at least one entry, none repeated, each one of ``choices``."""
+    selection = list(selection)
+    if not selection:
+        raise ValueError(f"{argument} must name at least one of {choices}; got none")
+    unknown = [entry for entry in selection if entry not in choices]
+    if unknown:
+        raise ValueError(f"{argument} must be drawn from {choices}; got {unknown}")
+    if len(set(selection)) < len(selection):
+        raise ValueError(f"{argument} must not repeat an entry; got {selection}")
+    return selection
+
+
+def checked_risk_thresholds(low_risk_threshold, high_risk_threshold):
+    """``(low, high)`` as floats, with ``0 <= low < high <= 1``."""
+    if not 0 <= low_risk_threshold < high_risk_threshold <= 1:
+        raise ValueError(f"risk thresholds must satisfy 0 <= low_risk_threshold < "
+                         f"high_risk_threshold <= 1; got {low_risk_threshold} and "
+                         f"{high_risk_threshold}")
+    return float(low_risk_threshold), float(high_risk_threshold)
 
 
 def split_samples(classifier, data, X_test, y_test):
@@ -368,7 +418,8 @@ def point_label(points, binary, model_type):
     return str(points) if binary else f"{points} × value"
 
 
-def model_section(points, intercept, names, outcome_name, model_type, X_train, scores):
+def model_section(points, intercept, names, outcome_name, model_type, X_train, scores,
+                  thresholds):
     """Items, score range, score-to-risk strip and (for checklists) M and the rule.
 
     ``points_header`` is the item table's points column, and None when there is no such column
@@ -376,7 +427,8 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, s
     nothing). ``score_header`` and ``risk_header`` label the score-to-risk strip.
     ``cell_by_total`` maps each total in the strip (as a string, a JSON key) to the index of the
     strip cell holding it and the risk that cell shows: the Model card sums the points of its
-    checked items and looks the total up here.
+    checked items and looks the total up here. ``thresholds`` is ``(low, high)``, where the
+    strip collapses its tails.
     """
     items = []
     value_sets = []
@@ -405,7 +457,7 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, s
     m = math.floor(-intercept) + 1 if model_type == "checklist" else None
     checklist = model_type == "checklist"
     shows_points = not checklist or any(item["points"] < 0 for item in items)
-    cells, cell_by_total = score_to_risk_cells(totals, intercept, m)
+    cells, cell_by_total = score_to_risk_cells(totals, intercept, m, thresholds)
     model = {
         "type": model_type,
         "intercept": number(intercept),
@@ -447,21 +499,24 @@ def achievable_totals(value_sets):
     return sorted(totals)
 
 
-def tail_groups(risks):
+def tail_groups(risks, thresholds):
     """``[(first, last)]`` over ascending ``risks``: one group per risk, except that the risks
-    below ``LOW_RISK`` become one group and those above ``HIGH_RISK`` another.
+    below ``low`` become one group and those above ``high`` another, for ``thresholds`` =
+    ``(low, high)``.
 
     The endpoints collapse because ``logit(k) ≈ logit(k + 1)`` once the risk is near 0 or 1: a
     wide score range otherwise ends in a run of cells all reading ``100.0%`` and a run of plot
-    points stacked in the corner. The R collapses both the same way and at the same thresholds --
+    points stacked in the corner. The R collapses both the same way, at its
+    ``lower_risk_threshold`` and ``upper_risk_threshold`` (0.01 and 0.99, the defaults here) --
     the risk row in ``get.risk.xtable`` (``dev/reference/burn-rules/reporting_utils.R:607-680``)
     and the calibration points in ``collapse.calibration.df`` (``ibid.:1310-1352``) -- and a tail
     holding a single risk is left alone by both.
     """
     risks = np.asarray(risks, dtype=float)
     n = len(risks)
-    low = int(np.searchsorted(risks, LOW_RISK))  # risks are ascending, so the tails are prefixes
-    high = n - int(np.searchsorted(risks, HIGH_RISK, side="right"))
+    low_risk, high_risk = thresholds
+    low = int(np.searchsorted(risks, low_risk))  # risks are ascending, so the tails are prefixes
+    high = n - int(np.searchsorted(risks, high_risk, side="right"))
     groups = [(i, i) for i in range(n)]
     if high > 1:
         groups[n - high:] = [(n - high, n - 1)]
@@ -470,7 +525,7 @@ def tail_groups(risks):
     return groups
 
 
-def score_to_risk_cells(scores, intercept, checklist_m):
+def score_to_risk_cells(scores, intercept, checklist_m, thresholds):
     """The score-to-risk strip: ``{"score", "risk", "positive"}`` per cell, tails collapsed; and
     ``{str(score): {"cell", "risk"}}``, the cell each score falls in and the risk it shows.
 
@@ -479,11 +534,12 @@ def score_to_risk_cells(scores, intercept, checklist_m):
     ``get.risk.xtable``; every other cell shows its own score and risk.
     """
     risks = expit(np.asarray(scores, dtype=float) + intercept)
+    low_risk, high_risk = thresholds
     cells, cell_by_score = [], {}
-    for first, last in tail_groups(risks):
+    for first, last in tail_groups(risks, thresholds):
         risk = (percent(risks[first]) if first == last
-                else f"< {percent(LOW_RISK)}" if risks[last] < LOW_RISK
-                else f"> {percent(HIGH_RISK)}")
+                else f"< {percent(low_risk)}" if risks[last] < low_risk
+                else f"> {percent(high_risk)}")
         cell_by_score.update({str(score): {"cell": len(cells), "risk": risk}
                               for score in scores[first:last + 1]})
         cells.append({"score": score_label(scores[first], scores[last]), "risk": risk,
@@ -660,7 +716,7 @@ def roc_figure(names, sections, labels):
                                            "True positive rate")).to_plotly_json()
 
 
-def calibration_points(section):
+def calibration_points(section, thresholds):
     """The bubbles of one sample, in the shape of the section they come from.
 
     One bubble per score bin, except that the bins of a collapsed tail become a single bubble:
@@ -676,7 +732,7 @@ def calibration_points(section):
                    key=lambda i: (section["predicted"][i], section["scores"][i]))
     risks = [section["predicted"][i] for i in order]
     points = []
-    for first, last in tail_groups(risks):
+    for first, last in tail_groups(risks, thresholds):
         rows = order[first:last + 1]
         n = sum(section["n"][i] for i in rows)
         predicted = sum(section["predicted"][i] * section["n"][i] for i in rows) / n
@@ -688,9 +744,9 @@ def calibration_points(section):
     return dict(zip(keys, (list(values) for values in zip(*points))))
 
 
-def calibration_figure(names, sections, labels):
+def calibration_figure(names, sections, labels, thresholds):
     """Bubbles per score, sized by n and labelled with the score; ECE in the legend."""
-    points = {name: calibration_points(sections[name]) for name in names}
+    points = {name: calibration_points(sections[name], thresholds) for name in names}
     n_max = max(n for point in points.values() for n in point["n"])
     d_min, d_max = BUBBLE_PX
     traces = []

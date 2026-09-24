@@ -18,6 +18,7 @@ from .coefficient_set import CoefficientSet
 from .data import BinaryClassificationDataset
 from .defaults import DEFAULT_LCPA_SETTINGS, INTERCEPT_NAME, OUTCOME_NAME
 from .report import ModelReport
+from .report.model_report import COMPONENTS
 from .utils import print_model
 
 
@@ -220,7 +221,9 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         }
         return self
 
-    def report(self, X_test=None, y_test=None, model_type=None, *, data=None, cv_models=None):
+    def report(self, X_test=None, y_test=None, model_type=None, *, data=None, cv_models=None,
+               components=COMPONENTS, samples=None, low_risk_threshold=0.01,
+               high_risk_threshold=0.99):
         """HTML report of the fitted model: the model, a summary table, ROC and calibration.
 
         Parameters
@@ -238,6 +241,13 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         cv_models : list of RiskSLIMClassifier, optional
             Fitted per-fold models for the CV sample, scoring the test rows of ``fit_cv``. None
             uses ``cv_results_["estimator"]`` after ``fit_cv``.
+        components : sequence of {"model", "summary", "roc", "calibration"}, optional
+            The cards on the page, in this order; a component left out is not shown.
+        samples : sequence of {"training", "cv", "validation", "test"}, optional
+            The samples shown, in this order. None shows every available sample.
+        low_risk_threshold, high_risk_threshold : float, optional
+            Risks below the first (above the second) collapse into one cell of the score-to-risk
+            strip and one calibration point.
 
         Returns
         -------
@@ -245,7 +255,9 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
             Use ``report.save(path)`` to write an HTML file; notebooks display it inline.
         """
         return ModelReport(self, data=data, cv_models=cv_models, model_type=model_type,
-                           X_test=X_test, y_test=y_test)
+                           X_test=X_test, y_test=y_test, components=components, samples=samples,
+                           low_risk_threshold=low_risk_threshold,
+                           high_risk_threshold=high_risk_threshold)
 
     def decision_function(self, X):
         """Risk score of each sample; > 0 predicts ``classes_[1]``.

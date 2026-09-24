@@ -1,4 +1,4 @@
-// riskslim report: draw the two figures and make the Model card add up. The markup is all
+// riskslim report: draw the figures and make the Model card add up. The markup is all
 // Jinja's; Python computes every number, so the card only sums points x value over its inputs
 // and looks the total up in model.cell_by_total -- the browser derives no model fact.
 (function () {
@@ -12,6 +12,8 @@
       { displayModeBar: false, responsive: true, scrollZoom: false });
   });
 
+  // the page may leave the Model card out
+  if (!document.getElementById("rs-total")) return;
   const inputs = document.querySelectorAll(".rs-model-table input");
   const cells = document.querySelectorAll(".rs-score-grid [data-cell]");
   function update() {

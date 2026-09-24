@@ -26,13 +26,17 @@ Dimensions:
   figure:       roc, calibration   -- one trace per sample, plotted straight from the data block's
                                       roc / calibration sections, each named for its legend entry
                                       (sample, n and outcome rate, AUC / ECE)
+  settings:     the defaults (every other test), and one report that reorders and drops cards,
+                keeps one sample and lowers high_risk_threshold
   label text:   contains "</script>" and "<!--"  -- must not end the JSON data block early (a
                                       plain label is the same path with nothing to escape, so it
                                       is not a separate case)
 
 Rejection paths owned here (one invalid mutation of a valid call each): non-finite weights, unknown
 model_type, X_test column count != the fitted feature count, y_test row count != X_test row
-count, y_test labels outside the classes seen in fit, and a sample with a single class.
+count, y_test labels outside the classes seen in fit, a sample with a single class, and
+components / samples that are empty, repeat an entry or name an unknown one, and risk thresholds
+out of order or outside 0..1.
 n/a: non-binary features for the checklist -- the score range rule is shared with the risk score.
 
 Checks that need no browser: `plotly.graph_objects.Figure(fig)` rejects misspelled or invalid
@@ -75,7 +79,7 @@ from riskslim.report import ModelReport
 from riskslim.report.model_report import ASSETS, TEMPLATE_NAME
 
 DATA_KEYS = {"schema_version", "title", "outcome_name", "samples", "model", "summary", "roc",
-             "calibration", "figures"}
+             "calibration", "settings", "figures"}
 CDN_URLS = [
     "https://cdn.jsdelivr.net/npm/plotly.js-basic-dist-min@4.1.1/plotly-basic.min.js",
     "https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.min.css",
@@ -272,6 +276,16 @@ def test_data_is_strict_json(fitted, weights):
                  "labels outside the classes seen in fit", id="unsupported-labels"),
     pytest.param({"test": (X_TEST, np.zeros(4))}, "'Test' has a single class",
                  id="single-class"),
+    pytest.param({"components": []}, "components must name at least one", id="no-components"),
+    pytest.param({"components": ["roc", "roc"]}, "components must not repeat", id="repeated-component"),
+    pytest.param({"components": ["legend"]}, "components must be drawn from", id="unknown-component"),
+    pytest.param({"samples": []}, "samples must name at least one", id="no-samples"),
+    pytest.param({"samples": ["test", "test"]}, "samples must not repeat", id="repeated-sample"),
+    # a key, not the display name; and "cv" without fit_cv is unavailable the same way
+    pytest.param({"samples": ["Training"]}, "samples must be drawn from", id="unknown-sample"),
+    pytest.param({"low_risk_threshold": 0.5, "high_risk_threshold": 0.5}, "risk thresholds must",
+                 id="thresholds-out-of-order"),
+    pytest.param({"high_risk_threshold": 1.5}, "risk thresholds must", id="threshold-above-one"),
 ])
 def test_invalid_inputs_are_rejected(fitted, invalid, match):
     call = {"weights": RISK_SCORE_WEIGHTS, **invalid}
@@ -314,6 +328,24 @@ def test_report_of_a_classifier_fit_on_a_dataset_holds_every_component():
         # a trace is named for its legend entry: the sample, then its n, outcome rate and metric
         assert [trace["name"].split("<br>")[0] for trace in data["figures"][key]["data"]] == \
             data["samples"]
+
+
+def test_settings_choose_the_cards_the_samples_and_where_the_tails_collapse(fitted_wide):
+    report = make_report(fitted_wide, RISK_SCORE_WEIGHTS, components=["calibration", "model"],
+                         samples=["training"], high_risk_threshold=0.95)
+    data = report.data
+
+    assert data["settings"] == {"components": ["calibration", "model"], "samples": ["training"],
+                                "low_risk_threshold": 0.01, "high_risk_threshold": 0.95}
+    assert re.findall(r"<h3>(.*?)</h3>", report.html) == ["Calibration", "Model"]
+    assert data["samples"] == list(data["roc"]) == list(data["calibration"]) == ["Training"]
+    assert data["summary"]["columns"] == ["", "Training"]
+    (train,) = data["figures"]["calibration"]["data"]  # and no ROC figure: its card is not shown
+    assert set(data["figures"]) == {"calibration"}
+    # scores 5..17 are above 95%: one strip cell and one bubble ("6 to 15": the rows' scores)
+    assert [(cell["score"], cell["risk"]) for cell in data["model"]["score_to_risk"][-2:]] == [
+        ("4", "88.1%"), ("5 to 17", "> 95.0%")]
+    assert train["text"] == ["3", "4", "6 to 15"]
 
 
 def test_save_and_notebook_display_carry_the_same_html(report, tmp_path):
