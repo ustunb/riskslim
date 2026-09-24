@@ -74,10 +74,9 @@ OPERATOR_SYMBOLS = {"geq": "≥", "leq": "≤", "lt": "<", "gt": ">", "eq": "=",
                     "is": "=", "isnot": "≠", "in": "∈", "notin": "∉"}
 
 ASSETS = files(__package__) / "assets"
-# Inlined in this order: each component file defines its component globally, and mount_report.js
-# mounts it on its slot in assets/template.html, where the slot's markup is its in-DOM template.
-SCRIPTS = ("model_card.js", "summary_table.js", "roc_plot.js", "calibration_plot.js",
-           "mount_report.js")
+# Inlined after the markup, which Jinja writes in full: the script only draws the figures and
+# wires the Model card's inputs.
+SCRIPTS = ("report.js",)
 
 # ---------------------------------------------------------------------------
 # Visuals: the plots are styled with Plotly's own mechanism, the template below, which both
@@ -210,7 +209,8 @@ class ModelReport:
     def html(self):
         """The report page as a string."""
         shell, styles, scripts = load_assets()
-        return shell.render(title=self.data["title"], styles=styles, scripts=scripts,
+        return shell.render(title=self.data["title"], model=self.data["model"],
+                            summary=self.data["summary"], styles=styles, scripts=scripts,
                             data=Markup(json_for_script(self.data)))
 
     def save(self, path):
@@ -374,6 +374,9 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, s
     ``points_header`` is the item table's points column, and None when there is no such column
     (a checklist whose items are all ``+1``: every box counts the same, so a column of ``+`` says
     nothing). ``score_header`` and ``risk_header`` label the score-to-risk strip.
+    ``cell_by_total`` maps each total in the strip (as a string, a JSON key) to the index of the
+    strip cell holding it and the risk that cell shows: the Model card sums the points of its
+    checked items and looks the total up here.
     """
     items = []
     value_sets = []
@@ -402,16 +405,17 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, s
     m = math.floor(-intercept) + 1 if model_type == "checklist" else None
     checklist = model_type == "checklist"
     shows_points = not checklist or any(item["points"] < 0 for item in items)
+    cells, cell_by_total = score_to_risk_cells(totals, intercept, m)
     model = {
         "type": model_type,
         "intercept": number(intercept),
         "items": items,
         "points_header": "Points" if shows_points else None,
-        "box": "☐" if checklist else None,
         "score_header": "NET CHECKED" if checklist else "SCORE",
         "risk_header": "RISK",
         "score_range": [number(lo), number(hi)],
-        "score_to_risk": score_to_risk_cells(totals, intercept, m),
+        "score_to_risk": cells,
+        "cell_by_total": cell_by_total,
         "checklist_m": None,
         "rule": None,
     }
@@ -467,21 +471,24 @@ def tail_groups(risks):
 
 
 def score_to_risk_cells(scores, intercept, checklist_m):
-    """The score-to-risk strip: ``{"score", "risk", "positive"}`` per cell, tails collapsed.
+    """The score-to-risk strip: ``{"score", "risk", "positive"}`` per cell, tails collapsed; and
+    ``{str(score): {"cell", "risk"}}``, the cell each score falls in and the risk it shows.
 
     ``scores`` is ascending, so risk is too. A collapsed cell is labelled with the score range it
     covers (``"0 to 1"``) and with the threshold it stays under (``"< 1.0%"``), as in the R's
     ``get.risk.xtable``; every other cell shows its own score and risk.
     """
     risks = expit(np.asarray(scores, dtype=float) + intercept)
-    cells = []
+    cells, cell_by_score = [], {}
     for first, last in tail_groups(risks):
         risk = (percent(risks[first]) if first == last
                 else f"< {percent(LOW_RISK)}" if risks[last] < LOW_RISK
                 else f"> {percent(HIGH_RISK)}")
+        cell_by_score.update({str(score): {"cell": len(cells), "risk": risk}
+                              for score in scores[first:last + 1]})
         cells.append({"score": score_label(scores[first], scores[last]), "risk": risk,
                       "positive": checklist_m is not None and scores[first] >= checklist_m})
-    return cells
+    return cells, cell_by_score
 
 
 def score_label(low, high):

@@ -49,8 +49,6 @@
   border-bottom: 1px solid var(--rs-grid);
 }
 .rs-card h3 { margin: 0; font-size: 1rem; }
-/* a component slot generates no box: its component lays out as a direct child of the card */
-.rs-slot { display: contents; }
 
 .rs-card table { margin-bottom: 0.75rem; font-size: 0.9rem; }
 .rs-card th, .rs-card td { padding: 0.3rem 0.5rem; }
@@ -61,7 +59,13 @@
 .rs-model-table .rs-name { overflow-wrap: anywhere; }
 .rs-model-table .rs-points { text-align: right; white-space: nowrap; }
 .rs-model-table td.rs-points { font-weight: 600; }
-.rs-model-table .rs-box { width: 2em; font-size: 1.2rem; line-height: 1; }
+/* the item's input: a checkbox, or a number for an item that takes a range of values. Pico sizes
+   form fields for a form; in a table cell they sit on the row's line instead */
+.rs-model-table .rs-box { width: 2em; line-height: 1; }
+.rs-box input { margin: 0; }
+.rs-box input[type="number"] { width: 4.5em; height: auto; padding: 0.1rem 0.3rem; font-size: inherit; }
+.rs-readout { margin-bottom: 0.75rem; font-variant-numeric: tabular-nums; }
+.rs-readout output { font-weight: 600; }
 .rs-rule { font-weight: 600; margin-bottom: 0.75rem; }
 
 /* score-to-risk strip: one grid that wraps, so it fits the card at any width with no sideways
@@ -86,6 +90,9 @@
 .rs-score-head { text-align: left; }
 .rs-score-head .rs-score-value { font-size: 0.75rem; color: var(--rs-muted); }
 .rs-score-cell.rs-positive { background: var(--rs-highlight); }
+/* the cell holding the Model card's current total; an outline, so it leaves the background's
+   meaning (predicted positive) alone and does not change the cell's size */
+.rs-score-cell.rs-current { outline: 2px solid var(--rs-ink); outline-offset: -2px; }
 
 /* summary table: one header row, naming the samples */
 .rs-summary-table thead th {

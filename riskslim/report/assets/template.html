@@ -6,86 +6,106 @@
 <title>{{ title }}</title>
 {#- Pinned CDN versions: change them here only. #}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.min.css" integrity="sha384-L1dWfspMTHU/ApYnFiMz2QID/PlP1xCW9visvBdbEkOLkSSWsP6ZJWhPw6apiXxU" crossorigin="anonymous">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.5.43/vue.global.prod.min.js" integrity="sha384-jpQley6yTEvoZeHVfCkBVqGK6kLbDxptME8BFcqX9FJiFhpNkdkUSs54xLMnxmuB" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-basic-dist-min@4.1.1/plotly-basic.min.js" integrity="sha384-N2HZsG+IG/3J8CwhGGYz/kmzZ0sprpPWwjhor9ZI4lxuf47i9DXK2/NDGxMaJiEb" crossorigin="anonymous"></script>
 <style>
 {{ styles }}
 </style>
 </head>
 <body>
-{#- The page structure: a 2x2 grid of cards, each with one component slot that mount_report.js
-    fills. A slot is display:contents, so the component renders as a direct child of its card.
-
-    The markup inside a slot is that component's in-DOM template -- Vue compiles it on mount, so
-    all of the page's HTML lives in this file and each .js file holds only its component's logic.
-    Vue interpolates with the same delimiters as Jinja, so every slot body sits inside a Jinja
-    raw block and reaches the browser untouched. #}
+{#- The page structure: a 2x2 grid of cards. Jinja writes every table here; report.js draws the
+    two figures into their [data-figure] boxes and wires the Model card's inputs. Dict keys that
+    share a name with a dict method (items, values) are read with [], which Jinja does not
+    resolve to the method. #}
 <main class="container" id="report">
 <header class="rs-head"><h2>{{ title }}</h2></header>
 <section class="rs-row">
 <article class="rs-card">
 <header><h3>Model</h3></header>
-<div class="rs-slot" data-component="model-card">{% raw %}
   <table class="rs-model-table">
-    <thead v-if="model.points_header">
+    {%- if model.points_header %}
+    <thead>
       <tr>
-        <th v-if="model.box"></th>
+        <th></th>
         <th></th>
         <th class="rs-points">{{ model.points_header }}</th>
       </tr>
     </thead>
+    {%- endif %}
     <tbody>
-      <tr v-for="item in model.items" class="rs-item-row">
-        <td v-if="model.box" class="rs-box" aria-hidden="true">{{ model.box }}</td>
+      {%- for item in model["items"] %}
+      <tr class="rs-item-row">
+        <td class="rs-box">
+          {%- if item.binary -%}
+          <input type="checkbox" data-points="{{ item.points }}" aria-label="{{ item.name_label }}">
+          {%- else -%}
+          <input type="number" min="{{ item.value_range[0] }}" max="{{ item.value_range[1] }}"
+                 value="{{ item.value_range[0] }}" step="any" data-points="{{ item.points }}"
+                 aria-label="{{ item.name_label }}">
+          {%- endif -%}
+        </td>
         <td class="rs-name">{{ item.name_label }}</td>
-        <td v-if="model.points_header" class="rs-points">{{ item.points_label }}</td>
+        {%- if model.points_header %}
+        <td class="rs-points">{{ item.points_label }}</td>
+        {%- endif %}
       </tr>
-      <tr v-if="model.items.length === 0"><td colspan="3">No items: every row gets the same score.</td></tr>
+      {%- else %}
+      <tr><td colspan="3">No items: every row gets the same score.</td></tr>
+      {%- endfor %}
     </tbody>
   </table>
-  <p v-if="model.rule" class="rs-rule">{{ model.rule }}</p>
+  {#- report.js fills in the two outputs, from the inputs above #}
+  <p class="rs-readout" aria-live="polite">
+    <span class="rs-score-label">{{ model.score_header }}</span> <output id="rs-total"></output>
+    · <span class="rs-score-label">{{ model.risk_header }}</span> <output id="rs-risk"></output>
+  </p>
+  {%- if model.rule %}
+  <p class="rs-rule">{{ model.rule }}</p>
+  {%- endif %}
   <div class="rs-score-grid">
     <div class="rs-score-cell rs-score-head">
       <span class="rs-score-label">{{ model.score_header }}</span>
       <span class="rs-score-value">{{ model.risk_header }}</span>
     </div>
-    <div v-for="cell in model.score_to_risk"
-         class="rs-score-cell"
-         :class="{ 'rs-positive': cell.positive }">
+    {%- for cell in model.score_to_risk %}
+    <div class="rs-score-cell{% if cell.positive %} rs-positive{% endif %}" data-cell="{{ loop.index0 }}">
       <span class="rs-score-label">{{ cell.score }}</span>
       <span class="rs-score-value">{{ cell.risk }}</span>
     </div>
+    {%- endfor %}
   </div>
-{% endraw %}</div>
 </article>
 <article class="rs-card">
 <header><h3>Summary</h3></header>
-<div class="rs-slot" data-component="summary-table">{% raw %}
   <table class="rs-summary-table">
     <thead>
       <tr>
         <th>{{ summary.columns[0] }}</th>
-        <th v-for="column in summary.columns.slice(1)" class="rs-num">{{ column }}</th>
+        {%- for column in summary.columns[1:] %}
+        <th class="rs-num">{{ column }}</th>
+        {%- endfor %}
       </tr>
     </thead>
     <tbody>
-      <tr v-for="row in summary.rows">
+      {%- for row in summary.rows %}
+      <tr>
         <td>{{ row.label }}</td>
-        <td v-for="value in row.values" class="rs-num" :colspan="row.span">{{ value }}</td>
+        {%- for value in row["values"] %}
+        <td class="rs-num" colspan="{{ row.span }}">{{ value }}</td>
+        {%- endfor %}
       </tr>
+      {%- endfor %}
     </tbody>
   </table>
-{% endraw %}</div>
 </article>
 </section>
 <section class="rs-row">
 <article class="rs-card">
 <header><h3>ROC</h3></header>
-<div class="rs-slot" data-component="roc-plot"><div ref="plot" class="rs-plot"></div></div>
+<div class="rs-plot" data-figure="roc"></div>
 </article>
 <article class="rs-card">
 <header><h3>Calibration</h3></header>
-<div class="rs-slot" data-component="calibration-plot"><div ref="plot" class="rs-plot"></div></div>
+<div class="rs-plot" data-figure="calibration"></div>
 </article>
 </section>
 </main>

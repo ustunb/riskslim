@@ -41,8 +41,9 @@ properties, and one test asserts the Plotly template's colours are the ones styl
 keeps them from drifting). The browser test is opt-in (`pytest -m browser`): one page per saved
 report (each model type, plus `wide_strip` -- a long strip whose collapsed tails are its widest
 cells) is built and saved once, then opened in headless Chromium at 1280 px and 375 px, requiring
-no console or page errors, 2 rendered Plotly charts, one model row per item, and a score-to-risk
-strip that fits the card at that width; screenshots and the HTML go to a tmp_path or --report-dir=DIR
+no console or page errors, 2 rendered Plotly charts, one model row per item, a score-to-risk
+strip that fits the card at that width, and a Model card whose readout and outlined strip cell
+follow a checked item; screenshots and the HTML go to a tmp_path or --report-dir=DIR
 (write it with "=": with a space, pytest reads an existing DIR as a test path and misses the
 config).
 """
@@ -76,14 +77,14 @@ from riskslim.report.model_report import ASSETS, TEMPLATE_NAME
 DATA_KEYS = {"schema_version", "title", "outcome_name", "samples", "model", "summary", "roc",
              "calibration", "figures"}
 CDN_URLS = [
-    "https://cdnjs.cloudflare.com/ajax/libs/vue/3.5.43/vue.global.prod.min.js",
     "https://cdn.jsdelivr.net/npm/plotly.js-basic-dist-min@4.1.1/plotly-basic.min.js",
     "https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.min.css",
 ]
 DATA_BLOCK = re.compile(r'<script type="application/json" id="report-data">(.*?)</script>', re.S)
 HOSTILE_NAMES = ["a</script><script>alert(1)</script>", "b<!-- c", "c"]
 BREASTCANCER_FILE = Path(__file__).parents[1] / "data" / "breastcancer_data.csv"
-COMPONENTS = ["model-card", "summary-table", "roc-plot", "calibration-plot"]
+COMPONENTS = ['class="rs-model-table"', 'class="rs-summary-table"', 'data-figure="roc"',
+              'data-figure="calibration"']
 # How far the score-to-risk strip runs past its own box, past the card holding it, and past the
 # viewport, in px. All three are 0 at every width: the strip wraps to the width it is given, so it
 # neither scrolls sideways nor pushes the page wider than the window.
@@ -152,6 +153,9 @@ def test_non_binary_feature_score_range_spans_points_times_value_range(fitted_wi
                                  "value_range": [1, 8], "name_label": "a (1–8)",
                                  "points_label": "2 × value"}
     assert model["score_range"] == [1, 17]
+    # the Model card's lookup: a total in a collapsed tail reads the risk its cell shows
+    assert [model["cell_by_total"][total] for total in ("6", "7", "17")] == [
+        {"cell": 5, "risk": "98.2%"}, {"cell": 6, "risk": "> 99.0%"}, {"cell": 6, "risk": "> 99.0%"}]
 
 
 @pytest.mark.parametrize("wide, weights, expected", [
@@ -302,7 +306,7 @@ def test_report_of_a_classifier_fit_on_a_dataset_holds_every_component():
 
     assert data["samples"] == ["Training", "5-CV"]
     for component in COMPONENTS:
-        assert f'data-component="{component}"' in page
+        assert component in page
     assert data["model"]["items"]
     assert data["summary"]["columns"] == ["", *data["samples"]]
     assert data["summary"]["rows"]  # the rows themselves are pinned by the flat-table test
@@ -447,7 +451,12 @@ def chromium():
 @pytest.mark.parametrize("width", [1280, 375])
 def test_report_renders_in_browser_without_errors(chromium, saved_report, width):
     (block,) = DATA_BLOCK.findall(saved_report.read_text(encoding="utf-8"))
-    items = json.loads(block)["model"]["items"]
+    model = json.loads(block)["model"]
+    items = model["items"]
+    # checking the first binary item adds its points to the start: every range at its low end
+    first = next(item for item in items if item["binary"])
+    total = str(first["points"] + sum(item["points"] * item["value_range"][0]
+                                      for item in items if not item["binary"]))
     page = chromium.new_page(viewport={"width": width, "height": 900})
     errors = []
     page.on("console", lambda message: message.type == "error" and errors.append(message.text))
@@ -468,5 +477,11 @@ def test_report_renders_in_browser_without_errors(chromium, saved_report, width)
         assert page.locator(".js-plotly-plot").count() == 2
         # the strip wraps to fit the card at this width instead of running off the side of it
         assert page.evaluate(STRIP_FIT) == {"strip": 0, "card": 0, "page": 0}
+
+        page.locator(".rs-model-table input[type=checkbox]").first.check()
+        assert page.locator("#rs-total").text_content() == total
+        assert page.locator("#rs-risk").text_content() == model["cell_by_total"][total]["risk"]
+        assert page.locator(".rs-current").get_attribute("data-cell") == \
+            str(model["cell_by_total"][total]["cell"])
     finally:
         page.close()
