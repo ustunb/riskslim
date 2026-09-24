@@ -61,7 +61,19 @@
 /* the item's input: a checkbox, or a number for an item that takes a range of values. Pico sizes
    form fields for a form; in a table cell they sit on the row's line instead */
 .rs-model-table .rs-box { width: 2em; line-height: 1; }
-.rs-box input { margin: 0; }
+/* Pico draws its own checkbox (appearance: none) in its primary blue and rings a focused field in
+   it; here both take the ink instead */
+.rs-box input {
+  margin: 0;
+  accent-color: var(--rs-ink);
+  --pico-primary-background: var(--rs-ink);
+  --pico-primary-border: var(--rs-ink);
+  --pico-primary-focus: color-mix(in srgb, var(--rs-ink) 25%, transparent);
+  --pico-form-element-active-border-color: var(--rs-ink);
+  --pico-form-element-focus-color: var(--rs-ink);
+}
+/* the item's name is the label of its input; Pico sets a label on its own line, below a gap */
+.rs-name label { display: inline; margin: 0; cursor: pointer; }
 .rs-box input[type="number"] { width: 4.5em; height: auto; padding: 0.1rem 0.3rem; font-size: inherit; }
 .rs-readout { margin-bottom: 0.75rem; font-variant-numeric: tabular-nums; }
 .rs-readout output { font-weight: 600; }

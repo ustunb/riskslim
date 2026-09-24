@@ -396,7 +396,8 @@ def test_figure_plots_each_sample_section_and_names_its_trace_for_the_legend(rep
     for trace, name in zip(figure["data"], ["Test", "Training"]):
         assert trace["x"] == report.data[key][name][x_field]
         assert trace["y"] == report.data[key][name][y_field]
-        assert trace["hovertemplate"].endswith(f"<extra>{name}</extra>")  # hover names the sample
+        # the hover names the sample on its first line, inside the box
+        assert trace["hovertemplate"].startswith(f"<b>{name}</b><br>")
 
 
 def test_calibration_circles_are_one_size_with_the_score_inside_joined_by_a_line(report):
@@ -437,8 +438,8 @@ def test_calibration_points_pool_the_rows_of_a_collapsed_tail(fitted_wide):
 def test_roc_points_carry_score_thresholds(report):
     train = report.data["figures"]["roc"]["data"][-1]
 
-    assert train["customdata"] == ["none", "score ≥ 3", "score ≥ 2", "score ≥ 1",
-                                   "score ≥ 0", "score ≥ -1"]
+    assert train["customdata"] == ["None", "Score ≥ 3", "Score ≥ 2", "Score ≥ 1",
+                                   "Score ≥ 0", "Score ≥ -1"]
 
 
 def test_plot_template_holds_the_same_palette_as_the_stylesheet(report):
@@ -508,7 +509,8 @@ def chromium():
 @pytest.mark.parametrize("width", [1280, 375])
 def test_report_renders_in_browser_without_errors(chromium, saved_report, width):
     (block,) = DATA_BLOCK.findall(saved_report.read_text(encoding="utf-8"))
-    model = json.loads(block)["model"]
+    data = json.loads(block)
+    model = data["model"]
     items = model["items"]
     page = chromium.new_page(viewport={"width": width, "height": 900})
     errors = []
@@ -552,5 +554,17 @@ def test_report_renders_in_browser_without_errors(chromium, saved_report, width)
             cell = model["cell_by_total"][total]
             assert page.locator("#rs-risk").text_content() == model["score_to_risk"][cell]["risk"]
             assert page.locator(".rs-current").get_attribute("data-cell") == str(cell)
+
+        # a sample clicked in one plot's legend is hidden in both plots (a single sample has no
+        # legend)
+        if len(data["samples"]) > 1:
+            hidden = "[...document.querySelectorAll('[data-figure]')].map((plot) => plot.data" \
+                     ".filter((trace) => trace.visible === 'legendonly')" \
+                     ".map((trace) => trace.name.split('<br>')[0]))"
+            page.locator("[data-figure=roc] .legend .traces").first.click()
+            # Plotly waits out a possible double click before it acts on a click
+            page.wait_for_function(f"{hidden}.flat().length > 0", timeout=5_000)
+            roc_hidden, calibration_hidden = page.evaluate(hidden)
+            assert len(roc_hidden) == 1 and calibration_hidden == roc_hidden
     finally:
         page.close()

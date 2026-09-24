@@ -61,7 +61,7 @@ from ..utils import is_integer
 
 SCHEMA_VERSION = 2
 MAX_TOTALS = 10_000  # score totals to enumerate before falling back to observed scores
-MODEL_TYPES = {"risk_score": "Risk score", "checklist": "Checklist"}
+MODEL_TYPES = {"risk_score": "Risk Score", "checklist": "Checklist"}
 
 # the page's cards, in their default order
 COMPONENTS = ("model", "summary", "roc", "calibration")
@@ -125,6 +125,9 @@ pio.templates[TEMPLATE_NAME] = go.layout.Template(layout=go.Layout(
     # r and t leave room for the last tick label and for a circle overhanging the frame
     margin={"t": 24, "r": 24, "b": 64, "l": 72},
     hovermode="closest",
+    # the hover box names its sample on its first line, inside the box: Plotly's side tag drew it
+    # in the trace colour, unreadable for the grey and tan samples
+    hoverlabel={"align": "left"},
     dragmode=False,
     # inside the panel, bottom right: the ROC curve owns the top left and the calibration points
     # follow the diagonal, so that corner is empty in both figures
@@ -774,14 +777,15 @@ def roc_figure(sample_keys, sections, labels):
     for name, key in reversed(sample_keys.items()):
         roc = sections[name]
         color = SAMPLE_COLORS[key]
-        thresholds = ["none" if i == 0 else "scores differ by fold" if t is None else f"score ≥ {t}"
-                      for i, t in enumerate(roc["thresholds"])]
+        thresholds = ["None" if i == 0 else "Scores Differ by Fold" if t is None
+                      else f"Score ≥ {t}" for i, t in enumerate(roc["thresholds"])]
         traces.append(go.Scatter(
             mode="lines+markers", name=labels[name],
             x=roc["fpr"], y=roc["tpr"], customdata=thresholds,
             line={"width": 2, "color": color}, marker={"size": 12, "color": color},
-            hovertemplate="%{customdata}<br>FPR %{x:.1%} · TPR %{y:.1%}"
-                          f"<extra>{name}</extra>",
+            hovertemplate=f"<b>{name}</b><br>%{{customdata}}<br>"
+                          "False Positive Rate %{x:.1%}<br>True Positive Rate %{y:.1%}"
+                          "<extra></extra>",
         ))
     return go.Figure(traces, figure_layout("False Positive Rate",
                                            "True Positive Rate")).to_plotly_json()
@@ -846,10 +850,10 @@ def calibration_figure(sample_keys, points, labels):
             line={"width": 2, "color": color},
             # the white outline keeps overlapping circles apart
             marker={"size": CIRCLE_PX, "color": color, "line": {"color": BACKGROUND, "width": 1}},
-            hovertemplate="Score %{customdata[0]}<br>Predicted Risk %{x:.1%}<br>"
-                          "Observed Risk %{y:.1%}<br>Calibration Error %{customdata[2]:.1%}<br>"
-                          "n = %{customdata[1]:,}"
-                          f"<extra>{name}</extra>",
+            hovertemplate=f"<b>{name}</b><br>Score %{{customdata[0]}}<br>"
+                          "Predicted Risk %{x:.1%}<br>Observed Risk %{y:.1%}<br>"
+                          "Calibration Error %{customdata[2]:.1%}<br>n = %{customdata[1]:,}"
+                          "<extra></extra>",
         ))
     return go.Figure(traces, figure_layout("Predicted Risk", "Observed Risk")).to_plotly_json()
 

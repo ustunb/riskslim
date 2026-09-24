@@ -45,9 +45,38 @@
   // Python builds the whole figure, styling included; it is drawn once, so Plotly may write
   // into it directly. Without Plotly (offline, blocked) the figure boxes stay empty.
   if (typeof Plotly === "undefined") return;
-  document.querySelectorAll("#report [data-figure]").forEach((element) => {
+  const plots = [...document.querySelectorAll("#report [data-figure]")];
+  plots.forEach((element) => {
     const figure = data.figures[element.dataset.figure];
     Plotly.newPlot(element, figure.data, figure.layout,
       { displayModeBar: false, responsive: true, scrollZoom: false });
+  });
+
+  // the legend shows and hides a sample on the whole page, not in one plot: a click toggles it, a
+  // double click shows it alone (or, when it already is, every sample again), as Plotly does in
+  // one plot. A trace's name is its legend entry, which starts with the sample's name.
+  const sampleOf = (trace) => trace.name.split("<br>")[0];
+  function showOnly(shown) {
+    plots.forEach((plot) => Plotly.restyle(plot, {
+      visible: plot.data.map((trace) => shown.has(sampleOf(trace)) || "legendonly"),
+    }));
+  }
+  plots.forEach((plot) => {
+    const shownAndClicked = (event) => [
+      new Set(event.data.filter((trace) => trace.visible !== "legendonly").map(sampleOf)),
+      sampleOf(event.data[event.curveNumber]),
+    ];
+    plot.on("plotly_legendclick", (event) => {
+      const [shown, clicked] = shownAndClicked(event);
+      shown.has(clicked) ? shown.delete(clicked) : shown.add(clicked);
+      showOnly(shown);
+      return false;
+    });
+    plot.on("plotly_legenddoubleclick", (event) => {
+      const [shown, clicked] = shownAndClicked(event);
+      const alone = shown.size === 1 && shown.has(clicked);
+      showOnly(alone ? new Set(event.data.map(sampleOf)) : new Set([clicked]));
+      return false;
+    });
   });
 })();

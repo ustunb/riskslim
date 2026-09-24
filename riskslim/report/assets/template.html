@@ -39,14 +39,15 @@
       <tr class="rs-item-row">
         <td class="rs-box">
           {%- if item.binary -%}
-          <input type="checkbox" data-points="{{ item.points }}" aria-label="{{ item.name_label }}">
+          <input type="checkbox" id="rs-item-{{ loop.index0 }}" data-points="{{ item.points }}">
           {%- else -%}
-          <input type="number" min="{{ item.value_range[0] }}" max="{{ item.value_range[1] }}"
-                 value="{{ item.value_range[0] }}" step="any" data-points="{{ item.points }}"
-                 aria-label="{{ item.name_label }}">
+          <input type="number" id="rs-item-{{ loop.index0 }}" min="{{ item.value_range[0] }}"
+                 max="{{ item.value_range[1] }}" value="{{ item.value_range[0] }}" step="any"
+                 data-points="{{ item.points }}">
           {%- endif -%}
         </td>
-        <td class="rs-name">{{ item.name_label }}</td>
+        {#- the name labels its input: clicking it ticks the box, or focuses the number #}
+        <td class="rs-name"><label for="rs-item-{{ loop.index0 }}">{{ item.name_label }}</label></td>
         {%- if model.points_header %}
         <td class="rs-points">{{ item.points_label }}</td>
         {%- endif %}
