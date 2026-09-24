@@ -65,6 +65,10 @@ MODEL_TYPES = {"risk_score": "Risk score", "checklist": "Checklist"}
 
 # the page's cards, in their default order
 COMPONENTS = ("model", "summary", "roc", "calibration")
+# risks below the low threshold (above the high one) collapse into one strip cell and one
+# calibration point: the R's defaults
+LOW_RISK_THRESHOLD = 0.01
+HIGH_RISK_THRESHOLD = 0.99
 
 # sample names, in page order: the training sample, the CV sample ("5-CV"), then the other splits;
 # keyed by the stable names the samples argument takes (the CV sample's key is "cv")
@@ -96,10 +100,6 @@ MUTED = "#98A2AD"
 # whichever samples are shown and in whatever order. Validation has no house colour: it borrows
 # the palette's muted grey as a placeholder.
 SAMPLE_COLORS = {"training": "#000000", "test": "#D2B48C", "cv": "#BEBEBE", "validation": MUTED}
-# the score printed inside each calibration circle: white on the black training circles, black on
-# the lighter ones
-LABEL_COLORS = {"training": BACKGROUND, "test": "#000000", "cv": "#000000",
-                "validation": "#000000"}
 CIRCLE_PX = 24  # calibration circle diameter: room for the widest label ("10+", "≤-3") at LABEL_PX
 LABEL_PX = 10
 AXIS_RANGE = [-0.02, 1.02]  # both axes of both figures: 0 to 1, with room for a marker on the edge
@@ -177,8 +177,8 @@ class ModelReport:
     """
 
     def __init__(self, classifier, data=None, cv_models=None, model_type=None, X_test=None,
-                 y_test=None, *, components=COMPONENTS, samples=None, low_risk_threshold=0.01,
-                 high_risk_threshold=0.99):
+                 y_test=None, *, components=COMPONENTS, samples=None,
+                 low_risk_threshold=LOW_RISK_THRESHOLD, high_risk_threshold=HIGH_RISK_THRESHOLD):
         check_is_fitted(classifier)
         components = checked_selection("components", components, COMPONENTS)
         thresholds = checked_risk_thresholds(low_risk_threshold, high_risk_threshold)
@@ -200,18 +200,19 @@ class ModelReport:
         model = model_section(points, intercept, self.variable_names[1:], self.outcome_name,
                               self.model_type, splits[TRAINING][0],
                               {name: score for name, (_, score, _) in scored.items()}, thresholds)
-        keys = {name: key for key, name in SPLIT_SAMPLES.items()}
+        # {key: sample name} of every available sample, in page order: Training, the CV sample,
+        # then the other splits
+        available = {key: name for key, name in SPLIT_SAMPLES.items() if name in scored}
         cv = cv_sample(classifier, cv_models)
         if cv is not None:
             cv_name, cv_scored = cv
-            scored = {TRAINING: scored.pop(TRAINING), cv_name: cv_scored, **scored}
-            keys[cv_name] = "cv"
-        # {key: sample name} of every available sample, in page order; then only those shown
-        available = {keys[name]: name for name in scored}
+            scored[cv_name] = cv_scored
+            available = {"training": TRAINING, "cv": cv_name, **available}
         shown = (list(available) if samples is None
                  else checked_selection("samples", samples, tuple(available)))
-        scored = {available[key]: scored[available[key]] for key in shown}
+        # {sample name: key} of the samples shown, in their order: the key picks a sample's colour
         sample_keys = {available[key]: key for key in shown}
+        scored = {name: scored[name] for name in sample_keys}
         checked_classes(scored)
 
         roc = {name: roc_section(y, score, b) for name, (y, score, b) in scored.items()}
@@ -219,14 +220,13 @@ class ModelReport:
                        for name, (y, score, b) in scored.items()}
         log_loss = {name: float(log_loss_value_from_scores((2 * y - 1) * (score + b)))
                     for name, (y, score, b) in scored.items()}
-        names = list(scored)
         summary = summary_section({name: y for name, (y, _, _) in scored.items()}, model,
                                   roc, calibration, log_loss, self.training, self.constraints)
         self.data = {
             "schema_version": SCHEMA_VERSION,
             "title": f"{MODEL_TYPES[self.model_type]}: {self.outcome_name}",
             "outcome_name": self.outcome_name,
-            "samples": names,
+            "samples": list(sample_keys),
             "model": model,
             "summary": summary,
             "roc": roc,
@@ -238,12 +238,13 @@ class ModelReport:
         # only the figures on the page: the sections above hold their numbers either way
         self.data["figures"] = {}
         if "roc" in components:
-            self.data["figures"]["roc"] = roc_figure(names, roc,
-                                                     sample_labels(summary, names, "auc"),
-                                                     sample_keys)
+            self.data["figures"]["roc"] = roc_figure(
+                sample_keys, roc, sample_labels(summary, sample_keys, "auc"))
         if "calibration" in components:
             self.data["figures"]["calibration"] = calibration_figure(
-                names, calibration, sample_labels(summary, names, "ece"), sample_keys, thresholds)
+                sample_keys, {name: calibration_points(calibration[name], thresholds)
+                              for name in sample_keys},
+                sample_labels(summary, sample_keys, "ece"))
 
     @property
     def html(self):
@@ -440,8 +441,8 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, s
     (a checklist whose items are all ``+1``: every box counts the same, so a column of ``+`` says
     nothing). ``score_header`` and ``risk_header`` label the score-to-risk strip.
     ``cell_by_total`` maps each total in the strip (as a string, a JSON key) to the index of the
-    strip cell holding it and the risk that cell shows: the Model card sums the points of its
-    checked items and looks the total up here. ``thresholds`` is ``(low, high)``, where the
+    strip cell holding it: the Model card sums the points of its checked items, looks the total
+    up here and reads the risk that cell shows. ``thresholds`` is ``(low, high)``, where the
     strip collapses its tails.
     """
     items = []
@@ -514,9 +515,9 @@ def achievable_totals(value_sets):
 
 
 def tail_groups(risks, thresholds):
-    """``[(first, last)]`` over ascending ``risks``: one group per risk, except that the risks
-    below ``low`` become one group and those above ``high`` another, for ``thresholds`` =
-    ``(low, high)``.
+    """``[(first, last, side)]`` over ascending ``risks``: one group per risk, except that the
+    risks below ``low`` become one group and those above ``high`` another, for ``thresholds`` =
+    ``(low, high)``. ``side`` is ``"low"`` or ``"high"`` for a collapsed tail, else None.
 
     The endpoints collapse because ``logit(k) ≈ logit(k + 1)`` once the risk is near 0 or 1: a
     wide score range otherwise ends in a run of cells all reading ``100.0%`` and a run of plot
@@ -531,17 +532,17 @@ def tail_groups(risks, thresholds):
     low_risk, high_risk = thresholds
     low = int(np.searchsorted(risks, low_risk))  # risks are ascending, so the tails are prefixes
     high = n - int(np.searchsorted(risks, high_risk, side="right"))
-    groups = [(i, i) for i in range(n)]
+    groups = [(i, i, None) for i in range(n)]
     if high > 1:
-        groups[n - high:] = [(n - high, n - 1)]
+        groups[n - high:] = [(n - high, n - 1, "high")]
     if low > 1:
-        groups[:low] = [(0, low - 1)]
+        groups[:low] = [(0, low - 1, "low")]
     return groups
 
 
 def score_to_risk_cells(scores, intercept, checklist_m, thresholds):
     """The score-to-risk strip: ``{"score", "risk", "positive"}`` per cell, tails collapsed; and
-    ``{str(score): {"cell", "risk"}}``, the cell each score falls in and the risk it shows.
+    ``{str(score): cell index}``, the cell each score falls in.
 
     ``scores`` is ascending, so risk is too. A collapsed cell is labelled with the score range it
     covers (``"0 to 1"``) and with the threshold it stays under (``"< 1.0%"``), as in the R's
@@ -550,12 +551,11 @@ def score_to_risk_cells(scores, intercept, checklist_m, thresholds):
     risks = expit(np.asarray(scores, dtype=float) + intercept)
     low_risk, high_risk = thresholds
     cells, cell_by_score = [], {}
-    for first, last in tail_groups(risks, thresholds):
-        risk = (percent(risks[first]) if first == last
-                else f"< {percent(low_risk)}" if risks[last] < low_risk
+    for first, last, side in tail_groups(risks, thresholds):
+        risk = (percent(risks[first]) if side is None
+                else f"< {percent(low_risk)}" if side == "low"
                 else f"> {percent(high_risk)}")
-        cell_by_score.update({str(score): {"cell": len(cells), "risk": risk}
-                              for score in scores[first:last + 1]})
+        cell_by_score.update({str(score): len(cells) for score in scores[first:last + 1]})
         cells.append({"score": score_label(scores[first], scores[last]), "risk": risk,
                       "positive": checklist_m is not None and scores[first] >= checklist_m})
     return cells, cell_by_score
@@ -712,15 +712,15 @@ def sample_labels(summary, names, metric):
                                          values[metric])}
 
 
-def roc_figure(names, sections, labels, keys):
+def roc_figure(sample_keys, sections, labels):
     """One ROC curve per sample with a point at each score threshold; AUC in the legend.
 
-    ``keys`` maps each sample name to its key, which picks its colour. The traces run in reverse
-    page order, so the first sample is drawn on top."""
+    ``sample_keys`` is ``{sample name: key}`` in page order; the key picks the sample's colour.
+    The traces run in reverse page order, so the first sample is drawn on top."""
     traces = []
-    for name in reversed(names):
+    for name, key in reversed(sample_keys.items()):
         roc = sections[name]
-        color = SAMPLE_COLORS[keys[name]]
+        color = SAMPLE_COLORS[key]
         thresholds = ["none" if i == 0 else "scores differ by fold" if t is None else f"score ≥ {t}"
                       for i, t in enumerate(roc["thresholds"])]
         traces.append(go.Scatter(
@@ -752,38 +752,43 @@ def calibration_points(section, thresholds):
                    key=lambda i: (section["predicted"][i], section["scores"][i]))
     risks = [section["predicted"][i] for i in order]
     points = []
-    for first, last in tail_groups(risks, thresholds):
+    for first, last, side in tail_groups(risks, thresholds):
         rows = order[first:last + 1]
         n = sum(section["n"][i] for i in rows)
         predicted = sum(section["predicted"][i] * section["n"][i] for i in rows) / n
         observed = sum(section["observed"][i] * section["n"][i] for i in rows) / n
-        low, high = (f(section["scores"][i] for i in rows) for f in (min, max))
-        label = (score_label(low, high) if first == last
-                 else f"≤{score_label(high, high)}" if risks[last] < thresholds[0]
+        scores = [section["scores"][i] for i in rows]
+        low, high = min(scores), max(scores)
+        scores_label = score_label(low, high)
+        label = (scores_label if side is None
+                 else f"≤{score_label(high, high)}" if side == "low"
                  else f"{score_label(low, low)}+")
-        points.append((label, score_label(low, high), predicted, observed, n,
-                       abs(predicted - observed)))
+        points.append((label, scores_label, predicted, observed, n, abs(predicted - observed)))
     keys = ("labels", "scores", "predicted", "observed", "n", "local_error")
     return dict(zip(keys, (list(values) for values in zip(*points))))
 
 
-def calibration_figure(names, sections, labels, keys, thresholds):
+def calibration_figure(sample_keys, points, labels):
     """Per sample, equal circles with the score inside, joined in risk order; ECE in the legend.
 
-    ``keys`` maps each sample name to its key, which picks its colour. The circles follow the R
-    report: one size, since n is in the hover, and a line in the sample's colour. The traces run in
-    reverse page order, so the first sample is drawn on top."""
+    ``sample_keys`` is ``{sample name: key}`` in page order; the key picks the sample's colour.
+    ``points`` is each sample's ``calibration_points``. The circles follow the R report: one size,
+    since n is in the hover, and a line in the sample's colour. The traces run in reverse page
+    order, so the first sample is drawn on top."""
     traces = []
-    for name in reversed(names):
-        cal = calibration_points(sections[name], thresholds)
-        color = SAMPLE_COLORS[keys[name]]
+    for name, key in reversed(sample_keys.items()):
+        cal = points[name]
+        color = SAMPLE_COLORS[key]
         traces.append(go.Scatter(
             mode="lines+markers+text", name=labels[name],
             x=cal["predicted"], y=cal["observed"],
             text=cal["labels"],
             customdata=[[s, n, e] for s, n, e in zip(cal["scores"], cal["n"], cal["local_error"])],
             textposition="middle center",
-            textfont={"size": LABEL_PX, "color": LABEL_COLORS[keys[name]]},
+            # the score inside the circle: white on the black training circles, black on the
+            # lighter ones
+            textfont={"size": LABEL_PX,
+                      "color": BACKGROUND if key == "training" else "#000000"},
             cliponaxis=False,
             line={"width": 2, "color": color},
             # the white outline keeps overlapping circles apart

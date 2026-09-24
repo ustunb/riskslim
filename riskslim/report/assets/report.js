@@ -1,6 +1,7 @@
 // riskslim report: draw the figures and make the Model card add up. The markup is all
 // Jinja's; Python computes every number, so the card only sums points x value over its inputs
-// and looks the total up in model.cell_by_total -- the browser derives no model fact.
+// and looks the total up in model.cell_by_total, which names the strip cell whose risk it shows --
+// the browser derives no model fact.
 (function () {
   "use strict";
   const data = JSON.parse(document.getElementById("report-data").textContent);
@@ -25,10 +26,11 @@
       total += Number(input.dataset.points) * value;
     });
     // missing only for a total no value set reaches, e.g. a non-integer value typed in
-    const found = data.model.cell_by_total[String(total)];
+    const current = data.model.cell_by_total[String(total)];
     document.getElementById("rs-total").textContent = total;
-    document.getElementById("rs-risk").textContent = found ? found.risk : "—";
-    cells.forEach((cell, i) => cell.classList.toggle("rs-current", found?.cell === i));
+    document.getElementById("rs-risk").textContent =
+      current === undefined ? "—" : data.model.score_to_risk[current].risk;
+    cells.forEach((cell, i) => cell.classList.toggle("rs-current", current === i));
   }
   inputs.forEach((input) => input.addEventListener("input", update));
   update();

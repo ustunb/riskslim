@@ -158,8 +158,10 @@ def test_non_binary_feature_score_range_spans_points_times_value_range(fitted_wi
                                  "points_label": "2 × value"}
     assert model["score_range"] == [1, 17]
     # the Model card's lookup: a total in a collapsed tail reads the risk its cell shows
-    assert [model["cell_by_total"][total] for total in ("6", "7", "17")] == [
-        {"cell": 5, "risk": "98.2%"}, {"cell": 6, "risk": "> 99.0%"}, {"cell": 6, "risk": "> 99.0%"}]
+    cells = [model["cell_by_total"][total] for total in ("6", "7", "17")]
+    assert cells == [5, 6, 6]
+    assert [model["score_to_risk"][cell]["risk"] for cell in cells] == ["98.2%", "> 99.0%",
+                                                                         "> 99.0%"]
 
 
 @pytest.mark.parametrize("wide, weights, expected", [
@@ -498,10 +500,6 @@ def test_report_renders_in_browser_without_errors(chromium, saved_report, width)
     (block,) = DATA_BLOCK.findall(saved_report.read_text(encoding="utf-8"))
     model = json.loads(block)["model"]
     items = model["items"]
-    # checking the first binary item adds its points to the start: every range at its low end
-    first = next(item for item in items if item["binary"])
-    total = str(first["points"] + sum(item["points"] * item["value_range"][0]
-                                      for item in items if not item["binary"]))
     page = chromium.new_page(viewport={"width": width, "height": 900})
     errors = []
     page.on("console", lambda message: message.type == "error" and errors.append(message.text))
@@ -523,10 +521,15 @@ def test_report_renders_in_browser_without_errors(chromium, saved_report, width)
         # the strip wraps to fit the card at this width instead of running off the side of it
         assert page.evaluate(STRIP_FIT) == {"strip": 0, "card": 0, "page": 0}
 
-        page.locator(".rs-model-table input[type=checkbox]").first.check()
-        assert page.locator("#rs-total").text_content() == total
-        assert page.locator("#rs-risk").text_content() == model["cell_by_total"][total]["risk"]
-        assert page.locator(".rs-current").get_attribute("data-cell") == \
-            str(model["cell_by_total"][total]["cell"])
+        # checking an item adds its points to the total; the readout and the outlined strip cell
+        # follow the total
+        checkbox = page.locator(".rs-model-table input[type=checkbox]").first
+        before = float(page.locator("#rs-total").text_content())
+        checkbox.check()
+        total = page.locator("#rs-total").text_content()
+        assert float(total) == before + float(checkbox.get_attribute("data-points"))
+        cell = model["cell_by_total"][total]
+        assert page.locator("#rs-risk").text_content() == model["score_to_risk"][cell]["risk"]
+        assert page.locator(".rs-current").get_attribute("data-cell") == str(cell)
     finally:
         page.close()

@@ -18,7 +18,7 @@ from .coefficient_set import CoefficientSet
 from .data import BinaryClassificationDataset
 from .defaults import DEFAULT_LCPA_SETTINGS, INTERCEPT_NAME, OUTCOME_NAME
 from .report import ModelReport
-from .report.model_report import COMPONENTS
+from .report.model_report import COMPONENTS, HIGH_RISK_THRESHOLD, LOW_RISK_THRESHOLD
 from .utils import print_model
 
 
@@ -222,8 +222,8 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         return self
 
     def report(self, X_test=None, y_test=None, model_type=None, *, data=None, cv_models=None,
-               components=COMPONENTS, samples=None, low_risk_threshold=0.01,
-               high_risk_threshold=0.99):
+               components=COMPONENTS, samples=None, low_risk_threshold=LOW_RISK_THRESHOLD,
+               high_risk_threshold=HIGH_RISK_THRESHOLD):
         """HTML report of the fitted model: the model, a summary table, ROC and calibration.
 
         Parameters
@@ -242,12 +242,11 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
             Fitted per-fold models for the CV sample, scoring the test rows of ``fit_cv``. None
             uses ``cv_results_["estimator"]`` after ``fit_cv``.
         components : sequence of {"model", "summary", "roc", "calibration"}, optional
-            The cards on the page, in this order; a component left out is not shown.
+            The cards on the page, in order. See ``ModelReport``.
         samples : sequence of {"training", "cv", "validation", "test"}, optional
-            The samples shown, in this order. None shows every available sample.
+            The samples shown, in order. See ``ModelReport``.
         low_risk_threshold, high_risk_threshold : float, optional
-            Risks below the first (above the second) collapse into one cell of the score-to-risk
-            strip and one calibration point.
+            Where the risks collapse at each end. See ``ModelReport``.
 
         Returns
         -------
