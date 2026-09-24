@@ -47,7 +47,7 @@ keeps them from drifting). The browser test is opt-in (`pytest -m browser`): one
 report (each model type, plus `wide_strip` -- a long strip whose collapsed tails are its widest
 cells) is built and saved once, then opened in headless Chromium at 1280 px and 375 px, requiring
 no console or page errors, 2 rendered Plotly charts, one model row per item, a score-to-risk
-strip that fits the card at that width, and a Model card whose readout and outlined strip cell
+strip that fits the card at that width on one row (wide_strip at 375 px still wraps), and a Model card whose readout and outlined strip cell
 follow a checked item and a value typed into a non-binary item; screenshots and the HTML go to a tmp_path or --report-dir=DIR
 (write it with "=": with a space, pytest reads an existing DIR as a test path and misses the
 config).
@@ -91,8 +91,9 @@ BREASTCANCER_FILE = Path(__file__).parents[1] / "data" / "breastcancer_data.csv"
 COMPONENTS = ['class="rs-model-table"', 'class="rs-summary-table"', 'data-figure="roc"',
               'data-figure="calibration"']
 # How far the score-to-risk strip runs past its own box, past the card holding it, and past the
-# viewport, in px. All three are 0 at every width: the strip wraps to the width it is given, so it
-# neither scrolls sideways nor pushes the page wider than the window.
+# viewport, in px, and how many rows it takes. The three overflows are 0 at every width: the strip
+# neither scrolls sideways nor pushes the page wider than the window. It is one row wherever that
+# fits; wide_strip at 375 px cannot fit on one legible row and still wraps.
 STRIP_FIT = """() => {
   const strip = document.querySelector(".rs-score-grid");
   const card = strip.closest(".rs-card");
@@ -101,8 +102,10 @@ STRIP_FIT = """() => {
     strip: past(strip.scrollWidth, strip.clientWidth),
     card: past(strip.getBoundingClientRect().right, card.getBoundingClientRect().right),
     page: past(document.documentElement.scrollWidth, document.documentElement.clientWidth),
+    rows: new Set([...strip.children].map((cell) => cell.getBoundingClientRect().top)).size,
   };
 }"""
+STRIP_WRAPS = {("wide_strip_report", 375)}  # (page, width) too narrow for one row
 
 
 def fit_classifier(X=X_TRAIN, y=Y_TRAIN):
@@ -530,8 +533,10 @@ def test_report_renders_in_browser_without_errors(chromium, saved_report, width)
         assert errors == []
         assert page.locator(".rs-model-table .rs-item-row").count() == len(items)
         assert page.locator(".js-plotly-plot").count() == 2
-        # the strip wraps to fit the card at this width instead of running off the side of it
-        assert page.evaluate(STRIP_FIT) == {"strip": 0, "card": 0, "page": 0}
+        # the strip fits the card at this width instead of running off the side of it, on one row
+        fit = page.evaluate(STRIP_FIT)
+        assert (fit["strip"], fit["card"], fit["page"]) == (0, 0, 0)
+        assert (fit["rows"] == 1) != ((saved_report.stem, width) in STRIP_WRAPS)
 
         # checking an item adds its points to the total; the readout and the outlined strip cell
         # follow the total

@@ -79,28 +79,41 @@
 .rs-readout output { font-weight: 600; }
 .rs-rule { font-weight: 600; margin-bottom: 0.75rem; }
 
-/* score-to-risk strip: one grid that wraps, so it fits the card at any width with no sideways
-   scroll. auto-fill decides how many cells a row holds from the card's real width, and the
-   track floor is set by the widest cell the strip can hold -- a collapsed tail ("10 to 13",
-   "> 99.0%"), which is about three times a bare score. */
+/* score-to-risk strip: one row, as in the R -- a header column (SCORE over RISK), then one column
+   per cell, each as wide as its text and all stretched to fill the card. The strip is two grid rows
+   that every cell shares (subgrid), so the scores line up across and so do the risks. */
 .rs-score-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 5em), 1fr));
+  grid-auto-flow: column;
+  grid-template-rows: auto auto;
+  grid-template-columns: max-content;  /* the header; the cells take the auto columns */
   border-top: 1px solid var(--rs-grid); border-left: 1px solid var(--rs-grid);
 }
-/* each cell draws its own right and bottom rule, so the last row simply ends after its last
-   cell instead of ruling off the empty tracks beside it */
+/* each cell draws its own right and bottom rule */
 .rs-score-cell {
-  display: grid; padding: 0.3rem 0.2rem; text-align: center;
+  display: grid; grid-row: span 2; grid-template-rows: subgrid;
+  padding: 0.2rem 0.25rem; text-align: center; white-space: nowrap;
   background: var(--rs-bg); font-variant-numeric: tabular-nums;
   border-right: 1px solid var(--rs-grid); border-bottom: 1px solid var(--rs-grid);
-  overflow-wrap: anywhere;
 }
 .rs-score-label { font-size: 0.75rem; color: var(--rs-muted); }
-.rs-score-value { font-size: 0.9rem; }
+.rs-score-value { font-size: 0.8rem; }
 .rs-score-head { text-align: left; }
 .rs-score-head .rs-score-value { font-size: 0.75rem; color: var(--rs-muted); }
 .rs-score-cell.rs-positive { background: var(--rs-highlight); }
+/* on a phone, tighter type and padding keep more strips on one row */
+@media (max-width: 480px) {
+  .rs-score-cell { padding: 0.15rem 0.1rem; }
+  .rs-score-label, .rs-score-head .rs-score-value { font-size: 0.7rem; }
+  .rs-score-value { font-size: 0.75rem; }
+}
+/* a strip too long for one row at this width (report.js sets rs-wrapped): it wraps, as many cells
+   to a row as fit, until the page settles how a long strip reads on a phone */
+.rs-score-grid.rs-wrapped {
+  grid-auto-flow: row; grid-template-rows: none;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 5em), 1fr));
+}
+.rs-wrapped .rs-score-cell { grid-row: auto; grid-template-rows: auto auto; white-space: normal; }
 /* the cell holding the Model card's current total; an outline, so it leaves the background's
    meaning (predicted positive) alone and does not change the cell's size */
 .rs-score-cell.rs-current { outline: 2px solid var(--rs-ink); outline-offset: -2px; }
