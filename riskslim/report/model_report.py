@@ -25,7 +25,7 @@ Conventions
   k with ``k + intercept > 0``, i.e. ``floor(-intercept) + 1``.
 - **Score range:** ``sum(points * [min, max])`` of each item over the training data (a binary
   item contributes ``points * [0, 1]``). The score-to-risk row lists every achievable total when
-  all item values are integers, and otherwise the totals observed in the samples.
+  all item values are integers, and otherwise the totals observed in the training rows.
 - **Collapsed endpoints:** ``logit(k) ≈ logit(k + 1)`` once the risk is near 0 or 1, so the
   scores whose risk falls outside ``low_risk_threshold``..``high_risk_threshold`` (1%..99% by
   default) collapse into one cell of the score-to-risk strip and
@@ -161,8 +161,9 @@ class ModelReport:
         scores its own test rows, ``classifier.cv_results_["indices"]["test"]``. None uses
         ``cv_results_["estimator"]``; without ``fit_cv`` there is no CV sample.
     model_type : {"risk_score", "checklist"}, optional
-        Inferred from the coefficients when None: a checklist when every nonzero coefficient is
-        +1 or -1.
+        Inferred when None: a checklist when every nonzero coefficient is +1 or -1 and its item
+        is binary on the training data. A checklist needs binary items: an explicit
+        ``"checklist"`` with a non-binary item raises ValueError.
     X_test, y_test : array-like, optional
         A held-out sample, shown as ``Test``. Ignored, with a warning, when ``data`` already has
         a test split.
@@ -187,19 +188,22 @@ class ModelReport:
         self.outcome_name = str(dataset.names.y)
         self.training = classifier.solution_info_
         self.constraints = fitted_constraints(classifier)
-        self.model_type = checked_model_type(model_type, self.weights[1:])
 
         # the splits stay local: the page needs only what they produce, and holding them would pin
         # a float64 copy of every X for the report's lifetime
         splits = split_samples(classifier, data, X_test, y_test)
         intercept, points = float(self.weights[0]), self.weights[1:]
+        self.model_type = checked_model_type(model_type, points, splits[TRAINING][0],
+                                             self.variable_names[1:])
 
         # {name: (y, score, intercept)}: the model scores each split; a CV row is scored by its
         # own fold model, so the CV sample carries one intercept per row
         scored = {name: (y, X @ points, intercept) for name, (X, y) in splits.items()}
+        # the Model card reads the training rows only: a sample left off the page must not
+        # change it
         model = model_section(points, intercept, self.variable_names[1:], self.outcome_name,
-                              self.model_type, splits[TRAINING][0],
-                              {name: score for name, (_, score, _) in scored.items()}, thresholds)
+                              self.model_type, splits[TRAINING][0], scored[TRAINING][1],
+                              thresholds)
         # {key: sample name} of every available sample, in page order: Training, the CV sample,
         # then the other splits
         available = {key: name for key, name in SPLIT_SAMPLES.items() if name in scored}
@@ -242,7 +246,8 @@ class ModelReport:
                 sample_keys, roc, sample_labels(summary, sample_keys, "auc"))
         if "calibration" in components:
             self.data["figures"]["calibration"] = calibration_figure(
-                sample_keys, {name: calibration_points(calibration[name], thresholds)
+                sample_keys, {name: calibration_points(calibration[name], thresholds,
+                                                       model["score_digits"])
                               for name in sample_keys},
                 sample_labels(summary, sample_keys, "ece"))
 
@@ -271,10 +276,17 @@ class ModelReport:
 # Report data: everything the page shows, computed once in Python.
 # ---------------------------------------------------------------------------
 
-def infer_model_type(points):
-    """``checklist`` when every nonzero coefficient (intercept excluded) is +1 or -1."""
-    nonzero = points[points != 0]
-    if nonzero.size > 0 and np.all(np.abs(nonzero) == 1):
+def is_binary(values):
+    """True when every value is 0 or 1."""
+    return bool(set(np.unique(values).tolist()) <= {0.0, 1.0})
+
+
+def infer_model_type(points, X_train):
+    """``checklist`` when every nonzero coefficient (intercept excluded) is +1 or -1 and its item
+    is binary on the training rows; else ``risk_score``."""
+    nonzero = np.flatnonzero(points)
+    if (nonzero.size > 0 and np.all(np.abs(points[nonzero]) == 1)
+            and all(is_binary(X_train[:, j]) for j in nonzero)):
         return "checklist"
     return "risk_score"
 
@@ -300,20 +312,33 @@ def checked_coefficients(classifier, dataset):
 
 
 def fitted_constraints(classifier):
-    """The model size limit and the point range over the non-intercept coefficients."""
+    """The model size limit and the point range over the non-intercept coefficients.
+
+    Model size counts features, never the intercept. The limit is the one the optimizer
+    enforced: ``max_size_`` (``d + 1`` by default) capped at the number of penalized
+    coefficients (``RiskSLIMOptimizer``), read from ``coef_set_`` because ``optimizer_`` does not
+    survive pickling.
+    """
     coef_set = classifier.coef_set_
     features = [j for j, name in enumerate(coef_set.variable_names) if name != INTERCEPT_NAME]
-    return {"max_size": classifier.max_size_,
+    penalized = int(np.count_nonzero(coef_set.penalized_indices()[features]))
+    return {"max_size": min(int(classifier.max_size_), penalized),
             "point_range": (float(np.min(coef_set.lb[features])),
                             float(np.max(coef_set.ub[features])))}
 
 
-def checked_model_type(model_type, points):
+def checked_model_type(model_type, points, X_train, names):
     """Validate the model type, or infer it from the coefficients when None."""
     if model_type is None:
-        return infer_model_type(points)
+        return infer_model_type(points, X_train)
     if model_type not in MODEL_TYPES:
         raise ValueError(f"model_type must be one of {tuple(MODEL_TYPES)}; got {model_type!r}")
+    if model_type == "checklist":
+        # a checklist counts checked boxes: an item with other values breaks M and the rule
+        non_binary = [str(names[j]) for j in np.flatnonzero(points) if not is_binary(X_train[:, j])]
+        if non_binary:
+            raise ValueError(f"model_type='checklist' needs binary items (0 or 1 on the training "
+                             f"data); {non_binary} take other values")
     return model_type
 
 
@@ -433,24 +458,26 @@ def point_label(points, binary, model_type):
     return str(points) if binary else f"{points} × value"
 
 
-def model_section(points, intercept, names, outcome_name, model_type, X_train, scores,
+def model_section(points, intercept, names, outcome_name, model_type, X_train, train_scores,
                   thresholds):
     """Items, score range, score-to-risk strip and (for checklists) M and the rule.
 
     ``points_header`` is the item table's points column, and None when there is no such column
     (a checklist whose items are all ``+1``: every box counts the same, so a column of ``+`` says
     nothing). ``score_header`` and ``risk_header`` label the score-to-risk strip.
-    ``cell_by_total`` maps each total in the strip (as a string, a JSON key) to the index of the
+    ``cell_by_total`` maps each total in the strip, keyed by ``total_key``, to the index of the
     strip cell holding it: the Model card sums the points of its checked items, looks the total
-    up here and reads the risk that cell shows. ``thresholds`` is ``(low, high)``, where the
-    strip collapses its tails.
+    up here and reads the risk that cell shows; ``total_labels`` is how its readout prints that
+    total. ``score_digits`` is the decimals every score label on the page prints.
+    ``thresholds`` is ``(low, high)``, where the strip collapses its tails. When the totals
+    cannot be enumerated, the strip lists the training rows' scores (``train_scores``).
     """
     items = []
     value_sets = []
     for j in np.flatnonzero(points):
         values = np.unique(X_train[:, j])
         vmin, vmax = float(values.min()), float(values.max())
-        binary = bool(set(values.tolist()) <= {0.0, 1.0})
+        binary = is_binary(values)
         if binary:
             vmin, vmax, values = 0.0, 1.0, np.array([0.0, 1.0])
         p = float(points[j])
@@ -467,12 +494,14 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, s
     hi = sum(float(v.max()) for v in value_sets)
     totals = achievable_totals(value_sets)
     if totals is None:
-        totals = np.unique(np.concatenate(list(scores.values())))
+        # one total per key: summing in another order moves a score in its last bits
+        totals = sorted({total_key(s): s for s in np.unique(train_scores)}.values())
     totals = [number(s) for s in totals]
+    digits = score_digits(totals)
     m = math.floor(-intercept) + 1 if model_type == "checklist" else None
     checklist = model_type == "checklist"
     shows_points = not checklist or any(item["points"] < 0 for item in items)
-    cells, cell_by_total = score_to_risk_cells(totals, intercept, m, thresholds)
+    cells, cell_by_total = score_to_risk_cells(totals, intercept, m, thresholds, digits)
     model = {
         "type": model_type,
         "intercept": number(intercept),
@@ -483,6 +512,8 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, s
         "score_range": [number(lo), number(hi)],
         "score_to_risk": cells,
         "cell_by_total": cell_by_total,
+        "total_labels": {total_key(s): score_label(s, s, digits) for s in totals},
+        "score_digits": digits,
         "checklist_m": None,
         "rule": None,
     }
@@ -540,9 +571,9 @@ def tail_groups(risks, thresholds):
     return groups
 
 
-def score_to_risk_cells(scores, intercept, checklist_m, thresholds):
+def score_to_risk_cells(scores, intercept, checklist_m, thresholds, digits):
     """The score-to-risk strip: ``{"score", "risk", "positive"}`` per cell, tails collapsed; and
-    ``{str(score): cell index}``, the cell each score falls in.
+    ``{total_key(score): cell index}``, the cell each score falls in.
 
     ``scores`` is ascending, so risk is too. A collapsed cell is labelled with the score range it
     covers (``"0 to 1"``) and with the threshold it stays under (``"< 1.0%"``), as in the R's
@@ -555,15 +586,37 @@ def score_to_risk_cells(scores, intercept, checklist_m, thresholds):
         risk = (percent(risks[first]) if side is None
                 else f"< {percent(low_risk)}" if side == "low"
                 else f"> {percent(high_risk)}")
-        cell_by_score.update({str(score): len(cells) for score in scores[first:last + 1]})
-        cells.append({"score": score_label(scores[first], scores[last]), "risk": risk,
+        cell_by_score.update({total_key(score): len(cells) for score in scores[first:last + 1]})
+        cells.append({"score": score_label(scores[first], scores[last], digits), "risk": risk,
                       "positive": checklist_m is not None and scores[first] >= checklist_m})
     return cells, cell_by_score
 
 
-def score_label(low, high):
-    """``"3"`` for one score, ``"0 to 1"`` for a range; one decimal unless both are integral."""
-    digits = 0 if float(low).is_integer() and float(high).is_integer() else 1
+def total_key(total):
+    """The canonical string of a score total, the key of ``cell_by_total``: the total rounded to
+    9 decimals, trailing zeros dropped (``"0.6"``, ``"-2"``, ``"0.00005"``).
+
+    report.js's ``totalKey`` computes the same string with the same float operations (a multiply,
+    an add and a floor are exact IEEE steps in both languages), so a total the page sums in
+    another order, off in its last bits, finds its cell; the rest is integer arithmetic.
+    """
+    nano = math.floor(float(total) * 1e9 + 0.5)
+    whole, fraction = divmod(abs(nano), 10**9)
+    sign = "-" if nano < 0 else ""
+    return f"{sign}{whole}" + (f".{fraction:09d}".rstrip("0") if fraction else "")
+
+
+def score_digits(totals):
+    """The fewest decimals that print every total apart: 0 when every total is integral, else
+    at least 1, and at most 6."""
+    digits = 0 if all(float(t).is_integer() for t in totals) else 1
+    while digits < 6 and len({f"{t:.{digits}f}" for t in totals}) < len(totals):
+        digits += 1
+    return digits
+
+
+def score_label(low, high, digits):
+    """``"3"`` for one score, ``"0 to 1"`` for a range, printed with ``digits`` decimals."""
     if low == high:
         return f"{low:.{digits}f}"
     return f"{low:.{digits}f} to {high:.{digits}f}"
@@ -734,7 +787,7 @@ def roc_figure(sample_keys, sections, labels):
                                            "True Positive Rate")).to_plotly_json()
 
 
-def calibration_points(section, thresholds):
+def calibration_points(section, thresholds, digits):
     """The points of one sample, in risk order, in the shape of the section they come from.
 
     One point per score bin, except that the bins of a collapsed tail become a single point:
@@ -743,7 +796,7 @@ def calibration_points(section, thresholds):
     predicted and observed risk are the n-weighted means, so the point sits where its rows are.
     ``scores`` is the strip's label for the group (``"10 to 13"``), and ``labels`` the short one
     printed inside the circle: ``"10+"`` for the high tail (its lowest score), ``"≤1"`` for the
-    low tail (its highest score).
+    low tail (its highest score). Scores print with ``digits`` decimals, as in the strip.
 
     Display only: ``ece`` and the per-bin ``local_error`` in the data block are computed before
     any of this, so a collapsed tail does not move a reported number.
@@ -759,10 +812,10 @@ def calibration_points(section, thresholds):
         observed = sum(section["observed"][i] * section["n"][i] for i in rows) / n
         scores = [section["scores"][i] for i in rows]
         low, high = min(scores), max(scores)
-        scores_label = score_label(low, high)
+        scores_label = score_label(low, high, digits)
         label = (scores_label if side is None
-                 else f"≤{score_label(high, high)}" if side == "low"
-                 else f"{score_label(low, low)}+")
+                 else f"≤{score_label(high, high, digits)}" if side == "low"
+                 else f"{score_label(low, low, digits)}+")
         points.append((label, scores_label, predicted, observed, n, abs(predicted - observed)))
     keys = ("labels", "scores", "predicted", "observed", "n", "local_error")
     return dict(zip(keys, (list(values) for values in zip(*points))))
@@ -830,6 +883,9 @@ def load_assets():
 
 
 def json_for_script(data):
-    """JSON safe inside ``<script type="application/json">``: ``</`` becomes ``<\\/``."""
-    text = json.dumps(data, allow_nan=False, ensure_ascii=False)
-    return text.replace("</", "<\\/").replace("<!--", "<\\u0021--")
+    """JSON safe inside ``<script type="application/json">``: every ``<`` becomes ``\\u003c``.
+
+    With no ``<`` left, no end tag (in any case) and no ``<!--`` can end or re-mode the block;
+    ``<`` only ever appears in JSON inside a string, where the escape is valid JSON.
+    """
+    return json.dumps(data, allow_nan=False, ensure_ascii=False).replace("<", "\\u003c")

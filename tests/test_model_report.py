@@ -15,7 +15,8 @@ summary table, ROC, calibration) and both samples (Training, 5-CV). It asserts p
 
 Dimensions:
   model type:   risk_score (points 2, 1, -1), checklist (+1 items only), checklist (with a -1 item)
-                -- inferred from the coefficients; model_type="risk_score" overrides a checklist
+                -- inferred from the coefficients; model_type="risk_score" overrides a checklist,
+                and unit coefficients on a non-binary item infer a risk score
   label coding: {0, 1}, {-1, 1}    -- both must map to the same positive class (one fit each)
   samples:      Training only, Training + Test (the test sample has no row with score 1)
   tails:        no score outside 1%..99% (one cell and one point per score), a high tail of
@@ -28,16 +29,16 @@ Dimensions:
                                       (sample, n and outcome rate, AUC / ECE)
   settings:     the defaults (every other test), and one report that reorders and drops cards,
                 reorders the samples (each keeps its colour) and lowers high_risk_threshold
-  label text:   contains "</script>" and "<!--"  -- must not end the JSON data block early (a
-                                      plain label is the same path with nothing to escape, so it
-                                      is not a separate case)
+  label text:   contains "</script>" (also in mixed case) and "<!--"  -- must not end the JSON
+                                      data block early, nor appear unescaped anywhere on the page
+                                      (a plain label is the same path with nothing to escape, so
+                                      it is not a separate case)
 
 Rejection paths owned here (one invalid mutation of a valid call each): non-finite weights, unknown
-model_type, X_test column count != the fitted feature count, y_test row count != X_test row
-count, y_test labels outside the classes seen in fit, a sample with a single class, and
-components / samples that are empty, repeat an entry or name an unknown one, and risk thresholds
-out of order or outside 0..1.
-n/a: non-binary features for the checklist -- the score range rule is shared with the risk score.
+model_type, model_type="checklist" with a non-binary item, X_test column count != the fitted
+feature count, y_test row count != X_test row count, y_test labels outside the classes seen in
+fit, a sample with a single class, and components / samples that are empty, repeat an entry or
+name an unknown one, and risk thresholds out of order or outside 0..1.
 
 Checks that need no browser: `plotly.graph_objects.Figure(fig)` rejects misspelled or invalid
 properties, and one test asserts the Plotly template's and the sample colours are the ones
@@ -47,7 +48,7 @@ report (each model type, plus `wide_strip` -- a long strip whose collapsed tails
 cells) is built and saved once, then opened in headless Chromium at 1280 px and 375 px, requiring
 no console or page errors, 2 rendered Plotly charts, one model row per item, a score-to-risk
 strip that fits the card at that width, and a Model card whose readout and outlined strip cell
-follow a checked item; screenshots and the HTML go to a tmp_path or --report-dir=DIR
+follow a checked item and a value typed into a non-binary item; screenshots and the HTML go to a tmp_path or --report-dir=DIR
 (write it with "=": with a space, pytest reads an existing DIR as a test path and misses the
 config).
 """
@@ -85,7 +86,7 @@ CDN_URLS = [
     "https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.min.css",
 ]
 DATA_BLOCK = re.compile(r'<script type="application/json" id="report-data">(.*?)</script>', re.S)
-HOSTILE_NAMES = ["a</script><script>alert(1)</script>", "b<!-- c", "c"]
+HOSTILE_NAMES = ["a</script><script>alert(1)</script>", "b<!-- c", "c</ScRiPt><script>alert(2)</script>"]
 BREASTCANCER_FILE = Path(__file__).parents[1] / "data" / "breastcancer_data.csv"
 COMPONENTS = ['class="rs-model-table"', 'class="rs-summary-table"', 'data-figure="roc"',
               'data-figure="calibration"']
@@ -203,8 +204,11 @@ def test_checklist_m_is_smallest_net_count_with_positive_prediction(fitted, weig
     assert model["rule"] == expected_rule
 
 
-def test_risk_score_type_can_be_forced_for_unit_coefficients(fitted):
-    report = make_report(fitted, CHECKLIST_WEIGHTS, model_type="risk_score")
+@pytest.mark.parametrize("wide, model_type", [(False, "risk_score"), (True, None)],
+                         ids=["forced", "inferred-for-a-non-binary-item"])
+def test_unit_coefficients_make_a_risk_score_when_forced_or_an_item_is_not_binary(
+        fitted, fitted_wide, wide, model_type):
+    report = make_report(fitted_wide if wide else fitted, CHECKLIST_WEIGHTS, model_type=model_type)
 
     assert report.data["model"]["type"] == "risk_score"
 
@@ -271,6 +275,8 @@ def test_data_is_strict_json(fitted, weights):
     pytest.param({"weights": [float("nan"), 2, 1, -1]}, "weights must be finite", id="non-finite-weights"),
     pytest.param({"model_type": "decision_tree"}, "model_type must be one of",
                  id="unknown-model-type"),
+    pytest.param({"fixture": "fitted_wide", "weights": CHECKLIST_WEIGHTS, "model_type": "checklist"},
+                 r"model_type='checklist' needs binary items .*\['a'\]", id="non-binary-checklist-item"),
     pytest.param({"test": (X_TEST[:, :2], Y_TEST)}, "expecting 3 features", id="column-count"),
     pytest.param({"test": (X_TEST, Y_TEST[:-1])}, "inconsistent numbers of samples",
                  id="row-count"),
@@ -289,10 +295,11 @@ def test_data_is_strict_json(fitted, weights):
                  id="thresholds-out-of-order"),
     pytest.param({"high_risk_threshold": 1.5}, "risk thresholds must", id="threshold-above-one"),
 ])
-def test_invalid_inputs_are_rejected(fitted, invalid, match):
-    call = {"weights": RISK_SCORE_WEIGHTS, **invalid}
+def test_invalid_inputs_are_rejected(request, invalid, match):
+    call = {"fixture": "fitted", "weights": RISK_SCORE_WEIGHTS, **invalid}
+    classifier = request.getfixturevalue(call.pop("fixture"))
     with pytest.raises(ValueError, match=match):
-        make_report(fitted, **call)
+        make_report(classifier, **call)
 
 
 def test_html_holds_one_data_block_that_round_trips(fitted):
@@ -300,9 +307,12 @@ def test_html_holds_one_data_block_that_round_trips(fitted):
                                                y_name="y", n_folds=())
     hostile_report = make_report(fitted, RISK_SCORE_WEIGHTS, data=hostile_data)
 
-    blocks = DATA_BLOCK.findall(hostile_report.html)
+    page = hostile_report.html
+    blocks = DATA_BLOCK.findall(page)
 
     assert len(blocks) == 1
+    # escaped everywhere: in the data block and in the markup Jinja writes
+    assert not [name for name in HOSTILE_NAMES if name in page]
     assert json.loads(blocks[0]) == hostile_report.data
     assert set(hostile_report.data) == DATA_KEYS
     assert set(hostile_report.data["figures"]) == {"roc", "calibration"}
@@ -531,5 +541,16 @@ def test_report_renders_in_browser_without_errors(chromium, saved_report, width)
         cell = model["cell_by_total"][total]
         assert page.locator("#rs-risk").text_content() == model["score_to_risk"][cell]["risk"]
         assert page.locator(".rs-current").get_attribute("data-cell") == str(cell)
+
+        # typing a non-binary item's largest value adds points x (largest - smallest)
+        for box in page.locator(".rs-model-table input[type=number]").all():
+            before = float(total)
+            box.fill(box.get_attribute("max"))
+            total = page.locator("#rs-total").text_content()
+            assert float(total) == before + float(box.get_attribute("data-points")) * (
+                float(box.get_attribute("max")) - float(box.get_attribute("min")))
+            cell = model["cell_by_total"][total]
+            assert page.locator("#rs-risk").text_content() == model["score_to_risk"][cell]["risk"]
+            assert page.locator(".rs-current").get_attribute("data-cell") == str(cell)
     finally:
         page.close()
