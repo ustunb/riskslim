@@ -91,8 +91,17 @@ INK = "#1F2933"
 AXIS_TEXT = "#4D4D4D"
 GRID = "#DFE4E9"
 BACKGROUND = "#FFFFFF"
-SAMPLE_COLORS = ["#000000", "#D2B48C", "#BEBEBE"]  # one per sample, in page order
-BUBBLE_PX = (8, 20)  # calibration bubble diameter for the smallest and largest n
+MUTED = "#98A2AD"
+# each sample's colour, keyed as the samples argument names them, so a sample keeps its colour
+# whichever samples are shown and in whatever order. Validation has no house colour: it borrows
+# the palette's muted grey as a placeholder.
+SAMPLE_COLORS = {"training": "#000000", "test": "#D2B48C", "cv": "#BEBEBE", "validation": MUTED}
+# the score printed inside each calibration circle: white on the black training circles, black on
+# the lighter ones
+LABEL_COLORS = {"training": BACKGROUND, "test": "#000000", "cv": "#000000",
+                "validation": "#000000"}
+CIRCLE_PX = 24  # calibration circle diameter: room for the widest label ("10+", "≤-3") at LABEL_PX
+LABEL_PX = 10
 AXIS_RANGE = [-0.02, 1.02]  # both axes of both figures: 0 to 1, with room for a marker on the edge
 
 # Both axes of both figures: a light four-sided frame (no dark axis L), percent ticks every 20%.
@@ -101,6 +110,8 @@ AXIS = {
     "showline": True, "linecolor": GRID, "linewidth": 2, "mirror": True,
     "ticks": "outside", "ticklen": 3, "tickcolor": GRID,
     "fixedrange": True, "range": AXIS_RANGE, "dtick": 0.2, "tickformat": ".0%",
+    # under the data: a circle on the edge overhangs the frame instead of being cut by it
+    "layer": "below traces",
     "tickfont": {"size": 14, "color": AXIS_TEXT},
     "title": {"font": {"size": 15, "color": INK}},
 }
@@ -111,14 +122,15 @@ pio.templates[TEMPLATE_NAME] = go.layout.Template(layout=go.Layout(
     font={"family": FONT_FAMILY, "size": 12, "color": INK},
     paper_bgcolor=BACKGROUND,
     plot_bgcolor=BACKGROUND,
-    colorway=SAMPLE_COLORS,
-    # r and t leave room for the last tick label and for a bubble label overhanging the frame
+    # r and t leave room for the last tick label and for a circle overhanging the frame
     margin={"t": 24, "r": 24, "b": 64, "l": 72},
     hovermode="closest",
     dragmode=False,
     # inside the panel, bottom right: the ROC curve owns the top left and the calibration points
     # follow the diagonal, so that corner is empty in both figures
-    legend={"orientation": "v", "x": 0.98, "xanchor": "right", "y": 0.02, "yanchor": "bottom",
+    # traces run last sample first, so the first (Training) is drawn on top, as in the R; the
+    # legend reverses them back into page order
+    legend={"orientation": "v", "traceorder": "reversed", "x": 0.98, "xanchor": "right", "y": 0.02, "yanchor": "bottom",
             "bgcolor": "rgba(255,255,255,0)", "borderwidth": 0, "tracegroupgap": 8,
             "font": {"size": 12, "color": INK}},
     xaxis=AXIS,
@@ -199,6 +211,7 @@ class ModelReport:
         shown = (list(available) if samples is None
                  else checked_selection("samples", samples, tuple(available)))
         scored = {available[key]: scored[available[key]] for key in shown}
+        sample_keys = {available[key]: key for key in shown}
         checked_classes(scored)
 
         roc = {name: roc_section(y, score, b) for name, (y, score, b) in scored.items()}
@@ -226,10 +239,11 @@ class ModelReport:
         self.data["figures"] = {}
         if "roc" in components:
             self.data["figures"]["roc"] = roc_figure(names, roc,
-                                                     sample_labels(summary, names, "auc"))
+                                                     sample_labels(summary, names, "auc"),
+                                                     sample_keys)
         if "calibration" in components:
             self.data["figures"]["calibration"] = calibration_figure(
-                names, calibration, sample_labels(summary, names, "ece"), thresholds)
+                names, calibration, sample_labels(summary, names, "ece"), sample_keys, thresholds)
 
     @property
     def html(self):
@@ -637,32 +651,32 @@ def summary_section(labels, model, roc, calibration, log_loss, training, constra
     """
     names = list(labels)
     rows = [summary_row("n", "N", [f"{len(labels[s]):,}" for s in names]),
-            summary_row("outcome_rate", "Outcome rate",
+            summary_row("outcome_rate", "Outcome Rate",
                         [percent(labels[s].mean()) for s in names])]
 
     size = str(len(model["items"]))
     if constraints.get("max_size") is not None:
         size += f" (max {int(constraints['max_size'])})"
-    rows.append(summary_row("model_size", "Model size", [size], span=len(names)))
+    rows.append(summary_row("model_size", "Model Size", [size], span=len(names)))
     if constraints.get("point_range") is not None:
         lb, ub = constraints["point_range"]
-        rows.append(summary_row("point_range", "Point range", [f"{number(lb)} to {number(ub)}"],
+        rows.append(summary_row("point_range", "Point Range", [f"{number(lb)} to {number(ub)}"],
                                 span=len(names)))
 
     if training is not None:
         run_time = "{:.2f} s" if (training.get("run_time") or 0) < 1 else "{:.1f} s"
         rows += [
-            summary_row("objective_value", "Objective value",
+            summary_row("objective_value", "Objective Value",
                         [fmt(training.get("objective_value"), "{:.4f}")], span=len(names)),
-            summary_row("optimality_gap", "Optimality gap",
+            summary_row("optimality_gap", "Optimality Gap",
                         [fmt(training.get("optimality_gap"), "{:.1%}")], span=len(names)),
-            summary_row("run_time", "Run time", [fmt(training.get("run_time"), run_time)],
+            summary_row("run_time", "Run Time", [fmt(training.get("run_time"), run_time)],
                         span=len(names)),
         ]
 
     rows += [summary_row("auc", "AUC", [f"{roc[s]['auc']:.3f}" for s in names]),
              summary_row("ece", "ECE", [percent(calibration[s]["ece"]) for s in names]),
-             summary_row("log_loss", "Log loss", [f"{log_loss[s]:.3f}" for s in names])]
+             summary_row("log_loss", "Log Loss", [f"{log_loss[s]:.3f}" for s in names])]
     return {"columns": ["", *names], "rows": rows}
 
 
@@ -698,32 +712,38 @@ def sample_labels(summary, names, metric):
                                          values[metric])}
 
 
-def roc_figure(names, sections, labels):
-    """One ROC curve per sample with a point at each score threshold; AUC in the legend."""
+def roc_figure(names, sections, labels, keys):
+    """One ROC curve per sample with a point at each score threshold; AUC in the legend.
+
+    ``keys`` maps each sample name to its key, which picks its colour. The traces run in reverse
+    page order, so the first sample is drawn on top."""
     traces = []
-    for name in names:
+    for name in reversed(names):
         roc = sections[name]
+        color = SAMPLE_COLORS[keys[name]]
         thresholds = ["none" if i == 0 else "scores differ by fold" if t is None else f"score ≥ {t}"
                       for i, t in enumerate(roc["thresholds"])]
         traces.append(go.Scatter(
             mode="lines+markers", name=labels[name],
             x=roc["fpr"], y=roc["tpr"], customdata=thresholds,
-            line={"width": 2}, marker={"size": 12},
+            line={"width": 2, "color": color}, marker={"size": 12, "color": color},
             hovertemplate="%{customdata}<br>FPR %{x:.1%} · TPR %{y:.1%}"
                           f"<extra>{name}</extra>",
         ))
-    return go.Figure(traces, figure_layout("False positive rate",
-                                           "True positive rate")).to_plotly_json()
+    return go.Figure(traces, figure_layout("False Positive Rate",
+                                           "True Positive Rate")).to_plotly_json()
 
 
 def calibration_points(section, thresholds):
-    """The bubbles of one sample, in the shape of the section they come from.
+    """The points of one sample, in risk order, in the shape of the section they come from.
 
-    One bubble per score bin, except that the bins of a collapsed tail become a single bubble:
+    One point per score bin, except that the bins of a collapsed tail become a single point:
     the same grouping as the strip (``tail_groups``, over the bins in risk order), with the
     group's rows pooled as the R pools them in ``collapse.calibration.df`` -- n adds up, and the
-    predicted and observed risk are the n-weighted means, so the bubble sits where its rows are.
-    The bubble carries the strip's label for the group (``"7 to 12"``).
+    predicted and observed risk are the n-weighted means, so the point sits where its rows are.
+    ``scores`` is the strip's label for the group (``"10 to 13"``), and ``labels`` the short one
+    printed inside the circle: ``"10+"`` for the high tail (its lowest score), ``"≤1"`` for the
+    low tail (its highest score).
 
     Display only: ``ece`` and the per-bin ``local_error`` in the data block are computed before
     any of this, so a collapsed tail does not move a reported number.
@@ -737,38 +757,43 @@ def calibration_points(section, thresholds):
         n = sum(section["n"][i] for i in rows)
         predicted = sum(section["predicted"][i] * section["n"][i] for i in rows) / n
         observed = sum(section["observed"][i] * section["n"][i] for i in rows) / n
-        scores = [section["scores"][i] for i in rows]
-        points.append((score_label(min(scores), max(scores)), predicted, observed, n,
+        low, high = (f(section["scores"][i] for i in rows) for f in (min, max))
+        label = (score_label(low, high) if first == last
+                 else f"≤{score_label(high, high)}" if risks[last] < thresholds[0]
+                 else f"{score_label(low, low)}+")
+        points.append((label, score_label(low, high), predicted, observed, n,
                        abs(predicted - observed)))
-    keys = ("scores", "predicted", "observed", "n", "local_error")
+    keys = ("labels", "scores", "predicted", "observed", "n", "local_error")
     return dict(zip(keys, (list(values) for values in zip(*points))))
 
 
-def calibration_figure(names, sections, labels, thresholds):
-    """Bubbles per score, sized by n and labelled with the score; ECE in the legend."""
-    points = {name: calibration_points(sections[name], thresholds) for name in names}
-    n_max = max(n for point in points.values() for n in point["n"])
-    d_min, d_max = BUBBLE_PX
+def calibration_figure(names, sections, labels, keys, thresholds):
+    """Per sample, equal circles with the score inside, joined in risk order; ECE in the legend.
+
+    ``keys`` maps each sample name to its key, which picks its colour. The circles follow the R
+    report: one size, since n is in the hover, and a line in the sample's colour. The traces run in
+    reverse page order, so the first sample is drawn on top."""
     traces = []
-    for name in names:
-        cal = points[name]
+    for name in reversed(names):
+        cal = calibration_points(sections[name], thresholds)
+        color = SAMPLE_COLORS[keys[name]]
         traces.append(go.Scatter(
-            mode="markers+text", name=labels[name],
+            mode="lines+markers+text", name=labels[name],
             x=cal["predicted"], y=cal["observed"],
-            text=cal["scores"],
-            customdata=[[n, e] for n, e in zip(cal["n"], cal["local_error"])],
-            textposition="top center",
-            textfont={"size": 11, "color": INK},
+            text=cal["labels"],
+            customdata=[[s, n, e] for s, n, e in zip(cal["scores"], cal["n"], cal["local_error"])],
+            textposition="middle center",
+            textfont={"size": LABEL_PX, "color": LABEL_COLORS[keys[name]]},
             cliponaxis=False,
-            marker={"opacity": 0.85, "line": {"color": BACKGROUND, "width": 1},
-                    "size": [round(d_min + (d_max - d_min) * math.sqrt(n / n_max), 2)
-                             for n in cal["n"]]},
-            hovertemplate="score %{text}<br>predicted risk %{x:.1%}<br>"
-                          "observed risk %{y:.1%}<br>calibration error %{customdata[1]:.1%}<br>"
-                          "n = %{customdata[0]:,}"
+            line={"width": 2, "color": color},
+            # the white outline keeps overlapping circles apart
+            marker={"size": CIRCLE_PX, "color": color, "line": {"color": BACKGROUND, "width": 1}},
+            hovertemplate="Score %{customdata[0]}<br>Predicted Risk %{x:.1%}<br>"
+                          "Observed Risk %{y:.1%}<br>Calibration Error %{customdata[2]:.1%}<br>"
+                          "n = %{customdata[1]:,}"
                           f"<extra>{name}</extra>",
         ))
-    return go.Figure(traces, figure_layout("Predicted risk", "Observed risk")).to_plotly_json()
+    return go.Figure(traces, figure_layout("Predicted Risk", "Observed Risk")).to_plotly_json()
 
 
 def figure_layout(x_title, y_title):

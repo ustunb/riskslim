@@ -6,9 +6,9 @@
   --rs-axis-text: #4D4D4D;  /* tick labels: readable on white, unlike --rs-muted */
   --rs-muted: #98A2AD;
   --rs-grid: #DFE4E9;
-  --rs-sample-1: #000000;  /* train */
-  --rs-sample-2: #D2B48C;  /* test (tan) */
-  --rs-sample-3: #BEBEBE;  /* CV folds (grey) */
+  --rs-training: #000000;  /* the training sample (black) */
+  --rs-test: #D2B48C;  /* the test sample (tan) */
+  --rs-cv: #BEBEBE;  /* the CV sample (grey); Validation, with no colour of its own, uses --rs-muted */
   --rs-highlight: #FFE699;
   --rs-stripe: #F2F2F2;
   --rs-risk: #DDEBF7;

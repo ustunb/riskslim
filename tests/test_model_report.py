@@ -18,16 +18,16 @@ Dimensions:
                 -- inferred from the coefficients; model_type="risk_score" overrides a checklist
   label coding: {0, 1}, {-1, 1}    -- both must map to the same positive class (one fit each)
   samples:      Training only, Training + Test (the test sample has no row with score 1)
-  tails:        no score outside 1%..99% (one cell and one bubble per score), a high tail of
+  tails:        no score outside 1%..99% (one cell and one point per score), a high tail of
                 many scores, a low tail holding every score -- a tail of one score is not a
                 separate value: it is printed and plotted like any other, which the first case
-                already covers. The strip and the calibration bubbles collapse from one rule, so
-                the strip carries the three cases and the bubbles one pooling case.
+                already covers. The strip and the calibration points collapse from one rule, so
+                the strip carries the three cases and the points one pooling case.
   figure:       roc, calibration   -- one trace per sample, plotted straight from the data block's
                                       roc / calibration sections, each named for its legend entry
                                       (sample, n and outcome rate, AUC / ECE)
   settings:     the defaults (every other test), and one report that reorders and drops cards,
-                keeps one sample and lowers high_risk_threshold
+                reorders the samples (each keeps its colour) and lowers high_risk_threshold
   label text:   contains "</script>" and "<!--"  -- must not end the JSON data block early (a
                                       plain label is the same path with nothing to escape, so it
                                       is not a separate case)
@@ -40,8 +40,8 @@ out of order or outside 0..1.
 n/a: non-binary features for the checklist -- the score range rule is shared with the risk score.
 
 Checks that need no browser: `plotly.graph_objects.Figure(fig)` rejects misspelled or invalid
-properties, and one test asserts the Plotly template's colours are the ones styles.css writes as
-`--rs-*` tokens (the page and the plots hold the palette in their own idiom, so the test is what
+properties, and one test asserts the Plotly template's and the sample colours are the ones
+styles.css writes as `--rs-*` tokens (the page and the plots hold the palette in their own idiom, so the test is what
 keeps them from drifting). The browser test is opt-in (`pytest -m browser`): one page per saved
 report (each model type, plus `wide_strip` -- a long strip whose collapsed tails are its widest
 cells) is built and saved once, then opened in headless Chromium at 1280 px and 375 px, requiring
@@ -76,7 +76,7 @@ from utils import (
 from riskslim import RiskSLIMClassifier
 from riskslim.data import BinaryClassificationDataset
 from riskslim.report import ModelReport
-from riskslim.report.model_report import ASSETS, TEMPLATE_NAME
+from riskslim.report.model_report import ASSETS, SAMPLE_COLORS, TEMPLATE_NAME
 
 DATA_KEYS = {"schema_version", "title", "outcome_name", "samples", "model", "summary", "roc",
              "calibration", "settings", "figures"}
@@ -245,15 +245,15 @@ def test_summary_is_one_flat_table_of_formatted_values(report):
     # a row that is not per-sample carries one value, whatever the number of samples
     assert [(row["label"], row["values"]) for row in data["summary"]["rows"]] == [
         ("N", ["8", "4"]),
-        ("Outcome rate", ["50.0%", "50.0%"]),
-        ("Model size", ["3 (max 3)"]),
-        ("Point range", ["-5 to 5"]),
-        ("Objective value", ["0.5000"]),
-        ("Optimality gap", ["n/a"]),
-        ("Run time", ["1.2 s"]),
+        ("Outcome Rate", ["50.0%", "50.0%"]),
+        ("Model Size", ["3 (max 3)"]),
+        ("Point Range", ["-5 to 5"]),
+        ("Objective Value", ["0.5000"]),
+        ("Optimality Gap", ["n/a"]),
+        ("Run Time", ["1.2 s"]),
         ("AUC", ["0.844", "1.000"]),
         ("ECE", ["32.7%", "23.4%"]),
-        ("Log loss", ["0.579", "0.295"]),
+        ("Log Loss", ["0.579", "0.295"]),
     ]
 
 
@@ -325,27 +325,33 @@ def test_report_of_a_classifier_fit_on_a_dataset_holds_every_component():
     assert data["summary"]["columns"] == ["", *data["samples"]]
     assert data["summary"]["rows"]  # the rows themselves are pinned by the flat-table test
     for key in ("roc", "calibration"):
-        # a trace is named for its legend entry: the sample, then its n, outcome rate and metric
+        # a trace is named for its legend entry: the sample, then its n, outcome rate and metric;
+        # the traces run last sample first, so the first is drawn on top
         assert [trace["name"].split("<br>")[0] for trace in data["figures"][key]["data"]] == \
-            data["samples"]
+            data["samples"][::-1]
 
 
 def test_settings_choose_the_cards_the_samples_and_where_the_tails_collapse(fitted_wide):
     report = make_report(fitted_wide, RISK_SCORE_WEIGHTS, components=["calibration", "model"],
-                         samples=["training"], high_risk_threshold=0.95)
+                         samples=["test", "training"], high_risk_threshold=0.95)
     data = report.data
 
-    assert data["settings"] == {"components": ["calibration", "model"], "samples": ["training"],
+    assert data["settings"] == {"components": ["calibration", "model"],
+                                "samples": ["test", "training"],
                                 "low_risk_threshold": 0.01, "high_risk_threshold": 0.95}
     assert re.findall(r"<h3>(.*?)</h3>", report.html) == ["Calibration", "Model"]
-    assert data["samples"] == list(data["roc"]) == list(data["calibration"]) == ["Training"]
-    assert data["summary"]["columns"] == ["", "Training"]
-    (train,) = data["figures"]["calibration"]["data"]  # and no ROC figure: its card is not shown
+    assert data["samples"] == list(data["roc"]) == list(data["calibration"]) == \
+        ["Test", "Training"]
+    assert data["summary"]["columns"] == ["", "Test", "Training"]
+    train, test = data["figures"]["calibration"]["data"]  # and no ROC figure: its card is not shown
     assert set(data["figures"]) == {"calibration"}
-    # scores 5..17 are above 95%: one strip cell and one bubble ("6 to 15": the rows' scores)
+    # a sample keeps its colour wherever it is listed
+    assert [test["marker"]["color"], train["marker"]["color"]] == [SAMPLE_COLORS["test"],
+                                                                   SAMPLE_COLORS["training"]]
+    # scores 5..17 are above 95%: one strip cell, and one point labelled by the rows' lowest score
     assert [(cell["score"], cell["risk"]) for cell in data["model"]["score_to_risk"][-2:]] == [
         ("4", "88.1%"), ("5 to 17", "> 95.0%")]
-    assert train["text"] == ["3", "4", "6 to 15"]
+    assert train["text"] == ["3", "4", "6+"]
 
 
 def test_save_and_notebook_display_carry_the_same_html(report, tmp_path):
@@ -372,35 +378,40 @@ def test_figure_plots_each_sample_section_and_names_its_trace_for_the_legend(rep
     go.Figure(figure)  # raises on invalid Plotly properties
     # the sample's n, outcome rate and metric are the legend entry, not a box on the panel
     assert "annotations" not in figure["layout"]
-    assert [trace["name"] for trace in figure["data"]] == legend_names
-    for trace, name in zip(figure["data"], ["Training", "Test"]):
+    # drawn last sample first, so Training is on top; the legend lists them in page order
+    assert figure["layout"]["template"]["layout"]["legend"]["traceorder"] == "reversed"
+    assert [trace["name"] for trace in figure["data"]] == legend_names[::-1]
+    for trace, name in zip(figure["data"], ["Test", "Training"]):
         assert trace["x"] == report.data[key][name][x_field]
         assert trace["y"] == report.data[key][name][y_field]
         assert trace["hovertemplate"].endswith(f"<extra>{name}</extra>")  # hover names the sample
 
 
-def test_calibration_bubbles_are_labelled_with_scores_and_sized_by_n(report):
-    train, test = report.data["figures"]["calibration"]["data"]
+def test_calibration_circles_are_one_size_with_the_score_inside_joined_by_a_line(report):
+    test, train = report.data["figures"]["calibration"]["data"]
 
-    assert train["textposition"] == "top center"  # outside the bubble, so the label is readable
+    # each sample's circles, joined in risk order, with the score printed in the middle
+    assert train["mode"] == test["mode"] == "lines+markers+text"
+    assert train["textposition"] == "middle center"
     assert train["text"] == ["-1", "0", "1", "2", "3"]
     assert test["text"] == ["-1", "0", "2", "3"]
-    # train n = [1, 2, 2, 2, 1]; test n = [1, 1, 1, 1]
-    small, large = train["marker"]["size"][0], train["marker"]["size"][1]
-    assert small < large
-    assert train["marker"]["size"] == [small, large, large, large, small]
-    assert test["marker"]["size"] == [small] * 4
+    assert train["x"] == sorted(train["x"])
+    # one size, whatever n (train n = [1, 2, 2, 2, 1]): n is in the hover instead
+    assert isinstance(train["marker"]["size"], (int, float))
+    assert train["marker"]["size"] == test["marker"]["size"]
 
 
-def test_calibration_bubbles_pool_the_rows_of_a_collapsed_tail(fitted_wide):
+def test_calibration_points_pool_the_rows_of_a_collapsed_tail(fitted_wide):
     report = make_report(fitted_wide, RISK_SCORE_WEIGHTS, test=(None, None))
     (train,) = report.data["figures"]["calibration"]["data"]
     section = report.data["calibration"]["Training"]
 
-    # 8 rows, 8 distinct scores; the five above 99% risk are one bubble, the other three their own
+    # 8 rows, 8 distinct scores; the five above 99% risk are one point, the other three their own
     assert section["scores"] == [3, 4, 6, 9, 10, 11, 14, 15]
-    assert train["text"] == ["3", "4", "6", "9 to 15"]
-    n, local_error = zip(*train["customdata"])  # hover: the bubble's n and calibration error
+    # the plot labels the tail by its lowest score; the hover shows the range, as the strip does
+    assert train["text"] == ["3", "4", "6", "9+"]
+    scores, n, local_error = zip(*train["customdata"])  # hover: scores, n and calibration error
+    assert list(scores) == ["3", "4", "6", "9 to 15"]
     assert list(n) == [1, 1, 1, 5]
     assert list(local_error) == pytest.approx(
         [0.2689414214, 0.1192029220, 0.0179862100, 0.7997243599])
@@ -412,7 +423,7 @@ def test_calibration_bubbles_pool_the_rows_of_a_collapsed_tail(fitted_wide):
 
 
 def test_roc_points_carry_score_thresholds(report):
-    train = report.data["figures"]["roc"]["data"][0]
+    train = report.data["figures"]["roc"]["data"][-1]
 
     assert train["customdata"] == ["none", "score ≥ 3", "score ≥ 2", "score ≥ 1",
                                    "score ≥ 0", "score ≥ -1"]
@@ -434,7 +445,9 @@ def test_plot_template_holds_the_same_palette_as_the_stylesheet(report):
     assert layout.xaxis.tickcolor == layout.yaxis.tickcolor == tokens["--rs-grid"]
     assert diagonal["line"]["color"] == tokens["--rs-grid"]
     assert layout.xaxis.tickfont.color == layout.yaxis.tickfont.color == tokens["--rs-axis-text"]
-    assert list(layout.colorway) == [tokens[f"--rs-sample-{i}"] for i in (1, 2, 3)]
+    # Validation has no house colour: it borrows the muted grey
+    assert SAMPLE_COLORS == {"training": tokens["--rs-training"], "test": tokens["--rs-test"],
+                             "cv": tokens["--rs-cv"], "validation": tokens["--rs-muted"]}
 
 
 @pytest.fixture(scope="module")
