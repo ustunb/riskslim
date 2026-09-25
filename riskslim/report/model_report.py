@@ -106,7 +106,8 @@ MAX_SCORES_PRINTED = 12
 
 # Every row of the dataset, training and performance blocks, in one place: its label (plain
 # text), how its value prints, the definition its label shows on hover, and the notation printed
-# after the label (HTML the page writes as it is, so literals only; None for none). The legends
+# in its own column after the label (HTML the page writes as it is, so literals only; None for
+# none). The legends
 # print their numbers with these formatters too. A value of None, NaN or inf prints as "n/a"
 # (``format_row``).
 @dataclass(frozen=True)
@@ -137,11 +138,11 @@ SUMMARY_ROWS = {
         "Outcome Rate", lambda rate: percent(rate),
         "The share of rows in the sample with the outcome. It is the baseline the model's "
         "risks are measured against.",
-        "<i>p</i>(<i>y</i> = 1)"),
+        "Pr(<i>y</i> = 1)"),
     "model_size": SummaryRow(
-        "Model Size", lambda size: f"{size[0]} (max {size[1]})",
-        "The number of features the model uses, and the most the fit allowed. A smaller model "
-        "is easier to use and to check by hand."),
+        "Max Model Size", lambda size: f"{int(size):,}",
+        "The most features the model was allowed to use. A smaller limit gives a model that is "
+        "easier to use and to check by hand; the Model card shows the features it uses."),
     "optimality_gap": SummaryRow(
         "Optimality Gap", lambda gap: percent(gap),
         "How far the fitted model could be from the best model under the same constraints, as "
@@ -150,9 +151,10 @@ SUMMARY_ROWS = {
         "Run Time", lambda seconds: f"{seconds:.2f} s" if seconds < 1 else f"{seconds:.1f} s",
         "How long the solver took to fit the model."),
     "log_loss": SummaryRow(
-        "Log Loss", lambda loss: f"{loss:.3f}",
-        "The average negative log-likelihood of the outcomes under the predicted risks. Lower "
-        "is better: it rewards risks that are both well ranked and well calibrated."),
+        "Loss", lambda loss: f"{loss:.3f}",
+        "The logistic loss: the average negative log-likelihood of the outcomes under the "
+        "predicted risks, the quantity the fit minimizes. Lower is better: it rewards risks that "
+        "are both well ranked and well calibrated."),
     "auc": SummaryRow(
         "AUC", lambda auc: f"{auc:.3f}",
         "Area under the ROC curve: the chance that a random row with the outcome scores higher "
@@ -1201,7 +1203,7 @@ def sample_table(evaluation, keys, shared=None):
 
 def build_dataset_component(evaluation, settings):
     """The Dataset block, a table with no figure (``sample_table``): each sample's size ``n``
-    and outcome rate ``p(y = 1)``, and the features the model was fit on, ``d``, and before
+    and outcome rate ``Pr(y = 1)``, and the features the model was fit on, ``d``, and before
     binarization, ``d_raw`` (``raw_feature_count``), one value each for every sample.
     ``settings``, a ``ReportSettings``, changes nothing here: every builder takes it."""
     return ReportComponent(sample_table(
@@ -1211,20 +1213,20 @@ def build_dataset_component(evaluation, settings):
 
 def build_training_component(evaluation, settings):
     """The Training block, a table with no figure: how the model was fit, one ``value`` per
-    ``summary_row`` and no sample columns: its size against the size limit it was fit under, and
-    the solver's optimality gap and run time. ``settings``, a ``ReportSettings``, changes nothing
+    ``summary_row`` and no sample columns: the size limit it was fit under (``max_size``; the
+    Model card shows the size it has), and the solver's optimality gap and run time. ``settings``, a ``ReportSettings``, changes nothing
     here."""
     solution = evaluation.solution_info
-    values = {"model_size": (len(evaluation.item_values), evaluation.max_size),
+    values = {"model_size": evaluation.max_size,
               "optimality_gap": solution.get("optimality_gap"),
               "run_time": solution.get("run_time")}
     return ReportComponent({"rows": summary_rows(evaluation, TRAINING_ROWS, shared=values)})
 
 
 def build_performance_component(evaluation, settings):
-    """The Performance block, a table with no figure (``sample_table``): each sample's log loss,
-    AUC and ECE, the strings the legends show too. ``settings``, a ``ReportSettings``, changes
-    nothing here."""
+    """The Performance block, headed Summary Statistics, a table with no figure
+    (``sample_table``): each sample's loss, AUC and ECE, the strings the legends show too.
+    ``settings``, a ``ReportSettings``, changes nothing here."""
     return ReportComponent(sample_table(evaluation, PERFORMANCE_ROWS))
 
 

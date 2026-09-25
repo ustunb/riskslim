@@ -13,8 +13,8 @@
 </head>
 <body>
 {#- The page structure: fixed bands, top to bottom, whatever the order of components (which only
-    picks the ones shown): the dataset, training and performance blocks side by side (no
-    cards), then the Model card, then the ROC and calibration plots side by side. Jinja writes
+    picks the ones shown): the dataset, training and performance (Summary Statistics) blocks,
+    one under another (no cards), then the Model card, then the ROC and calibration plots side by side. Jinja writes
     every table here; report.js adds up the Model card from its inputs, wraps the strip when it
     does not fit on one row, draws the figures into their [data-figure] boxes and fits each to
     its width, hides a calibration label another covers, and mirrors a legend change onto the
@@ -23,22 +23,33 @@
 <main class="container" id="report">
 <header class="rs-head"><h2>{{ title }}</h2></header>
 <section class="rs-bands">
-{#- a row's label cell: the label, then its notation (Python's HTML literals: <i>n</i>), and its
-    definition, a tooltip shown while the label is hovered or focused (a tap focuses it on a
-    phone) #}
-{%- macro label_cell(block, row) -%}
+{#- a row's label and notation cells: the label, with its definition, a tooltip shown while the
+    label is hovered or focused (a tap focuses it on a phone); then its notation (Python's HTML
+    literals: <i>n</i>), in a column of its own, empty for a row with none #}
+{%- macro label_cells(block, row) -%}
 <td class="rs-label"><span class="rs-term" tabindex="0" aria-describedby="rs-def-{{ block }}-{{ row.key }}">
-  {{- row.label }}{% if row.notation %} <span class="rs-notation">{{ row.notation | safe }}</span>{% endif -%}
+  {{- row.label -}}
 </span><span class="rs-tip" role="tooltip" id="rs-def-{{ block }}-{{ row.key }}">{{ row.definition }}</span></td>
+      <td class="rs-notation">{{ (row.notation or "") | safe }}</td>
+{%- endmacro %}
+{#- the columns every block shares, of fixed widths (styles.css): label, notation, then
+    value_columns value columns, so the values of all three blocks line up down the page #}
+{%- macro block_columns(value_columns) -%}
+<colgroup><col class="rs-col-label"><col class="rs-col-notation">
+  {%- for _ in range(value_columns) %}<col class="rs-col-value">{% endfor -%}
+</colgroup>
 {%- endmacro %}
 {#- a block with one column per sample: a header row naming the samples, then its rows, each
-    with a value per sample or one value across them all #}
+    with a value per sample, or one value across them all, set in the first sample's column #}
 {%- macro sample_table(name, block) %}
-<table>
+{%- set samples = block.columns[1:] %}
+<table style="--rs-value-columns: {{ samples | length }}">
+  {{ block_columns(samples | length) }}
   <thead>
     <tr>
       <th></th>
-      {%- for column in block.columns[1:] %}
+      <th></th>
+      {%- for column in samples %}
       <th class="rs-num">{{ column }}</th>
       {%- endfor %}
     </tr>
@@ -46,14 +57,10 @@
   <tbody>
     {%- for row in block.rows %}
     <tr>
-      {{ label_cell(name, row) }}
-      {%- if "values" in row %}
-      {%- for value in row["values"] %}
+      {{ label_cells(name, row) }}
+      {%- for value in (row["values"] if "values" in row else [row.value] + [""] * (samples | length - 1)) %}
       <td class="rs-num">{{ value }}</td>
       {%- endfor %}
-      {%- else %}
-      <td class="rs-num rs-shared" colspan="{{ block.columns | length - 1 }}">{{ row.value }}</td>
-      {%- endif %}
     </tr>
     {%- endfor %}
   </tbody>
@@ -70,14 +77,13 @@
 {%- if "training" in components %}
 <section class="rs-block">
 <h3>Training</h3>
-{#- one value per row, with no sample columns; the empty header row lines its rows up with the
-    other blocks' #}
-<table>
-  <thead><tr><th></th><th></th></tr></thead>
+{#- one value per row, in the column of the other blocks' first sample #}
+<table style="--rs-value-columns: 1">
+  {{ block_columns(1) }}
   <tbody>
     {%- for row in training.rows %}
     <tr>
-      {{ label_cell("training", row) }}
+      {{ label_cells("training", row) }}
       <td class="rs-num">{{ row.value }}</td>
     </tr>
     {%- endfor %}
@@ -87,7 +93,7 @@
 {%- endif %}
 {%- if "performance" in components %}
 <section class="rs-block">
-<h3>Performance</h3>
+<h3>Summary Statistics</h3>
 {{- sample_table("performance", performance) }}
 </section>
 {%- endif %}

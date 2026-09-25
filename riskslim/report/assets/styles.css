@@ -1,4 +1,4 @@
-/* riskslim report: palette tokens (nsf-career), the summary blocks, a fixed-width model card, the plots two to a row, tables.
+/* riskslim report: palette tokens (nsf-career), the stacked summary blocks, a fixed-width model card, the plots two to a row, tables.
    The plots hold the same palette in their own idiom -- the Plotly template in model_report.py;
    a test asserts the two agree, so the values below and the template's cannot drift apart. */
 :root {
@@ -130,41 +130,46 @@
    meaning (predicted positive) alone and does not change the cell's size */
 .rs-score-cell.rs-current { outline: 2px solid var(--rs-ink); outline-offset: -2px; }
 
-/* the summary band: the dataset, training and performance blocks side by side, each as wide as
-   its columns, wrapping onto more rows (one each on a phone). Not cards: a small plain heading
-   over a plain table. */
-.rs-summary { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.75rem 2.5rem; }
+/* the summary band: the dataset, training and performance blocks, one under another from the
+   page's left edge. Not cards: a small plain heading over a plain table. Every block has the same
+   fixed columns (label, notation, then one per value; template.html's block_columns), so the
+   notation and the values line up down the page, and one type size throughout. */
+.rs-summary {
+  display: grid; justify-items: start; gap: 1rem;
+  --rs-label-width: 9.5em; --rs-notation-width: 5.5em; --rs-value-width: 5.5em;
+}
 .rs-block { margin: 0; min-width: 0; max-width: 100%; }
 .rs-block h3 {
   margin: 0 0 0.25rem; font-size: 0.8rem; font-weight: 600; letter-spacing: 0.04em;
   text-transform: uppercase; color: var(--rs-axis-text);
 }
-.rs-block table { width: auto; margin: 0; font-size: 0.9rem; }
-.rs-block th, .rs-block td { padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--rs-grid); }
+.rs-block table {
+  table-layout: fixed; margin: 0; font-size: 0.9rem;
+  width: calc(var(--rs-label-width) + var(--rs-notation-width)
+              + var(--rs-value-columns) * var(--rs-value-width));
+}
+.rs-col-label { width: var(--rs-label-width); }
+.rs-col-notation { width: var(--rs-notation-width); }
+.rs-col-value { width: var(--rs-value-width); }
+.rs-block th, .rs-block td {
+  padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--rs-grid); white-space: nowrap;
+}
 .rs-block th:first-child, .rs-block td:first-child { padding-left: 0; }
-.rs-block th:last-child, .rs-block td:last-child { padding-right: 0; }
-/* the header row names the samples, in small muted type; the training block's is empty, so its
-   rows line up with the other blocks' */
+/* the header row names the samples, muted */
 .rs-block thead th {
-  background: none; font-size: 0.75rem; font-weight: 600; color: var(--rs-muted);
+  background: none; font-weight: 600; color: var(--rs-muted);
   border-bottom: 1px solid var(--rs-axis-text);
 }
-.rs-block td:first-child { padding-right: 1.25rem; white-space: nowrap; }
-/* a sample's column: a width of its own (a minimum: the table grows for a longer value) */
-.rs-block th.rs-num { min-width: 5rem; }
-.rs-block .rs-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-/* a label's notation (n, d, p(y = 1)): math in the page's face, its letters in italic */
-.rs-notation { margin-left: 0.15em; }
+/* the training block has no header row: the same rule opens its table */
+.rs-block table:not(:has(thead)) tr:first-child td { border-top: 1px solid var(--rs-axis-text); }
+/* numbers right-aligned, in figures of one width */
+.rs-block .rs-num { text-align: right; font-variant-numeric: tabular-nums; }
+/* a label's notation (n, d, Pr(y = 1)): math in the page's face, its letters in italic */
 .rs-notation sub { font-size: 0.7em; }
-/* one value for every sample (d, d_raw): centred across the sample columns */
-.rs-block td.rs-shared { text-align: center; }
-/* a row's label and its definition: a dotted underline marks the label, and the definition
-   shows under it while the label is hovered or focused (a tap focuses it on a phone), or while
-   the pointer is on the definition itself; Escape hides it (report.js) */
+/* a row's label and its definition, which shows under it while the label is hovered or focused
+   (a tap focuses it on a phone), or while the pointer is on the definition itself; Escape hides
+   it (report.js) */
 .rs-label { position: relative; }
-.rs-term {
-  cursor: help; text-decoration: underline dotted var(--rs-muted); text-underline-offset: 0.2em;
-}
 .rs-term:focus { outline: none; }
 .rs-term:focus-visible { outline: 2px solid var(--rs-ink); outline-offset: 2px; border-radius: 2px; }
 .rs-tip {
@@ -179,9 +184,9 @@
   visibility: visible; opacity: 1;
 }
 .rs-label.rs-dismissed .rs-tip { visibility: hidden; opacity: 0; }
+/* on a phone, narrower columns keep a block with a few samples inside the page */
 @media (max-width: 480px) {
-  .rs-summary { flex-direction: column; }
-  .rs-block, .rs-block table { width: 100%; }
+  .rs-summary { --rs-label-width: 8.5em; --rs-notation-width: 4.75em; --rs-value-width: 4.75em; }
 }
 
 /* square panel, like the R's coord_fixed(): the figure is as tall as it is wide */

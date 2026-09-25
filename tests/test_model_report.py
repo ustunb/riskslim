@@ -99,7 +99,7 @@ CDN_URLS = [
 DATA_BLOCK = re.compile(r'<script type="application/json" id="report-data">(.*?)</script>', re.S)
 HOSTILE_NAMES = ["a</script><script>alert(1)</script>", "b<!-- c", "c</ScRiPt><script>alert(2)</script>"]
 BREASTCANCER_FILE = Path(__file__).parents[1] / "data" / "breastcancer_data.csv"
-COMPONENTS = ["<h3>Dataset</h3>", "<h3>Training</h3>", "<h3>Performance</h3>",
+COMPONENTS = ["<h3>Dataset</h3>", "<h3>Training</h3>", "<h3>Summary Statistics</h3>",
               'class="rs-model-table"', 'data-figure="roc"', 'data-figure="calibration"']
 # How far the score-to-risk strip runs past its own box, past the card holding it, and past the
 # viewport, in px, and how many rows it takes. The three overflows are 0 at every width: the strip
@@ -296,12 +296,12 @@ def test_summary_blocks_hold_formatted_values(report):
     ]
     # the training block: one value per row, whatever the number of samples
     assert [(row["label"], row["value"]) for row in data["training"]["rows"]] == [
-        ("Model Size", "3 (max 3)"),
+        ("Max Model Size", "3"),
         ("Optimality Gap", "n/a"),
         ("Run Time", "1.2 s"),
     ]
     assert [(row["label"], row["values"]) for row in data["performance"]["rows"]] == [
-        ("Log Loss", ["0.579", "0.295"]),
+        ("Loss", ["0.579", "0.295"]),
         ("AUC", ["0.844", "1.000"]),
         ("ECE", ["32.7%", "23.4%"]),
     ]
