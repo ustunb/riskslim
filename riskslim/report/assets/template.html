@@ -12,18 +12,40 @@
 </style>
 </head>
 <body>
-{#- The page structure: one grid of cards, two to a row, in the order of components. Jinja writes
-    every table here; report.js adds up the Model card from its inputs, wraps the strip when it
-    does not fit on one row, draws the figures into their [data-figure] boxes and fits each to
-    its width, hides a calibration label another covers, and mirrors a legend change onto the
-    other plot. Dict keys that share a name with a dict method (items, values) are read with [],
-    which Jinja does not resolve to the method. #}
+{#- The page structure: fixed bands, top to bottom, whatever the order of components (which only
+    picks the cards): the summary table (no card), then the Model card, then the ROC and
+    calibration plots side by side. Jinja writes every table here; report.js adds up the Model
+    card from its inputs, wraps the strip when it does not fit on one row, draws the figures into
+    their [data-figure] boxes and fits each to its width, hides a calibration label another
+    covers, and mirrors a legend change onto the other plot. Dict keys that share a name with a
+    dict method (items, values) are read with [], which Jinja does not resolve to the method. #}
 <main class="container" id="report">
 <header class="rs-head"><h2>{{ title }}</h2></header>
-<section class="rs-grid">
-{%- for component in components %}
-{%- if component == "model" %}
-<article class="rs-card">
+<section class="rs-bands">
+{%- if "summary" in components %}
+<table class="rs-summary-table">
+  <thead>
+    <tr>
+      <th>{{ summary.columns[0] }}</th>
+      {%- for column in summary.columns[1:] %}
+      <th class="rs-num">{{ column }}</th>
+      {%- endfor %}
+    </tr>
+  </thead>
+  <tbody>
+    {%- for row in summary.rows %}
+    <tr>
+      <td>{{ row.label }}</td>
+      {%- for value in row["values"] %}
+      <td class="rs-num" colspan="{{ row.span }}">{{ value }}</td>
+      {%- endfor %}
+    </tr>
+    {%- endfor %}
+  </tbody>
+</table>
+{%- endif %}
+{%- if "model" in components %}
+<article class="rs-card rs-model-card">
 <header><h3>Model</h3></header>
   <table class="rs-model-table">
     {%- if model.points_header %}
@@ -79,42 +101,23 @@
     {%- endfor %}
   </div>
 </article>
-{%- elif component == "summary" %}
+{%- endif %}
+{%- if "roc" in components or "calibration" in components %}
+<div class="rs-plots">
+{%- if "roc" in components %}
 <article class="rs-card">
-<header><h3>Summary</h3></header>
-  <table class="rs-summary-table">
-    <thead>
-      <tr>
-        <th>{{ summary.columns[0] }}</th>
-        {%- for column in summary.columns[1:] %}
-        <th class="rs-num">{{ column }}</th>
-        {%- endfor %}
-      </tr>
-    </thead>
-    <tbody>
-      {%- for row in summary.rows %}
-      <tr>
-        <td>{{ row.label }}</td>
-        {%- for value in row["values"] %}
-        <td class="rs-num" colspan="{{ row.span }}">{{ value }}</td>
-        {%- endfor %}
-      </tr>
-      {%- endfor %}
-    </tbody>
-  </table>
-</article>
-{%- elif component == "roc" %}
-<article class="rs-card">
-<header><h3>ROC</h3></header>
+<header><h3>ROC Curve</h3></header>
 <div class="rs-plot" data-figure="roc"></div>
 </article>
-{%- elif component == "calibration" %}
+{%- endif %}
+{%- if "calibration" in components %}
 <article class="rs-card">
-<header><h3>Calibration</h3></header>
+<header><h3>Calibration Plot</h3></header>
 <div class="rs-plot" data-figure="calibration"></div>
 </article>
 {%- endif %}
-{%- endfor %}
+</div>
+{%- endif %}
 </section>
 </main>
 <script type="application/json" id="report-data">{{ data }}</script>

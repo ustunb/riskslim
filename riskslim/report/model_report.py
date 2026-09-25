@@ -91,7 +91,7 @@ from ..utils import data_fingerprint, is_integer
 SCHEMA_VERSION = 2
 MODEL_TYPES = {"risk_score": "Risk Score", "checklist": "Checklist"}
 
-# the page's cards, in their default order
+# the page's cards
 COMPONENTS = ("model", "summary", "roc", "calibration")
 # risks below the low threshold (above the high one) collapse into one strip cell and one
 # calibration point: the R's defaults
@@ -151,8 +151,10 @@ AXIS = {
     "fixedrange": True, "range": AXIS_RANGE, "dtick": 0.2, "tickformat": ".0%",
     # under the data: a circle on the edge overhangs the frame instead of being cut by it
     "layer": "below traces",
-    "tickfont": {"size": 14, "color": AXIS_TEXT},
-    "title": {"font": {"size": 15, "color": INK}},
+    "tickfont": {"size": 17, "color": AXIS_TEXT},
+    # standoff: a gap between the title and the tick labels; it holds only while the margin has
+    # room for it, so the template's margins below are sized for these fonts and gaps
+    "title": {"font": {"size": 19, "color": INK}, "standoff": 14},
 }
 
 # Registered, not made the default: importing riskslim must not restyle anyone else's plots.
@@ -162,7 +164,7 @@ pio.templates[TEMPLATE_NAME] = go.layout.Template(layout=go.Layout(
     paper_bgcolor=BACKGROUND,
     plot_bgcolor=BACKGROUND,
     # r and t leave room for the last tick label and for a circle overhanging the frame
-    margin={"t": 24, "r": 24, "b": 64, "l": 72},
+    margin={"t": 24, "r": 32, "b": 80, "l": 100},
     hovermode="closest",
     # the hover box names its sample on its first line, inside the box: Plotly's side tag drew it
     # in the trace colour, unreadable for the grey and tan samples
@@ -190,9 +192,9 @@ NARROW_LAYOUT = go.Layout(
     legend={"orientation": "h", "xref": "paper", "x": 0, "xanchor": "left",
             "yref": "container", "y": 0, "yanchor": "bottom"},
     # set all four: report.js reads margin.t, .r, .b and .l from here to size the square panel
-    margin={"t": 24, "r": 16, "b": 56, "l": 56},
-    xaxis={"tickfont": {"size": 12}, "title": {"font": {"size": 13}}},
-    yaxis={"tickfont": {"size": 12}, "title": {"font": {"size": 13}}},
+    margin={"t": 20, "r": 20, "b": 64, "l": 76},
+    xaxis={"tickfont": {"size": 14}, "title": {"font": {"size": 16}, "standoff": 10}},
+    yaxis={"tickfont": {"size": 14}, "title": {"font": {"size": 16}, "standoff": 10}},
 )
 NARROW_CIRCLE_PX = 20
 
@@ -207,7 +209,9 @@ class ReportSettings:
     Parameters
     ----------
     components : sequence of {"model", "summary", "roc", "calibration"}, optional
-        The cards on the page, in this order; a component left out is not shown.
+        The cards on the page; a component left out is not shown. The page places them in
+        fixed bands whatever the order given: the summary, the model, then the ROC and
+        calibration plots side by side.
     samples : sequence of {"training", "cv", "validation", "test"}, optional
         The samples shown in the summary, ROC and calibration, in this order. None shows every
         available sample; a sample named but not available (``"cv"`` without ``fit_cv``) raises

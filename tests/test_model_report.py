@@ -32,8 +32,8 @@ Dimensions:
   figure:       roc, calibration   -- one trace per sample, plotted straight from the data block's
                                       roc / calibration sections, each named for its legend entry
                                       (sample, n and outcome rate, AUC / ECE)
-  settings:     the defaults (every other test), and one report that reorders and drops cards,
-                reorders the samples (each keeps its colour) and lowers high_risk_threshold
+  settings:     the defaults (every other test), and one report that drops cards (listing the rest
+                out of page order), reorders the samples (each keeps its colour) and lowers high_risk_threshold
   label text:   contains "</script>" (also in mixed case) and "<!--"  -- must not end the JSON
                                       data block early, nor appear unescaped anywhere on the page
                                       (a plain label is the same path with nothing to escape, so
@@ -405,7 +405,8 @@ def test_settings_choose_the_cards_the_samples_and_where_the_tails_collapse(fitt
                                 "low_risk_threshold": 0.01, "high_risk_threshold": 0.45,
                                 "min_printed_risk": 0.01, "max_printed_risk": 0.45,
                                 "max_scores_printed": 12}
-    assert re.findall(r"<h3>(.*?)</h3>", report.html) == ["Calibration", "Model"]
+    # the page places the cards in its fixed bands, not in the order given
+    assert re.findall(r"<h3>(.*?)</h3>", report.html) == ["Model", "Calibration Plot"]
     assert data["samples"] == list(data["roc"]) == list(data["calibration"]) == \
         ["Test", "Training"]
     assert data["summary"]["columns"] == ["", "Test", "Training"]

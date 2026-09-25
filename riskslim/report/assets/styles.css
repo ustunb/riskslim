@@ -1,4 +1,4 @@
-/* riskslim report: palette tokens (nsf-career), a two-column grid that stacks below 720px, tables.
+/* riskslim report: palette tokens (nsf-career), the summary, a fixed-width model card, the plots two to a row, tables.
    The plots hold the same palette in their own idiom -- the Plotly template in model_report.py;
    a test asserts the two agree, so the values below and the template's cannot drift apart. */
 :root {
@@ -29,21 +29,31 @@
   --pico-primary-focus: color-mix(in srgb, var(--rs-ink) 25%, transparent);
 }
 
-#report { max-width: 1200px; padding-top: 1rem; padding-bottom: 1rem; }
+/* the plots fill it two to a row; Pico drops a container's side padding above 576px, which let
+   the cards touch the window's edges on a tablet, so it is set here at every width */
+#report { max-width: 1100px; padding: 1rem var(--pico-spacing); }
 .rs-head h2 { margin-bottom: 0.75rem; font-size: 1.4rem; }
 
-/* the cards fill it two to a row, in the order the report lists them */
-.rs-grid {
+/* the page in fixed bands, top to bottom: the summary table, the model card, then the plots */
+.rs-bands {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  /* each card is as tall as its own content: stretching the shorter one to match its neighbour
-     left a block of dead space under the model card */
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
   margin-bottom: 1rem;
 }
+/* the model card is as wide as its table and an 11-cell strip need, from the page's left edge; on
+   a narrower page it shrinks with it, and a strip that no longer fits wraps (report.js) */
+.rs-model-card { width: 100%; max-width: 40rem; }
+/* the plots two to a row, filling the page; a plot alone keeps its half, under the model card,
+   rather than growing into a page-wide square. On a phone each takes the row. */
+.rs-plots {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 1rem;
+}
 @media (max-width: 720px) {
-  .rs-grid { grid-template-columns: minmax(0, 1fr); }
+  .rs-plots { grid-template-columns: minmax(0, 1fr); }
 }
 
 .rs-card {
@@ -61,8 +71,8 @@
 }
 .rs-card h3 { margin: 0; font-size: 1rem; }
 
-.rs-card table { margin-bottom: 0.75rem; font-size: 0.9rem; }
-.rs-card th, .rs-card td { padding: 0.3rem 0.5rem; }
+.rs-card table, .rs-summary-table { margin-bottom: 0.75rem; font-size: 0.9rem; }
+.rs-card th, .rs-card td, .rs-summary-table th, .rs-summary-table td { padding: 0.3rem 0.5rem; }
 
 /* model table: the points column on the right, like the paper */
 .rs-model-table th, .rs-model-table td { border-bottom: 1px solid var(--rs-grid); }
@@ -120,13 +130,17 @@
    meaning (predicted positive) alone and does not change the cell's size */
 .rs-score-cell.rs-current { outline: 2px solid var(--rs-ink); outline-offset: -2px; }
 
-/* summary table: one header row, naming the samples */
+/* summary table: not a card, straight under the title, as wide as its columns (not the page's);
+   one header row, naming the samples */
+.rs-summary-table { justify-self: start; width: auto; min-width: min(100%, 24rem); margin: 0; }
 .rs-summary-table thead th {
   background: var(--rs-stripe);
   font-weight: 600;
   border-bottom: 1px solid var(--rs-grid);
 }
 .rs-summary-table td { border-bottom: 1px solid var(--rs-grid); }
+/* a sample's column: a width of its own (a minimum: the table grows for a longer value) */
+.rs-summary-table th.rs-num { width: 7rem; }
 .rs-summary-table .rs-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* square panel, like the R's coord_fixed(): the figure is as tall as it is wide */
