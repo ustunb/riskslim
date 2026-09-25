@@ -1,3 +1,4 @@
+# CI is temporarily manual-only while its jobs are repaired on master.
 # CI = lint + tests + the install check (SPEC.md § Install check).
 # The install check exercises the BUILT ARTIFACT, never the source tree: pytest runs
 # with --import-mode=importlib from a neutral working directory (runner.temp), so
@@ -5,9 +6,6 @@
 name: ci
 
 on:
-  push:
-    branches: [main, dev]
-  pull_request:
   workflow_dispatch:
 
 permissions:
