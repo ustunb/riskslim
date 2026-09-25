@@ -1,4 +1,4 @@
-/* riskslim report: palette tokens (nsf-career), the summary, a fixed-width model card, the plots two to a row, tables.
+/* riskslim report: palette tokens (nsf-career), the summary blocks, a fixed-width model card, the plots two to a row, tables.
    The plots hold the same palette in their own idiom -- the Plotly template in model_report.py;
    a test asserts the two agree, so the values below and the template's cannot drift apart. */
 :root {
@@ -32,9 +32,9 @@
 /* the plots fill it two to a row; Pico drops a container's side padding above 576px, which let
    the cards touch the window's edges on a tablet, so it is set here at every width */
 #report { max-width: 1100px; padding: 1rem var(--pico-spacing); }
-.rs-head h2 { margin-bottom: 0.75rem; font-size: 1.4rem; }
+.rs-head h2 { margin-bottom: 1rem; font-size: 1.4rem; }
 
-/* the page in fixed bands, top to bottom: the summary table, the model card, then the plots */
+/* the page in fixed bands, top to bottom: the summary blocks, the model card, then the plots */
 .rs-bands {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -71,8 +71,8 @@
 }
 .rs-card h3 { margin: 0; font-size: 1rem; }
 
-.rs-card table, .rs-summary-table { margin-bottom: 0.75rem; font-size: 0.9rem; }
-.rs-card th, .rs-card td, .rs-summary-table th, .rs-summary-table td { padding: 0.3rem 0.5rem; }
+.rs-card table { margin-bottom: 0.75rem; font-size: 0.9rem; }
+.rs-card th, .rs-card td { padding: 0.3rem 0.5rem; }
 
 /* model table: the points column on the right, like the paper */
 .rs-model-table th, .rs-model-table td { border-bottom: 1px solid var(--rs-grid); }
@@ -130,18 +130,59 @@
    meaning (predicted positive) alone and does not change the cell's size */
 .rs-score-cell.rs-current { outline: 2px solid var(--rs-ink); outline-offset: -2px; }
 
-/* summary table: not a card, straight under the title, as wide as its columns (not the page's);
-   one header row, naming the samples */
-.rs-summary-table { justify-self: start; width: auto; min-width: min(100%, 24rem); margin: 0; }
-.rs-summary-table thead th {
-  background: var(--rs-stripe);
-  font-weight: 600;
-  border-bottom: 1px solid var(--rs-grid);
+/* the summary band: the dataset, training and performance blocks side by side, each as wide as
+   its columns, wrapping onto more rows (one each on a phone). Not cards: a small plain heading
+   over a plain table. */
+.rs-summary { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.75rem 2.5rem; }
+.rs-block { margin: 0; min-width: 0; max-width: 100%; }
+.rs-block h3 {
+  margin: 0 0 0.25rem; font-size: 0.8rem; font-weight: 600; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--rs-axis-text);
 }
-.rs-summary-table td { border-bottom: 1px solid var(--rs-grid); }
+.rs-block table { width: auto; margin: 0; font-size: 0.9rem; }
+.rs-block th, .rs-block td { padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--rs-grid); }
+.rs-block th:first-child, .rs-block td:first-child { padding-left: 0; }
+.rs-block th:last-child, .rs-block td:last-child { padding-right: 0; }
+/* the header row names the samples, in small muted type; the training block's is empty, so its
+   rows line up with the other blocks' */
+.rs-block thead th {
+  background: none; font-size: 0.75rem; font-weight: 600; color: var(--rs-muted);
+  border-bottom: 1px solid var(--rs-axis-text);
+}
+.rs-block td:first-child { padding-right: 1.25rem; white-space: nowrap; }
 /* a sample's column: a width of its own (a minimum: the table grows for a longer value) */
-.rs-summary-table th.rs-num { width: 7rem; }
-.rs-summary-table .rs-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rs-block th.rs-num { min-width: 5rem; }
+.rs-block .rs-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* a label's notation (n, d, p(y = 1)): math in the page's face, its letters in italic */
+.rs-notation { margin-left: 0.15em; }
+.rs-notation sub { font-size: 0.7em; }
+/* one value for every sample (d, d_raw): centred across the sample columns */
+.rs-block td.rs-shared { text-align: center; }
+/* a row's label and its definition: a dotted underline marks the label, and the definition
+   shows under it while the label is hovered or focused (a tap focuses it on a phone), or while
+   the pointer is on the definition itself; Escape hides it (report.js) */
+.rs-label { position: relative; }
+.rs-term {
+  cursor: help; text-decoration: underline dotted var(--rs-muted); text-underline-offset: 0.2em;
+}
+.rs-term:focus { outline: none; }
+.rs-term:focus-visible { outline: 2px solid var(--rs-ink); outline-offset: 2px; border-radius: 2px; }
+.rs-tip {
+  position: absolute; top: 100%; left: 0; z-index: 10;
+  width: max-content; max-width: min(18rem, calc(100vw - 2rem));
+  padding: 0.4rem 0.6rem; border-radius: 4px;
+  background: var(--rs-ink); color: var(--rs-bg);
+  font-size: 0.8rem; font-weight: 400; line-height: 1.35; white-space: normal; text-align: left;
+  visibility: hidden; opacity: 0; transition: opacity 0.1s;
+}
+.rs-term:hover + .rs-tip, .rs-term:focus + .rs-tip, .rs-tip:hover {
+  visibility: visible; opacity: 1;
+}
+.rs-label.rs-dismissed .rs-tip { visibility: hidden; opacity: 0; }
+@media (max-width: 480px) {
+  .rs-summary { flex-direction: column; }
+  .rs-block, .rs-block table { width: 100%; }
+}
 
 /* square panel, like the R's coord_fixed(): the figure is as tall as it is wide */
 .rs-plot { width: 100%; aspect-ratio: 1 / 1; }

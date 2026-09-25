@@ -31,6 +31,19 @@
     update();
   }
 
+  // Escape hides the definition shown under a summary row's label (its tooltip), until the
+  // pointer leaves the label's cell or the label is focused again
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    document.querySelectorAll(".rs-label:hover, .rs-label:focus-within").forEach((cell) => {
+      cell.classList.add("rs-dismissed");
+      const restore = () => cell.classList.remove("rs-dismissed");
+      cell.addEventListener("mouseleave", restore, { once: true });
+      cell.addEventListener("focusin", restore, { once: true });
+    });
+    if (document.activeElement?.classList.contains("rs-term")) document.activeElement.blur();
+  });
+
   // the strip is one row; one too long for the card's width wraps instead of running off it
   const strip = document.querySelector(".rs-score-grid");
   let stripWidth;

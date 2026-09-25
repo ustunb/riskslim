@@ -69,10 +69,10 @@ def test_report_shows_training_data_and_labelled_test_sample():
     data = clf.report(X[:40], labels[:40]).data
 
     assert data['samples'] == ['Training', 'Test']
-    rows = {row['key']: row['values'] for row in data['summary']['rows']}
+    rows = {row['key']: row.get('values') for row in data['dataset']['rows']}
     assert rows['n'] == ['80', '40']
     assert rows['outcome_rate'] == ['62.5%', '62.5%']
-    assert 'run_time' in rows
+    assert 'run_time' in {row['key'] for row in data['training']['rows']}
 
 
 def test_solution_info_reports_positive_run_time():

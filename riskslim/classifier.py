@@ -226,7 +226,8 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
 
     def report(self, X_test=None, y_test=None, model_type=None, *, data=None, cv_models=None,
                **settings):
-        """HTML report of the fitted model: the model, a summary table, ROC and calibration.
+        """HTML report of the fitted model: dataset, training and performance tables, the model,
+        ROC and calibration.
 
         Parameters
         ----------

@@ -10,8 +10,10 @@ values are literals worked out by hand, not recomputed.
 
 One end-to-end test skips the fixture: it reads data/breastcancer_data.csv into a
 BinaryClassificationDataset, fits a small model and its 5 fold models (fit, then fit_cv), and
-checks only that clf.report(data=...) builds a page holding every component (model card,
-summary table, ROC, calibration) and both samples (Training, 5-CV). It asserts presence, not values or appearance.
+checks that clf.report(data=...) builds a page holding every component (dataset, training
+and performance blocks, model card, ROC, calibration) and both samples (Training, 5-CV), with
+one raw feature binarized into two items so d_raw < d. Apart from d and d_raw, it asserts
+presence, not values or appearance.
 
 Dimensions:
   model type:   risk_score (points 2, 1, -1), checklist (+1 items only), checklist (with a -1 item)
@@ -84,12 +86,12 @@ from utils import (
 )
 
 from riskslim import RiskSLIMClassifier
-from riskslim.data import BinaryClassificationDataset
+from riskslim.data import BinaryClassificationDataset, NumericBinarizer
 from riskslim.report import ModelReport
 from riskslim.report.model_report import ASSETS, SAMPLE_COLORS, TEMPLATE_NAME
 
-DATA_KEYS = {"schema_version", "title", "outcome_name", "samples", "model", "summary", "roc",
-             "calibration", "settings", "figures", "narrow"}
+DATA_KEYS = {"schema_version", "title", "outcome_name", "samples", "dataset", "training",
+             "performance", "model", "roc", "calibration", "settings", "figures", "narrow"}
 CDN_URLS = [
     "https://cdn.jsdelivr.net/npm/plotly.js-basic-dist-min@4.1.1/plotly-basic.min.js",
     "https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.min.css",
@@ -97,8 +99,8 @@ CDN_URLS = [
 DATA_BLOCK = re.compile(r'<script type="application/json" id="report-data">(.*?)</script>', re.S)
 HOSTILE_NAMES = ["a</script><script>alert(1)</script>", "b<!-- c", "c</ScRiPt><script>alert(2)</script>"]
 BREASTCANCER_FILE = Path(__file__).parents[1] / "data" / "breastcancer_data.csv"
-COMPONENTS = ['class="rs-model-table"', 'class="rs-summary-table"', 'data-figure="roc"',
-              'data-figure="calibration"']
+COMPONENTS = ["<h3>Dataset</h3>", "<h3>Training</h3>", "<h3>Performance</h3>",
+              'class="rs-model-table"', 'data-figure="roc"', 'data-figure="calibration"']
 # How far the score-to-risk strip runs past its own box, past the card holding it, and past the
 # viewport, in px, and how many rows it takes. The three overflows are 0 at every width: the strip
 # neither scrolls sideways nor pushes the page wider than the window, and it is one row.
@@ -278,24 +280,30 @@ def test_roc_has_a_point_per_score_threshold_from_origin_to_corner(report):
     assert roc["Test"]["auc"] == 1.0
 
 
-def test_summary_is_one_flat_table_of_formatted_values(report):
+def test_summary_blocks_hold_formatted_values(report):
     data = report.data
 
     assert data["samples"] == ["Training", "Test"]
-    # one header row, naming the samples; no block subheaders and no "value" header
-    assert data["summary"]["columns"] == ["", "Training", "Test"]
-    # a row that is not per-sample carries one value, whatever the number of samples
-    assert [(row["label"], row["values"]) for row in data["summary"]["rows"]] == [
-        ("N", ["8", "4"]),
+    # the dataset and performance blocks: one column per sample
+    assert data["dataset"]["columns"] == data["performance"]["columns"] == ["", "Training", "Test"]
+    # d and d_raw hold for every sample: one value each
+    assert [(row["label"], row.get("values", row.get("value")))
+            for row in data["dataset"]["rows"]] == [
+        ("Sample Size", ["8", "4"]),
+        ("Features", "3"),
+        ("Raw Features", "3"),
         ("Outcome Rate", ["50.0%", "50.0%"]),
-        ("Model Size", ["3 (max 3)"]),
-        ("Point Range", ["-5 to 5"]),
-        ("Objective Value", ["0.5000"]),
-        ("Optimality Gap", ["n/a"]),
-        ("Run Time", ["1.2 s"]),
+    ]
+    # the training block: one value per row, whatever the number of samples
+    assert [(row["label"], row["value"]) for row in data["training"]["rows"]] == [
+        ("Model Size", "3 (max 3)"),
+        ("Optimality Gap", "n/a"),
+        ("Run Time", "1.2 s"),
+    ]
+    assert [(row["label"], row["values"]) for row in data["performance"]["rows"]] == [
+        ("Log Loss", ["0.579", "0.295"]),
         ("AUC", ["0.844", "1.000"]),
         ("ECE", ["32.7%", "23.4%"]),
-        ("Log Loss", ["0.579", "0.295"]),
     ]
 
 
@@ -372,6 +380,8 @@ def test_html_holds_one_data_block_that_round_trips(fitted):
 
 def test_report_of_a_classifier_fit_on_a_dataset_holds_every_component():
     dataset = BinaryClassificationDataset.read_csv(BREASTCANCER_FILE)
+    # one of the 9 raw features binarized into two items: 10 features, 9 raw
+    dataset.processor.update({"ClumpThickness": NumericBinarizer(thresholds=[3, 6])})
     X, y = dataset.X, dataset.y
     classifier = RiskSLIMClassifier(max_size=3, max_coef=5, verbose=False, max_runtime=5,
                                     cplex_randomseed=0)
@@ -382,11 +392,14 @@ def test_report_of_a_classifier_fit_on_a_dataset_holds_every_component():
     data = json.loads(block)
 
     assert data["samples"] == ["Training", "5-CV"]
+    shared = {row["key"]: row["value"] for row in data["dataset"]["rows"] if "value" in row}
+    assert shared == {"d": "10", "d_raw": "9"}
     for component in COMPONENTS:
         assert component in page
     assert data["model"]["items"]
-    assert data["summary"]["columns"] == ["", *data["samples"]]
-    assert data["summary"]["rows"]  # the rows themselves are pinned by the flat-table test
+    for block in ("dataset", "performance"):
+        assert data[block]["columns"] == ["", *data["samples"]]
+        assert data[block]["rows"]  # the rows themselves are pinned by the summary-blocks test
     for key in ("roc", "calibration"):
         # a trace is named for its legend entry: the sample, then its n, outcome rate and metric;
         # the traces run last sample first, so the first is drawn on top
@@ -409,7 +422,7 @@ def test_settings_choose_the_cards_the_samples_and_where_the_tails_collapse(fitt
     assert re.findall(r"<h3>(.*?)</h3>", report.html) == ["Model", "Calibration Plot"]
     assert data["samples"] == list(data["roc"]) == list(data["calibration"]) == \
         ["Test", "Training"]
-    assert data["summary"]["columns"] == ["", "Test", "Training"]
+    assert data["dataset"]["columns"] == ["", "Test", "Training"]
     train, test = data["figures"]["calibration"]["data"]  # and no ROC figure: its card is not shown
     assert set(data["figures"]) == {"calibration"}
     # a sample keeps its colour wherever it is listed

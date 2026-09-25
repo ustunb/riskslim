@@ -67,7 +67,7 @@ The same code is in [`examples/quickstart.py`](examples/quickstart.py), which al
 - `RiskSLIMOptimizer`: cutting-plane mixed-integer optimizer for a risk score.
 - `CoefficientSet`: integer coefficient bounds and sparsity penalties.
 - `riskslim.data.BinaryClassificationDataset`: a binary classification dataset — reads a CSV, binarizes features into items (e.g. `ClumpThickness_geq_5`) and holds CV folds (pass `cv=PredefinedSplit(data.cv["K05N01"])` to `fit_cv` to use them).
-- `RiskSLIMClassifier.report(data=...)`: a `ModelReport` of a fitted model (model, summary table, ROC and calibration plots), with a sample per column (training, 5-CV after `fit_cv`, test); `.save(path)` writes the HTML.
+- `RiskSLIMClassifier.report(data=...)`: a `ModelReport` of a fitted model (dataset, training and performance tables, the model, ROC and calibration plots), with a sample per column (training, 5-CV after `fit_cv`, test); `.save(path)` writes the HTML.
 
 ## Paper
 

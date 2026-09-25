@@ -91,8 +91,9 @@ from ..utils import data_fingerprint, is_integer
 SCHEMA_VERSION = 2
 MODEL_TYPES = {"risk_score": "Risk Score", "checklist": "Checklist"}
 
-# the page's cards
-COMPONENTS = ("model", "summary", "roc", "calibration")
+# the page's components: the three summary blocks (the dataset, how the model was trained, its
+# performance), the Model card, then the ROC and calibration cards
+COMPONENTS = ("dataset", "training", "performance", "model", "roc", "calibration")
 # risks below the low threshold (above the high one) collapse into one strip cell and one
 # calibration point: the R's defaults
 LOW_RISK_THRESHOLD = 0.01
@@ -102,6 +103,69 @@ HIGH_RISK_THRESHOLD = 0.99
 # integer scores, plus the two tails), so the cap only folds scores when a caller has widened the
 # thresholds
 MAX_SCORES_PRINTED = 12
+
+# Every row of the dataset, training and performance blocks, in one place: its label (plain
+# text), how its value prints, the definition its label shows on hover, and the notation printed
+# after the label (HTML the page writes as it is, so literals only; None for none). The legends
+# print their numbers with these formatters too. A value of None, NaN or inf prints as "n/a"
+# (``format_row``).
+@dataclass(frozen=True)
+class SummaryRow:
+    label: str
+    format: object  # the value -> its display string
+    definition: str
+    notation: str | None = None
+
+
+SUMMARY_ROWS = {
+    "n": SummaryRow(
+        "Sample Size", lambda n: f"{int(n):,}",
+        "The number of rows in the sample. The more rows, the more the numbers below can be "
+        "trusted.",
+        "<i>n</i>"),
+    "d": SummaryRow(
+        "Features", lambda d: f"{int(d):,}",
+        "The number of features the model was fit on, after binarization: the items it could "
+        "choose from.",
+        "<i>d</i>"),
+    "d_raw": SummaryRow(
+        "Raw Features", lambda d: f"{int(d):,}",
+        "The number of features in the data before binarization. Fewer than d means some "
+        "features were split into several binary items.",
+        "<i>d</i><sub>raw</sub>"),
+    "outcome_rate": SummaryRow(
+        "Outcome Rate", lambda rate: percent(rate),
+        "The share of rows in the sample with the outcome. It is the baseline the model's "
+        "risks are measured against.",
+        "<i>p</i>(<i>y</i> = 1)"),
+    "model_size": SummaryRow(
+        "Model Size", lambda size: f"{size[0]} (max {size[1]})",
+        "The number of features the model uses, and the most the fit allowed. A smaller model "
+        "is easier to use and to check by hand."),
+    "optimality_gap": SummaryRow(
+        "Optimality Gap", lambda gap: percent(gap),
+        "How far the fitted model could be from the best model under the same constraints, as "
+        "a share of its objective. 0% means it is certified optimal."),
+    "run_time": SummaryRow(
+        "Run Time", lambda seconds: f"{seconds:.2f} s" if seconds < 1 else f"{seconds:.1f} s",
+        "How long the solver took to fit the model."),
+    "log_loss": SummaryRow(
+        "Log Loss", lambda loss: f"{loss:.3f}",
+        "The average negative log-likelihood of the outcomes under the predicted risks. Lower "
+        "is better: it rewards risks that are both well ranked and well calibrated."),
+    "auc": SummaryRow(
+        "AUC", lambda auc: f"{auc:.3f}",
+        "Area under the ROC curve: the chance that a random row with the outcome scores higher "
+        "than a random row without it. 0.5 is chance, 1 is a perfect ranking."),
+    "ece": SummaryRow(
+        "ECE", lambda ece: percent(ece),
+        "Expected calibration error: the average gap between predicted and observed risk across "
+        "score bins. Lower means the risks can be taken at face value."),
+}
+# the rows of each block, in order
+DATASET_ROWS = ("n", "d", "d_raw", "outcome_rate")
+TRAINING_ROWS = ("model_size", "optimality_gap", "run_time")
+PERFORMANCE_ROWS = ("log_loss", "auc", "ece")
 
 # sample names, in page order: the training sample, the CV sample ("5-CV"), then the other splits;
 # keyed by the stable names the samples argument takes (the CV sample's key is "cv")
@@ -208,15 +272,16 @@ class ReportSettings:
 
     Parameters
     ----------
-    components : sequence of {"model", "summary", "roc", "calibration"}, optional
-        The cards on the page; a component left out is not shown. The page places them in
-        fixed bands whatever the order given: the summary, the model, then the ROC and
-        calibration plots side by side.
+    components : sequence of str, optional
+        The components on the page, drawn from ``COMPONENTS``: ``"dataset"``, ``"training"``,
+        ``"performance"``, ``"model"``, ``"roc"``, ``"calibration"``; one left out is not shown.
+        The page places them in fixed bands whatever the order given: the dataset, training and
+        performance blocks, the model, then the ROC and calibration plots side by side.
     samples : sequence of {"training", "cv", "validation", "test"}, optional
-        The samples shown in the summary, ROC and calibration, in this order. None shows every
-        available sample; a sample named but not available (``"cv"`` without ``fit_cv``) raises
-        when the report is built. The Model card reads its value ranges from the training rows
-        either way.
+        The samples shown in the dataset and performance blocks, the ROC and the calibration,
+        in this order. None shows every available sample; a sample named but not available
+        (``"cv"`` without ``fit_cv``) raises when the report is built. The Model card reads its
+        value ranges from the training rows either way.
     low_risk_threshold, high_risk_threshold : float, optional
         Risks below the first (above the second) collapse into one ``< x%`` (``> y%``) cell of
         the score-to-risk strip and one calibration point. The R's defaults, 0.01 and 0.99.
@@ -266,8 +331,8 @@ class ModelReport:
     ----------
     classifier : riskslim.RiskSLIMClassifier
         A fitted classifier. The report shows its coefficients, its solver statistics
-        (``solution_info_``: ``objective_value``, ``optimality_gap``, ``run_time``) and its
-        constraints (``max_size_``, and the point range of ``coef_set_``).
+        (``solution_info_``: ``optimality_gap``, ``run_time``) and its model size limit
+        (``max_size_``, capped by ``coef_set_``).
     data : riskslim.data.BinaryClassificationDataset, optional
         The dataset the model was fit on. Its feature and outcome names label the page, and when
         it has splits (``data.split(...)``) each split is a sample. Without it, or without
@@ -307,7 +372,8 @@ class ModelReport:
         evaluation = evaluate(classifier, self.dataset, **self._inputs, settings=settings)
         # every component, shown or not: the data block holds every section's numbers (a figure
         # is built only for a component shown)
-        builders = {"model": build_model_component, "summary": build_summary_component,
+        builders = {"dataset": build_dataset_component, "training": build_training_component,
+                    "performance": build_performance_component, "model": build_model_component,
                     "roc": build_roc_component, "calibration": build_calibration_component}
         built = {name: builders[name](evaluation, settings) for name in COMPONENTS}
         self.components = {name: built[name] for name in settings.components}
@@ -325,7 +391,8 @@ class ModelReport:
         """The report page as a string."""
         shell, styles, scripts = load_assets()
         return shell.render(title=self.data["title"], model=self.data["model"],
-                            summary=self.data["summary"],
+                            dataset=self.data["dataset"], training=self.data["training"],
+                            performance=self.data["performance"],
                             components=self.data["settings"]["components"],
                             styles=styles, scripts=scripts,
                             data=Markup(json_for_script(self.data)))
@@ -357,10 +424,11 @@ class Evaluation:
     outcome_name: str
     model_type: str
     solution_info: dict  # the classifier's solution_info_
-    constraints: dict  # fitted_constraints
+    max_size: int  # fitted_max_size
     points: np.ndarray  # the coefficients, intercept apart
     intercept: float
     item_names: list
+    n_raw_features: int  # raw_feature_count
     binary: dict  # binary_items
     # {j: values} of each nonzero item on the training rows, [0, 1] for a binary one: all the
     # report keeps of the training X
@@ -382,8 +450,8 @@ class Evaluation:
     tables: dict  # calibration_table
     roc: dict  # roc_section
     ece: dict  # expected_calibration_error
-    # {"n", "outcome_rate", "auc", "ece", "log_loss"} as printed, the strings the summary table
-    # and the legends both show, so they cannot round the same number two ways
+    # {"n", "outcome_rate", "auc", "ece", "log_loss"} as printed, the strings the dataset and
+    # performance blocks and the legends all show, so they cannot round the same number two ways
     sample_numbers: dict
 
 
@@ -394,7 +462,7 @@ def evaluate(classifier, dataset, data, cv_models, model_type, X_test, y_test, s
     weights, variable_names = checked_coefficients(classifier, dataset)
     outcome_name = str(dataset.names.y)
     solution_info = classifier.solution_info_
-    constraints = fitted_constraints(classifier)
+    max_size = fitted_max_size(classifier)
 
     # the splits stay local: the page needs only what they produce, and holding them would pin
     # a float64 copy of every X for the report's lifetime (the report keeps the arguments as
@@ -450,13 +518,14 @@ def evaluate(classifier, dataset, data, cv_models, model_type, X_test, y_test, s
     ece = {name: expected_calibration_error(y, score, b, score_type, risk_edges)
            for name, (y, score, b) in scored.items()}
     sample_numbers = {
-        name: {"n": f"{len(y):,}", "outcome_rate": percent(y.mean()),
-               "auc": f"{roc[name]['auc']:.3f}", "ece": percent(ece[name]),
-               "log_loss": f"{float(log_loss_value_from_scores((2 * y - 1) * (score + b))):.3f}"}
+        name: {key: format_row(key, value) for key, value in {
+            "n": len(y), "outcome_rate": y.mean(), "auc": roc[name]["auc"], "ece": ece[name],
+            "log_loss": float(log_loss_value_from_scores((2 * y - 1) * (score + b)))}.items()}
         for name, (y, score, b) in scored.items()}
     return Evaluation(
         outcome_name=outcome_name, model_type=model_type, solution_info=solution_info,
-        constraints=constraints, points=points, intercept=intercept, item_names=variable_names[1:],
+        max_size=max_size, points=points, intercept=intercept, item_names=variable_names[1:],
+        n_raw_features=raw_feature_count(dataset),
         binary=binary, item_values=item_values, score_type=score_type, risk_edges=risk_edges,
         checklist_m=checklist_m, strip_cells=strip_cells, score_bins=score_bins,
         n_scores=n_scores, printed_risks=printed_risks, sample_keys=sample_keys, scored=scored,
@@ -467,9 +536,9 @@ def evaluate(classifier, dataset, data, cv_models, model_type, X_test, y_test, s
 class ReportComponent:
     """One card of the page: its section of the data block (``data``, numbers and display
     strings) and its Plotly figure (``figure``, a ``go.Figure``; None for the tables and for a
-    card not shown). Each is
-    built from the ``Evaluation`` alone, by ``build_model_component``,
-    ``build_summary_component``, ``build_roc_component`` or ``build_calibration_component``."""
+    card not shown). Each is built from the ``Evaluation`` alone, by ``build_dataset_component``,
+    ``build_training_component``, ``build_performance_component``, ``build_model_component``,
+    ``build_roc_component`` or ``build_calibration_component``."""
 
     data: dict
     figure: go.Figure | None = None
@@ -541,6 +610,15 @@ def checked_dataset(data, classifier):
     return data
 
 
+def raw_feature_count(dataset):
+    """The number of raw features (before binarization) behind the dataset's ``X``: the inputs
+    of its processor that give at least one column of ``X``. Data that was binarized before it
+    reached riskslim (arrays, or a CSV of binary columns) has one raw feature per column."""
+    columns = set(dataset.names.X)
+    return sum(any(name in columns for name in outputs)
+               for outputs in dataset.processor.slices.values())
+
+
 def checked_coefficients(classifier, dataset):
     """The coefficients, intercept first, and their names from the dataset."""
     weights = np.asarray(classifier._weights, dtype=float)
@@ -549,20 +627,17 @@ def checked_coefficients(classifier, dataset):
     return weights, [INTERCEPT_NAME, *dataset.names.X]
 
 
-def fitted_constraints(classifier):
-    """The model size limit and the point range over the non-intercept coefficients.
+def fitted_max_size(classifier):
+    """The model size limit the optimizer enforced.
 
-    Model size counts features, never the intercept. The limit is the one the optimizer
-    enforced: ``max_size_`` (``d + 1`` by default) capped at the number of penalized
-    coefficients (``RiskSLIMOptimizer``), read from ``coef_set_`` because ``optimizer_`` does not
-    survive pickling.
+    Model size counts features, never the intercept. The limit is ``max_size_`` (``d + 1`` by
+    default) capped at the number of penalized coefficients (``RiskSLIMOptimizer``), read from
+    ``coef_set_`` because ``optimizer_`` does not survive pickling.
     """
     coef_set = classifier.coef_set_
     features = [j for j, name in enumerate(coef_set.variable_names) if name != INTERCEPT_NAME]
     penalized = int(np.count_nonzero(coef_set.penalized_indices()[features]))
-    return {"max_size": min(int(classifier.max_size_), penalized),
-            "point_range": (float(np.min(coef_set.lb[features])),
-                            float(np.max(coef_set.ub[features])))}
+    return min(int(classifier.max_size_), penalized)
 
 
 def checked_model_type(model_type, points, binary, names):
@@ -1093,53 +1168,57 @@ def expected_calibration_error(y, score, intercept, score_type, risk_edges):
     return float(np.sum(table["n"] * table["local_error"]) / len(y))
 
 
-def summary_row(key, label, values, span=1):
-    """One row of the summary table: a stable key, its leftmost-column label, its values, and
-    how many sample columns each value spans (a row that is not per-sample spans them all)."""
-    return {"key": key, "label": label, "values": values, "span": span}
+def summary_row(key, **value):
+    """A row of a summary block: its ``key``, and the ``label``, ``notation`` and ``definition``
+    of ``SUMMARY_ROWS``; ``value`` is its ``values`` (one per sample) or its ``value`` (one for
+    the whole row)."""
+    row = SUMMARY_ROWS[key]
+    return {"key": key, "label": row.label, "notation": row.notation,
+            "definition": row.definition, **value}
 
 
-def build_summary_component(evaluation, settings):
-    """The Summary card, a table with no figure: one flat table of formatted strings,
-    ``columns`` (a blank label column, then the samples) and ``rows`` in reading order -- the
-    data, the constraints, the solver, the performance.
+def sample_table(evaluation, keys, shared=None):
+    """A block with one column per sample: ``columns`` (a blank label column, then the samples)
+    and a ``summary_row`` per key of ``keys``: its ``values``, one per sample in column order,
+    read from the ``Evaluation``'s ``sample_numbers``; or, for a key of ``shared``
+    (``{key: value}``, the same in every sample), its one formatted ``value``."""
+    shared = shared or {}
+    sample_numbers = evaluation.sample_numbers
+    return {"columns": ["", *sample_numbers],
+            "rows": [summary_row(key, value=format_row(key, shared[key])) if key in shared
+                     else summary_row(key, values=[numbers[key]
+                                                   for numbers in sample_numbers.values()])
+                     for key in keys]}
 
-    There are no block subheaders and no "value" header: the samples name the columns, and a row
-    that is not per-sample simply carries one value.
 
-    Each per-sample row reads its strings from the ``Evaluation``'s ``sample_numbers``, in
-    column order; the model size counts its nonzero items (``item_values``). ``settings``, a
-    ``ReportSettings``, changes nothing here: every builder takes it.
-    """
-    sample_numbers, constraints = evaluation.sample_numbers, evaluation.constraints
-    training = evaluation.solution_info
-    names = list(sample_numbers)
+def build_dataset_component(evaluation, settings):
+    """The Dataset block, a table with no figure (``sample_table``): each sample's size ``n``
+    and outcome rate ``p(y = 1)``, and the features the model was fit on, ``d``, and before
+    binarization, ``d_raw`` (``raw_feature_count``), one value each for every sample.
+    ``settings``, a ``ReportSettings``, changes nothing here: every builder takes it."""
+    return ReportComponent(sample_table(
+        evaluation, DATASET_ROWS,
+        shared={"d": len(evaluation.item_names), "d_raw": evaluation.n_raw_features}))
 
-    def per_sample(key):
-        return [sample_numbers[s][key] for s in names]
 
-    rows = [summary_row("n", "N", per_sample("n")),
-            summary_row("outcome_rate", "Outcome Rate", per_sample("outcome_rate"))]
+def build_training_component(evaluation, settings):
+    """The Training block, a table with no figure: how the model was fit, one ``value`` per
+    ``summary_row`` and no sample columns: its size against the size limit it was fit under, and
+    the solver's optimality gap and run time. ``settings``, a ``ReportSettings``, changes nothing
+    here."""
+    solution = evaluation.solution_info
+    values = {"model_size": (len(evaluation.item_values), evaluation.max_size),
+              "optimality_gap": solution.get("optimality_gap"),
+              "run_time": solution.get("run_time")}
+    return ReportComponent({"rows": [summary_row(key, value=format_row(key, values[key]))
+                                     for key in TRAINING_ROWS]})
 
-    size = f"{len(evaluation.item_values)} (max {int(constraints['max_size'])})"
-    lb, ub = constraints["point_range"]
-    run_time = "{:.2f} s" if (training.get("run_time") or 0) < 1 else "{:.1f} s"
-    rows += [
-        summary_row("model_size", "Model Size", [size], span=len(names)),
-        summary_row("point_range", "Point Range", [f"{number(lb)} to {number(ub)}"],
-                    span=len(names)),
-        summary_row("objective_value", "Objective Value",
-                    [fmt(training.get("objective_value"), "{:.4f}")], span=len(names)),
-        summary_row("optimality_gap", "Optimality Gap",
-                    [fmt(training.get("optimality_gap"), "{:.1%}")], span=len(names)),
-        summary_row("run_time", "Run Time", [fmt(training.get("run_time"), run_time)],
-                    span=len(names)),
-    ]
 
-    rows += [summary_row("auc", "AUC", per_sample("auc")),
-             summary_row("ece", "ECE", per_sample("ece")),
-             summary_row("log_loss", "Log Loss", per_sample("log_loss"))]
-    return ReportComponent({"columns": ["", *names], "rows": rows})
+def build_performance_component(evaluation, settings):
+    """The Performance block, a table with no figure (``sample_table``): each sample's log loss,
+    AUC and ECE, the strings the legends show too. ``settings``, a ``ReportSettings``, changes
+    nothing here."""
+    return ReportComponent(sample_table(evaluation, PERFORMANCE_ROWS))
 
 
 def number(value):
@@ -1148,11 +1227,12 @@ def number(value):
     return int(value) if value.is_integer() else value
 
 
-def fmt(value, template):
-    """Format a finite number, or "n/a" for None, NaN or inf."""
-    if value is None or not np.isfinite(value):
+def format_row(key, value):
+    """``value`` as the summary row ``key`` prints it (``SUMMARY_ROWS``), or "n/a" for None, NaN
+    or inf."""
+    if value is None or (isinstance(value, numbers.Real) and not np.isfinite(value)):
         return "n/a"
-    return template.format(float(value))
+    return SUMMARY_ROWS[key].format(value)
 
 
 # ---------------------------------------------------------------------------
@@ -1194,9 +1274,9 @@ def build_calibration_component(evaluation, settings):
 def sample_labels(sample_numbers, metric):
     """``{sample: "Training<br>(n = 8,815 p = 12.4%)<br>AUC = 0.950"}``: a legend entry.
 
-    Every number is a string of the ``Evaluation``'s ``sample_numbers``, the one the summary
-    table shows, so the legend and the table cannot round the same number two ways. ``metric``
-    names the figure's own headline statistic (``auc`` or ``ece``).
+    Every number is a string of the ``Evaluation``'s ``sample_numbers``, the one the dataset
+    and performance blocks show, so the legend and a block cannot round the same number two
+    ways. ``metric`` names the figure's own headline statistic (``auc`` or ``ece``).
     """
     label = {"auc": "AUC", "ece": "ECE"}[metric]
     return {name: f"{name}<br>(n = {numbers['n']} p = {numbers['outcome_rate']})<br>"

@@ -13,36 +13,85 @@
 </head>
 <body>
 {#- The page structure: fixed bands, top to bottom, whatever the order of components (which only
-    picks the cards): the summary table (no card), then the Model card, then the ROC and
-    calibration plots side by side. Jinja writes every table here; report.js adds up the Model
-    card from its inputs, wraps the strip when it does not fit on one row, draws the figures into
-    their [data-figure] boxes and fits each to its width, hides a calibration label another
-    covers, and mirrors a legend change onto the other plot. Dict keys that share a name with a
+    picks the ones shown): the dataset, training and performance blocks side by side (no
+    cards), then the Model card, then the ROC and calibration plots side by side. Jinja writes
+    every table here; report.js adds up the Model card from its inputs, wraps the strip when it
+    does not fit on one row, draws the figures into their [data-figure] boxes and fits each to
+    its width, hides a calibration label another covers, and mirrors a legend change onto the
+    other plot. Dict keys that share a name with a
     dict method (items, values) are read with [], which Jinja does not resolve to the method. #}
 <main class="container" id="report">
 <header class="rs-head"><h2>{{ title }}</h2></header>
 <section class="rs-bands">
-{%- if "summary" in components %}
-<table class="rs-summary-table">
+{#- a row's label cell: the label, then its notation (Python's HTML literals: <i>n</i>), and its
+    definition, a tooltip shown while the label is hovered or focused (a tap focuses it on a
+    phone) #}
+{%- macro label_cell(block, row) -%}
+<td class="rs-label"><span class="rs-term" tabindex="0" aria-describedby="rs-def-{{ block }}-{{ row.key }}">
+  {{- row.label }}{% if row.notation %} <span class="rs-notation">{{ row.notation | safe }}</span>{% endif -%}
+</span><span class="rs-tip" role="tooltip" id="rs-def-{{ block }}-{{ row.key }}">{{ row.definition }}</span></td>
+{%- endmacro %}
+{#- a block with one column per sample: a header row naming the samples, then its rows, each
+    with a value per sample or one value across them all #}
+{%- macro sample_table(name, block) %}
+<table>
   <thead>
     <tr>
-      <th>{{ summary.columns[0] }}</th>
-      {%- for column in summary.columns[1:] %}
+      <th></th>
+      {%- for column in block.columns[1:] %}
       <th class="rs-num">{{ column }}</th>
       {%- endfor %}
     </tr>
   </thead>
   <tbody>
-    {%- for row in summary.rows %}
+    {%- for row in block.rows %}
     <tr>
-      <td>{{ row.label }}</td>
+      {{ label_cell(name, row) }}
+      {%- if "values" in row %}
       {%- for value in row["values"] %}
-      <td class="rs-num" colspan="{{ row.span }}">{{ value }}</td>
+      <td class="rs-num">{{ value }}</td>
       {%- endfor %}
+      {%- else %}
+      <td class="rs-num rs-shared" colspan="{{ block.columns | length - 1 }}">{{ row.value }}</td>
+      {%- endif %}
     </tr>
     {%- endfor %}
   </tbody>
 </table>
+{%- endmacro %}
+{%- if "dataset" in components or "training" in components or "performance" in components %}
+<div class="rs-summary">
+{%- if "dataset" in components %}
+<section class="rs-block">
+<h3>Dataset</h3>
+{{- sample_table("dataset", dataset) }}
+</section>
+{%- endif %}
+{%- if "training" in components %}
+<section class="rs-block">
+<h3>Training</h3>
+{#- one value per row, with no sample columns; the empty header row lines its rows up with the
+    other blocks' #}
+<table>
+  <thead><tr><th></th><th></th></tr></thead>
+  <tbody>
+    {%- for row in training.rows %}
+    <tr>
+      {{ label_cell("training", row) }}
+      <td class="rs-num">{{ row.value }}</td>
+    </tr>
+    {%- endfor %}
+  </tbody>
+</table>
+</section>
+{%- endif %}
+{%- if "performance" in components %}
+<section class="rs-block">
+<h3>Performance</h3>
+{{- sample_table("performance", performance) }}
+</section>
+{%- endif %}
+</div>
 {%- endif %}
 {%- if "model" in components %}
 <article class="rs-card rs-model-card">
