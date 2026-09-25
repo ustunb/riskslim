@@ -388,29 +388,25 @@ class BinaryClassificationDataset(DillSerializableMixin):
         """
         data_path = Path(data_file)
         if helper_file is None and data_path.name.endswith('_data.csv'):
-            helper_file = data_path.with_name(data_path.name[:-len('_data.csv')] + '_helper.csv')
-        files = {
-            'data': data_path,
-            'helper': Path(helper_file).with_suffix('.csv') if helper_file is not None else None,
-            }
-        assert files[
-            'data'].is_file(), f"could not find dataset file: {files['data']}"
+            helper_file = data_path.with_name(data_path.name.removesuffix('_data.csv') + '_helper.csv')
+        helper_path = Path(helper_file).with_suffix('.csv') if helper_file is not None else None
+        assert data_path.is_file(), f"could not find dataset file: {data_path}"
 
         # read helper file
-        if files['helper'] is not None and files['helper'].is_file():
-            hf = pd.read_csv(files['helper'], sep = ',')
+        if helper_path is not None and helper_path.is_file():
+            hf = pd.read_csv(helper_path, sep = ',')
             hf['is_variable'] = ~(hf['is_outcome'].astype(bool) | hf[
                 'is_group_attribute'].astype(bool))
             assert hf[['is_outcome', 'is_group_attribute', 'is_variable']].isin([0, 1]).to_numpy().all()
         else:
             warnings.warn(
-                    f"did not find helper file: {files['helper']} inferring data types from disk")
+                    f"did not find helper file: {helper_path} inferring data types from disk")
             # if no helper file is found, we assume:
             # df has d+1 columns:
             # - column 0 is the outcome
             # - column 1...k are group attributes if they have non-numeric values (must be contiguous)
             # - column k+1,...,d are features
-            df = pd.read_csv(files['data'], sep = ',')
+            df = pd.read_csv(data_path, sep = ',')
             headers = df.columns.tolist()
             d = len(headers)
             assert d >= 2, "expected at least 2 columns (outcome and 1 feature)"
@@ -446,7 +442,7 @@ class BinaryClassificationDataset(DillSerializableMixin):
                   | dict.fromkeys(names.X, np.float64))
 
         # load data with correct dtypes
-        df = pd.read_csv(files['data'], sep = ',', dtype = dtypes)
+        df = pd.read_csv(data_path, sep = ',', dtype = dtypes)
         assert set(df.columns.to_list()) == set(hf['header'].to_list()), 'helper file should contain metadata for every column in the data file'
         return BinaryClassificationDataset(
                 df_raw = df,

@@ -56,7 +56,6 @@ class CoefficientSet:
         loss increases with the offset for any feasible coefficients (below offset_lb + 1, it decreases); the +1
         covers rounding to an integer offset.
 
-
         Parameters
         ----------
         X
@@ -73,14 +72,9 @@ class CoefficientSet:
         if INTERCEPT_NAME not in self._coef_elements:
             raise ValueError(f"coef_set must contain a variable for the offset called {INTERCEPT_NAME}")
 
-        # non-intercept coefficients: the model-size limit counts only their nonzeros
+        # smallest / largest score over the data from non-intercept coefficients, with at most
+        # max_L0_value penalized nonzeros
         idx = np.array([i for i, n in enumerate(self._variable_names) if n != INTERCEPT_NAME])
-        if max_L0_value is None:
-            max_L0_value = len(idx)
-        else:
-            max_L0_value = min(len(idx), max_L0_value)
-
-        # smallest / largest score over the data, with at most max_L0_value penalized nonzeros
         Z = X[:, idx] * y[:, None]
         s_min, s_max = get_score_bounds(Z_min = np.min(Z, axis = 0),
                                         Z_max = np.max(Z, axis = 0),
@@ -89,8 +83,6 @@ class CoefficientSet:
                                         L0_reg_ind = self.penalized_indices()[idx],
                                         max_size = max_L0_value)
 
-        # an optimal intercept exceeds max_abs_score only by the class log-odds (the loss gradient
-        # in the intercept is positive beyond it); +1 covers rounding to an integer intercept
         max_abs_score = max(abs(s_min), abs(s_max))
         n_pos = np.count_nonzero(y > 0)
         n_neg = len(y) - n_pos
