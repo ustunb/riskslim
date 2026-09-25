@@ -18,12 +18,6 @@ from .coefficient_set import CoefficientSet
 from .data import BinaryClassificationDataset
 from .defaults import DEFAULT_LCPA_SETTINGS, INTERCEPT_NAME, OUTCOME_NAME
 from .report import ModelReport
-from .report.model_report import (
-    COMPONENTS,
-    HIGH_RISK_THRESHOLD,
-    LOW_RISK_THRESHOLD,
-    MAX_SCORES_PRINTED,
-)
 from .utils import print_model
 
 
@@ -227,8 +221,7 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         return self
 
     def report(self, X_test=None, y_test=None, model_type=None, *, data=None, cv_models=None,
-               components=COMPONENTS, samples=None, low_risk_threshold=LOW_RISK_THRESHOLD,
-               high_risk_threshold=HIGH_RISK_THRESHOLD, max_scores_printed=MAX_SCORES_PRINTED):
+               **settings):
         """HTML report of the fitted model: the model, a summary table, ROC and calibration.
 
         Parameters
@@ -247,17 +240,12 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         cv_models : list of RiskSLIMClassifier, optional
             Fitted per-fold models for the CV sample, scoring the test rows of ``fit_cv``. None
             uses ``cv_results_["estimator"]`` after ``fit_cv``.
-        components : sequence of {"model", "summary", "roc", "calibration"}, optional
-            The cards on the page, in order. See ``ModelReport``.
-        samples : sequence of {"training", "cv", "validation", "test"}, optional
-            The samples shown, in order. See ``ModelReport``.
-        low_risk_threshold, high_risk_threshold : float, optional
-            Where the risks collapse at each end; a continuous model ignores them. See
-            ``ModelReport``.
-        max_scores_printed : int, optional
-            The most cells a discrete model's score-to-risk strip prints, at least 2; the most
-            extreme scores fold into the tails to fit. A continuous model's number of risk bins.
-            See ``ModelReport``.
+        **settings
+            Fields of ``riskslim.report.ReportSettings``: ``components`` (the cards, in order),
+            ``samples`` (the samples shown, in order), ``low_risk_threshold`` and
+            ``high_risk_threshold`` (where the risks collapse at each end) and
+            ``max_scores_printed`` (the most cells of a discrete model's score-to-risk strip, or
+            a continuous model's number of risk bins). See ``ReportSettings``.
 
         Returns
         -------
@@ -265,10 +253,7 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
             Use ``report.save(path)`` to write an HTML file; notebooks display it inline.
         """
         return ModelReport(self, data=data, cv_models=cv_models, model_type=model_type,
-                           X_test=X_test, y_test=y_test, components=components, samples=samples,
-                           low_risk_threshold=low_risk_threshold,
-                           high_risk_threshold=high_risk_threshold,
-                           max_scores_printed=max_scores_printed)
+                           X_test=X_test, y_test=y_test, **settings)
 
     def decision_function(self, X):
         """Risk score of each sample; > 0 predicts ``classes_[1]``.

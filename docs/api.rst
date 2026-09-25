@@ -83,6 +83,7 @@ HTML report of a fitted model: the model, a summary table, ROC and calibration p
    :toctree: generated/
 
    ModelReport
+   ReportSettings
 
 
 

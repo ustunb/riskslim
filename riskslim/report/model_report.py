@@ -67,6 +67,7 @@ import json
 import math
 import numbers
 import warnings
+from dataclasses import dataclass
 from functools import cache, partial
 from importlib.resources import files
 from pathlib import Path
@@ -104,6 +105,8 @@ MAX_SCORES_PRINTED = 12
 # keyed by the stable names the samples argument takes (the CV sample's key is "cv")
 TRAINING = "Training"
 SPLIT_SAMPLES = {"training": TRAINING, "validation": "Validation", "test": "Test"}
+# every key the samples argument takes, in page order
+SAMPLE_KEYS = ("training", "cv", "validation", "test")
 
 # how each rule-name operator (``feature_op_value``) is shown
 OPERATOR_SYMBOLS = {"geq": "≥", "leq": "≤", "lt": "<", "gt": ">", "eq": "=", "neq": "≠",
@@ -192,11 +195,62 @@ NARROW_LAYOUT = go.Layout(
 NARROW_CIRCLE_PX = 20
 
 
+@dataclass(frozen=True)
+class ReportSettings:
+    """What a ``ModelReport`` shows and how: its keyword arguments, checked on construction.
+
+    Frozen: a report built with other settings is a new report. An unknown setting raises
+    TypeError; an invalid value raises ValueError.
+
+    Parameters
+    ----------
+    components : sequence of {"model", "summary", "roc", "calibration"}, optional
+        The cards on the page, in this order; a component left out is not shown.
+    samples : sequence of {"training", "cv", "validation", "test"}, optional
+        The samples shown in the summary, ROC and calibration, in this order. None shows every
+        available sample; a sample named but not available (``"cv"`` without ``fit_cv``) raises
+        when the report is built. The Model card reads its value ranges from the training rows
+        either way.
+    low_risk_threshold, high_risk_threshold : float, optional
+        Risks below the first (above the second) collapse into one ``< x%`` (``> y%``) cell of
+        the score-to-risk strip and one calibration point. The R's defaults, 0.01 and 0.99.
+        A continuous model, whose strip has no tails, ignores them.
+    max_scores_printed : int, optional
+        The most cells a discrete model's score-to-risk strip prints, at least 2 (the two
+        tails). When the thresholds leave more, the most extreme score printed on its own (risk
+        nearest 0 or 1) folds into its tail, one at a time, until the strip fits; each tail then
+        reads the risk of the nearest score still printed. 12 by default, which the default
+        thresholds never exceed. A continuous model bins its rows into this many equal-width
+        risk bins instead (``risk_bins``), and prints the bins that hold training rows.
+    """
+
+    components: tuple = COMPONENTS
+    samples: tuple | None = None
+    low_risk_threshold: float = LOW_RISK_THRESHOLD
+    high_risk_threshold: float = HIGH_RISK_THRESHOLD
+    max_scores_printed: int = MAX_SCORES_PRINTED
+
+    def __post_init__(self):
+        # frozen: each field is set to its checked value through object.__setattr__
+        checked = {
+            "components": tuple(checked_selection("components", self.components, COMPONENTS)),
+            # the keys only: which samples are available depends on the data
+            "samples": (None if self.samples is None
+                        else tuple(checked_selection("samples", self.samples, SAMPLE_KEYS))),
+            "max_scores_printed": checked_max_scores_printed(self.max_scores_printed),
+        }
+        checked["low_risk_threshold"], checked["high_risk_threshold"] = checked_risk_thresholds(
+            self.low_risk_threshold, self.high_risk_threshold)
+        for name, value in checked.items():
+            object.__setattr__(self, name, value)
+
+
 class ModelReport:
     """An HTML report for a risk score or a checklist.
 
-    ``report.data`` is everything the page shows, ``report.html`` is the page as a string,
-    ``report.save(path)`` writes it, and notebooks display it inline in an iframe.
+    ``report.settings`` is the ``ReportSettings`` it was built with, ``report.data`` is everything
+    the page shows, ``report.html`` is the page as a string, ``report.save(path)`` writes it, and
+    notebooks display it inline in an iframe.
     ``RiskSLIMClassifier.report(...)`` builds one.
 
     Parameters
@@ -220,32 +274,19 @@ class ModelReport:
     X_test, y_test : array-like, optional
         A held-out sample, shown as ``Test``. Ignored, with a warning, when ``data`` already has
         a test split.
-    components : sequence of {"model", "summary", "roc", "calibration"}, optional
-        The cards on the page, in this order; a component left out is not shown.
-    samples : sequence of {"training", "cv", "validation", "test"}, optional
-        The samples shown in the summary, ROC and calibration, in this order. None shows every
-        available sample. The Model card reads its value ranges from the training rows either way.
-    low_risk_threshold, high_risk_threshold : float, optional
-        Risks below the first (above the second) collapse into one ``< x%`` (``> y%``) cell of
-        the score-to-risk strip and one calibration point. The R's defaults, 0.01 and 0.99.
-        A continuous model, whose strip has no tails, ignores them.
-    max_scores_printed : int, optional
-        The most cells a discrete model's score-to-risk strip prints, at least 2 (the two
-        tails). When the thresholds leave more, the most extreme score printed on its own (risk
-        nearest 0 or 1) folds into its tail, one at a time, until the strip fits; each tail then
-        reads the risk of the nearest score still printed. 12 by default, which the default
-        thresholds never exceed. A continuous model bins its rows into this many equal-width
-        risk bins instead (``risk_bins``), and prints the bins that hold training rows.
+    **settings
+        Fields of ``ReportSettings``: ``components``, ``samples``, ``low_risk_threshold``,
+        ``high_risk_threshold`` and ``max_scores_printed``. An unknown one raises TypeError.
+        The report holds them as ``report.settings``.
     """
 
     def __init__(self, classifier, data=None, cv_models=None, model_type=None, X_test=None,
-                 y_test=None, *, components=COMPONENTS, samples=None,
-                 low_risk_threshold=LOW_RISK_THRESHOLD, high_risk_threshold=HIGH_RISK_THRESHOLD,
-                 max_scores_printed=MAX_SCORES_PRINTED):
+                 y_test=None, **settings):
         check_is_fitted(classifier)
-        components = checked_selection("components", components, COMPONENTS)
-        low_risk, high_risk = checked_risk_thresholds(low_risk_threshold, high_risk_threshold)
-        max_scores_printed = checked_max_scores_printed(max_scores_printed)
+        self.settings = settings = ReportSettings(**settings)
+        components = settings.components
+        low_risk, high_risk = settings.low_risk_threshold, settings.high_risk_threshold
+        max_scores_printed = settings.max_scores_printed
         dataset = checked_dataset(data, classifier)
         weights, variable_names = checked_coefficients(classifier, dataset)
         outcome_name = str(dataset.names.y)
@@ -286,8 +327,9 @@ class ModelReport:
             cv_name, cv_scored = cv
             scored[cv_name] = cv_scored
             available = {"training": TRAINING, "cv": cv_name, **available}
-        shown = (list(available) if samples is None
-                 else checked_selection("samples", samples, tuple(available)))
+        # the settings checked the keys; only here are the available samples known
+        shown = (list(available) if settings.samples is None
+                 else checked_selection("samples", settings.samples, tuple(available)))
         # {sample name: key} of the samples shown, in their order: the key picks a sample's colour
         sample_keys = {available[key]: key for key in shown}
         scored = {name: scored[name] for name in sample_keys}
@@ -320,7 +362,7 @@ class ModelReport:
             "summary": summary,
             "roc": roc,
             "calibration": calibration,
-            "settings": {"components": components, "samples": shown,
+            "settings": {"components": list(components), "samples": shown,
                          "low_risk_threshold": low_risk, "high_risk_threshold": high_risk,
                          "min_printed_risk": printed_risks[0],
                          "max_printed_risk": printed_risks[1],
