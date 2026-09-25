@@ -68,7 +68,7 @@ import math
 import numbers
 import warnings
 from dataclasses import dataclass
-from functools import cache, partial
+from functools import cache
 from importlib.resources import files
 from pathlib import Path
 
@@ -284,100 +284,46 @@ class ModelReport:
                  y_test=None, **settings):
         check_is_fitted(classifier)
         self.settings = settings = ReportSettings(**settings)
-        components = settings.components
-        low_risk, high_risk = settings.low_risk_threshold, settings.high_risk_threshold
-        max_scores_printed = settings.max_scores_printed
-        dataset = checked_dataset(data, classifier)
-        weights, variable_names = checked_coefficients(classifier, dataset)
-        outcome_name = str(dataset.names.y)
-        solution_info = classifier.solution_info_
-        constraints = fitted_constraints(classifier)
+        evaluation = evaluate(classifier, data, cv_models, model_type, X_test, y_test, settings)
+        components, sample_keys = settings.components, evaluation.sample_keys
+        scored, tables = evaluation.scored, evaluation.tables
 
-        # the splits stay local: the page needs only what they produce, and holding them would pin
-        # a float64 copy of every X for the report's lifetime
-        splits = split_samples(classifier, data, X_test, y_test)
-        intercept, points = float(weights[0]), weights[1:]
-        X_train = splits[TRAINING][0]
-        binary = binary_items(points, X_train)
-        model_type = checked_model_type(model_type, points, binary, variable_names[1:])
-
-        # the score type decides, here and only here, how a sample's rows fall into calibration
-        # bins and ECE groups, how the strip is built, and whether calibration points pool
-        score_type = infer_score_type(points, binary)
-        if score_type == "discrete":
-            bin_key, ece_key = score_bin_key, risk_key
-            strip = partial(discrete_strip, low_risk=low_risk, high_risk=high_risk,
-                            max_scores_printed=max_scores_printed)
-            bin_scores, points_of = bin_score_values, pooled_points
-        else:
-            edges = risk_bins(max_scores_printed)
-            bin_key = ece_key = partial(risk_bin_key, edges)
-            strip = partial(binned_strip, edges=edges)
-            bin_scores, points_of = bin_score_ranges, binned_points
-
-        # {name: (y, score, intercept)}: the model scores each split; a CV row is scored by its
-        # own fold model, so the CV sample carries one intercept per row
-        scored = {name: (y, X @ points, intercept) for name, (X, y) in splits.items()}
-        training = scored[TRAINING]
-        # {key: sample name} of every available sample, in page order: Training, the CV sample,
-        # then the other splits
-        available = {key: name for key, name in SPLIT_SAMPLES.items() if name in scored}
-        cv = cv_sample(classifier, cv_models)
-        if cv is not None:
-            cv_name, cv_scored = cv
-            scored[cv_name] = cv_scored
-            available = {"training": TRAINING, "cv": cv_name, **available}
-        # the settings checked the keys; only here are the available samples known
-        shown = (list(available) if settings.samples is None
-                 else checked_selection("samples", settings.samples, tuple(available)))
-        # {sample name: key} of the samples shown, in their order: the key picks a sample's colour
-        sample_keys = {available[key]: key for key in shown}
-        scored = {name: scored[name] for name in sample_keys}
-        checked_classes(scored)
-        checked_finite_scores({TRAINING: training, **scored})
-
-        # each sample's calibration bins, the training sample's whether or not it is shown: the
-        # Model card reads the training rows only, so a sample left off the page cannot change it
-        tables = {name: calibration_table(y, score, b, bin_key)
-                  for name, (y, score, b) in {TRAINING: training, **scored}.items()}
-        # printed_risks is (min_printed_risk, max_printed_risk): the thresholds, or narrower; both
-        # None for a continuous model, whose strip has no tails
-        model, printed_risks = model_section(
-            points, intercept, variable_names[1:], outcome_name, model_type,
-            X_train, binary, score_type, partial(strip, training_table=tables[TRAINING]))
-
-        roc = {name: roc_section(y, score, b) for name, (y, score, b) in scored.items()}
-        calibration = {name: calibration_section(y, score, b, tables[name], ece_key, bin_scores)
-                       for name, (y, score, b) in scored.items()}
-        log_loss = {name: float(log_loss_value_from_scores((2 * y - 1) * (score + b)))
-                    for name, (y, score, b) in scored.items()}
-        summary = summary_section({name: y for name, (y, _, _) in scored.items()}, model,
-                                  roc, calibration, log_loss, solution_info, constraints)
+        model = model_section(evaluation, settings)
+        calibration = {name: calibration_section(tables[name], evaluation.ece[name],
+                                                 evaluation.score_type)
+                       for name in scored}
+        summary = summary_section(evaluation.sample_numbers, model, evaluation.solution_info,
+                                  evaluation.constraints)
         self.data = {
             "schema_version": SCHEMA_VERSION,
-            "title": f"{MODEL_TYPES[model_type]}: {outcome_name}",
-            "outcome_name": outcome_name,
+            "title": f"{MODEL_TYPES[evaluation.model_type]}: {evaluation.outcome_name}",
+            "outcome_name": evaluation.outcome_name,
             "samples": list(sample_keys),
             "model": model,
             "summary": summary,
-            "roc": roc,
+            "roc": evaluation.roc,
             "calibration": calibration,
-            "settings": {"components": list(components), "samples": shown,
-                         "low_risk_threshold": low_risk, "high_risk_threshold": high_risk,
-                         "min_printed_risk": printed_risks[0],
-                         "max_printed_risk": printed_risks[1],
-                         "max_scores_printed": max_scores_printed},
+            "settings": {"components": list(components), "samples": evaluation.samples,
+                         "low_risk_threshold": settings.low_risk_threshold,
+                         "high_risk_threshold": settings.high_risk_threshold,
+                         "min_printed_risk": evaluation.printed_risks[0],
+                         "max_printed_risk": evaluation.printed_risks[1],
+                         "max_scores_printed": settings.max_scores_printed},
         }
         # only the figures on the page: the sections above hold their numbers either way
         self.data["figures"] = {}
         if "roc" in components:
             self.data["figures"]["roc"] = roc_figure(
-                sample_keys, roc, sample_labels(summary, sample_keys, "auc"))
+                sample_keys, evaluation.roc, sample_labels(evaluation.sample_numbers, "auc"))
         if "calibration" in components:
+            # a discrete model's points pool its collapsed tails (pooled_points); a continuous
+            # model's are its risk bins, plain circles that never pool: its strip has no tails
+            points = {name: (pooled_points(*scored[name], tables[name], evaluation.printed_risks)
+                             if evaluation.score_type == "discrete"
+                             else calibration_points(tables[name], None))
+                      for name in sample_keys}
             self.data["figures"]["calibration"] = calibration_figure(
-                sample_keys, {name: points_of(*scored[name], tables[name], printed_risks)
-                              for name in sample_keys},
-                sample_labels(summary, sample_keys, "ece"))
+                sample_keys, points, sample_labels(evaluation.sample_numbers, "ece"))
         self.data["narrow"] = narrow_overrides(self.data["figures"])
 
     @property
@@ -404,6 +350,129 @@ class ModelReport:
 # ---------------------------------------------------------------------------
 # Report data: everything the page shows, computed once in Python.
 # ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Evaluation:
+    """What ``evaluate`` computes from the model and its samples, before any section is built.
+
+    Everything two sections share is here, so no section reads another. Samples are
+    ``{name: ...}`` over the samples shown, in page order, except ``tables``, which also holds
+    the training sample's.
+
+    - ``outcome_name``, ``model_type``, ``solution_info`` (``solution_info_``) and
+      ``constraints`` (``fitted_constraints``).
+    - ``points``, ``intercept`` and ``item_names``: the coefficients, intercept apart, and the
+      name of each item.
+    - ``binary`` (``binary_items``) and ``item_values``: ``{j: values}`` of each nonzero item on
+      the training rows, ``[0, 1]`` for a binary one: all the report keeps of the training X.
+    - ``score_type``, and ``risk_edges``: a continuous model's ``risk_bins``, None for a
+      discrete one.
+    - ``printed_risks``: ``(min_printed_risk, max_printed_risk)``, the thresholds, or narrower
+      for a discrete strip over ``max_scores_printed`` (``collapse_scores``); both None for a
+      continuous model, whose strip has no tails. The strip and the calibration points read it.
+    - ``samples``, the keys of the samples shown, and ``sample_keys``, ``{name: key}``.
+    - ``scored``: ``(y, score, intercept)``; ``tables``: the calibration bins
+      (``calibration_table``); ``roc`` (``roc_section``); ``ece``
+      (``expected_calibration_error``).
+    - ``sample_numbers``: ``{"n", "outcome_rate", "auc", "ece", "log_loss"}`` as printed, the
+      strings the summary table and the legends both show, so they cannot round the same
+      number two ways.
+    """
+
+    outcome_name: str
+    model_type: str
+    solution_info: dict
+    constraints: dict
+    points: np.ndarray
+    intercept: float
+    item_names: list
+    binary: dict
+    item_values: dict
+    score_type: str
+    risk_edges: np.ndarray | None
+    printed_risks: tuple
+    samples: list
+    sample_keys: dict
+    scored: dict
+    tables: dict
+    roc: dict
+    ece: dict
+    sample_numbers: dict
+
+
+def evaluate(classifier, data, cv_models, model_type, X_test, y_test, settings):
+    """Check the inputs against the fit, score every sample and compute what the sections share:
+    an ``Evaluation``. The arguments are ``ModelReport``'s, ``settings`` a ``ReportSettings``."""
+    dataset = checked_dataset(data, classifier)
+    weights, variable_names = checked_coefficients(classifier, dataset)
+    outcome_name = str(dataset.names.y)
+    solution_info = classifier.solution_info_
+    constraints = fitted_constraints(classifier)
+
+    # the splits stay local: the page needs only what they produce, and holding them would pin
+    # a float64 copy of every X for the report's lifetime
+    splits = split_samples(classifier, data, X_test, y_test)
+    intercept, points = float(weights[0]), weights[1:]
+    X_train = splits[TRAINING][0]
+    binary = binary_items(points, X_train)
+    model_type = checked_model_type(model_type, points, binary, variable_names[1:])
+    item_values = {j: np.array([0.0, 1.0]) if is_item_binary else np.unique(X_train[:, j])
+                   for j, is_item_binary in binary.items()}
+    # the score type decides how a sample's rows fall into calibration bins and ECE groups, how
+    # the strip is built, and whether calibration points pool
+    score_type = infer_score_type(points, binary)
+
+    # {name: (y, score, intercept)}: the model scores each split; a CV row is scored by its
+    # own fold model, so the CV sample carries one intercept per row
+    scored = {name: (y, X @ points, intercept) for name, (X, y) in splits.items()}
+    training = scored[TRAINING]
+    # {key: sample name} of every available sample, in page order: Training, the CV sample,
+    # then the other splits
+    available = {key: name for key, name in SPLIT_SAMPLES.items() if name in scored}
+    cv = cv_sample(classifier, cv_models)
+    if cv is not None:
+        cv_name, cv_scored = cv
+        scored[cv_name] = cv_scored
+        available = {"training": TRAINING, "cv": cv_name, **available}
+    # the settings checked the keys; only here are the available samples known
+    samples = (list(available) if settings.samples is None
+               else checked_selection("samples", settings.samples, tuple(available)))
+    # {sample name: key} of the samples shown, in their order: the key picks a sample's colour
+    sample_keys = {available[key]: key for key in samples}
+    scored = {name: scored[name] for name in sample_keys}
+    checked_classes(scored)
+    checked_finite_scores({TRAINING: training, **scored})
+
+    risk_edges = None if score_type == "discrete" else risk_bins(settings.max_scores_printed)
+    # each sample's calibration bins, the training sample's whether or not it is shown: the
+    # Model card reads the training rows only, so a sample left off the page cannot change it
+    tables = {name: calibration_table(y, score, b, score_type, risk_edges)
+              for name, (y, score, b) in {TRAINING: training, **scored}.items()}
+    if score_type == "discrete":
+        # the strip's collapse (discrete_strip builds the same one from the same scores)
+        risks = expit(np.asarray(all_scores(points[j] * values for j, values in
+                                            item_values.items()), dtype=float) + intercept)
+        _, printed_risks = collapse_scores(risks, settings.low_risk_threshold,
+                                           settings.high_risk_threshold,
+                                           settings.max_scores_printed)
+    else:
+        printed_risks = (None, None)
+
+    roc = {name: roc_section(y, score, b) for name, (y, score, b) in scored.items()}
+    ece = {name: expected_calibration_error(y, score, b, score_type, risk_edges)
+           for name, (y, score, b) in scored.items()}
+    sample_numbers = {
+        name: {"n": f"{len(y):,}", "outcome_rate": percent(y.mean()),
+               "auc": f"{roc[name]['auc']:.3f}", "ece": percent(ece[name]),
+               "log_loss": f"{float(log_loss_value_from_scores((2 * y - 1) * (score + b))):.3f}"}
+        for name, (y, score, b) in scored.items()}
+    return Evaluation(
+        outcome_name=outcome_name, model_type=model_type, solution_info=solution_info,
+        constraints=constraints, points=points, intercept=intercept, item_names=variable_names[1:],
+        binary=binary, item_values=item_values, score_type=score_type, risk_edges=risk_edges,
+        printed_risks=printed_risks, samples=samples, sample_keys=sample_keys, scored=scored,
+        tables=tables, roc=roc, ece=ece, sample_numbers=sample_numbers)
+
 
 def is_binary(values):
     """True when every value is 0 or 1."""
@@ -539,7 +608,7 @@ def split_samples(classifier, data, X_test, y_test):
         return samples
     if test in samples:
         warnings.warn("report() uses the test split of data; X_test and y_test are ignored",
-                      UserWarning, stacklevel=4)
+                      UserWarning, stacklevel=5)
         return samples
     X_test, y_test = validate_data(classifier, X_test, y_test, dtype=np.float64, reset=False)
     if not np.isin(y_test, classifier.classes_).all():
@@ -578,7 +647,7 @@ def cv_sample(classifier, cv_models):
                                            for rows in test_rows):
         warnings.warn(f"report() shows no CV sample: {len(cv_models)} fold models need their test "
                       f"rows from fit_cv on the data passed to fit, and cv_results_ has "
-                      f"{len(test_rows)} folds", UserWarning, stacklevel=4)
+                      f"{len(test_rows)} folds", UserWarning, stacklevel=5)
         return None
     X, y = fit_data.X, (fit_data.y == fit_data.classes[1]).astype(int)
     score = np.concatenate([X[rows] @ fold.coef_ for fold, rows in zip(cv_models, test_rows)])
@@ -621,32 +690,31 @@ def point_label(points, binary, model_type):
     return str(points) if binary else f"{points} × value"
 
 
-def model_section(points, intercept, names, outcome_name, model_type, X_train, binary,
-                  score_type, strip):
+def model_section(evaluation, settings):
     """Items, score type, score range, score-to-risk strip and (for checklists) M and the rule.
 
     ``points_header`` is the item table's points column, and None when there is no such column
     (a checklist whose items are all ``+1``: every box counts the same, so a column of ``+`` says
     nothing). ``score_header`` and ``risk_header`` label the score-to-risk strip. The Model card
     sums the points times the values of its items, finds the strip cell of that score and reads
-    the risk that cell shows. ``n_scores_printed`` counts the strip's cells. ``binary`` is
-    ``binary_items``.
+    the risk that cell shows. ``n_scores_printed`` counts the strip's cells.
 
-    ``strip`` (``discrete_strip`` or ``binned_strip``) builds the strip, ``n_scores``, the
-    printed risk range and the Model card's lookup ``score_bins`` (``edges``, ``cells``) from
-    each item's points times its values, the intercept and M; ``score_digits`` adds the decimals
-    the readout prints a score with: 0 when every score the card reaches is an integer, else 1.
-
-    Returns the section and the printed risk range, ``(min_printed_risk, max_printed_risk)``.
+    The strip (``discrete_strip``, or ``binned_strip`` off the training sample's calibration
+    table) gives the cells, ``n_scores`` and the Model card's lookup ``score_bins`` (``edges``,
+    ``cells``); ``score_digits`` adds the decimals the readout prints a score with: 0 when every
+    score the card reaches is an integer, else 1. ``evaluation`` is an ``Evaluation``,
+    ``settings`` a ``ReportSettings``.
     """
+    points, intercept, model_type = evaluation.points, evaluation.intercept, evaluation.model_type
     items = []
     value_sets = []
-    for j, is_item_binary in binary.items():
-        values = np.array([0.0, 1.0]) if is_item_binary else np.unique(X_train[:, j])
+    for j, values in evaluation.item_values.items():
+        is_item_binary = evaluation.binary[j]
         vmin, vmax = float(values.min()), float(values.max())
         p = float(points[j])
         value_sets.append(p * values)
-        name, p, vmin, vmax = display_name(str(names[j])), number(p), number(vmin), number(vmax)
+        name, p, vmin, vmax = (display_name(str(evaluation.item_names[j])), number(p),
+                               number(vmin), number(vmax))
         items.append({"name": name, "points": p, "binary": is_item_binary,
                       "value_range": [vmin, vmax],
                       "name_label": name if is_item_binary else f"{name} ({vmin}–{vmax})",
@@ -659,11 +727,18 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, b
     checklist = model_type == "checklist"
     m = math.floor(-intercept) + 1 if checklist else None
     shows_points = not checklist or any(item["points"] < 0 for item in items)
-    cells, score_bins, n_scores, printed_risks = strip(value_sets, intercept, m)
+    if evaluation.score_type == "discrete":
+        cells, score_bins, n_scores = discrete_strip(
+            value_sets, intercept, m, low_risk=settings.low_risk_threshold,
+            high_risk=settings.high_risk_threshold,
+            max_scores_printed=settings.max_scores_printed)
+    else:
+        cells, score_bins, n_scores = binned_strip(evaluation.tables[TRAINING],
+                                                   evaluation.risk_edges, intercept)
     score_bins["score_digits"] = score_decimals(*value_sets)
     model = {
         "type": model_type,
-        "score_type": score_type,
+        "score_type": evaluation.score_type,
         "n_scores": n_scores,
         "n_scores_printed": len(cells),
         "intercept": number(intercept),
@@ -681,6 +756,7 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, b
         n_items = len(items)
         n_negative = sum(item["points"] < 0 for item in items)
         k_min, k_max = -n_negative, n_items - n_negative
+        outcome_name = evaluation.outcome_name
         if m <= k_min:
             rule = f"Predict {outcome_name} for every row (the intercept alone is positive)"
         elif m > k_max:
@@ -692,18 +768,18 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, b
                     f"of checked (−) items is at least {m}")
         model["checklist_m"] = m
         model["rule"] = rule
-    return model, printed_risks
+    return model
 
 
-def discrete_strip(value_sets, intercept, checklist_m, *, training_table, low_risk, high_risk,
+def discrete_strip(value_sets, intercept, checklist_m, *, low_risk, high_risk,
                    max_scores_printed):
-    """A discrete model's score-to-risk strip: ``(cells, score_bins, n_scores, printed_risks)``.
+    """A discrete model's score-to-risk strip: ``(cells, score_bins, n_scores)``.
 
     It lists every possible score (``all_scores``, counted by ``n_scores``) and collapses them
     into at most ``max_scores_printed`` cells (``collapse_scores``), starting from the requested
     thresholds ``low_risk`` and ``high_risk``. The Model card's ``score_bins``: ``edges`` holds
     the first score of each cell after the first, and ``cells`` is one bin per cell. The strip
-    is model-derived: ``training_table`` is not read.
+    is model-derived, read off no sample.
     """
     scores = all_scores(value_sets)
     risks = expit(np.asarray(scores, dtype=float) + intercept)
@@ -711,7 +787,7 @@ def discrete_strip(value_sets, intercept, checklist_m, *, training_table, low_ri
     cells = score_to_risk_cells(scores, risks, groups, checklist_m, printed_risks)
     score_bins = {"edges": [scores[first] for first, _, _ in groups[1:]],
                   "cells": list(range(len(cells)))}
-    return cells, score_bins, len(scores), printed_risks
+    return cells, score_bins, len(scores)
 
 
 def all_scores(value_sets):
@@ -833,9 +909,9 @@ def risk_bins(n_bins):
     return np.arange(n_bins + 1) / n_bins
 
 
-def binned_strip(value_sets, intercept, checklist_m, *, training_table, edges):
-    """A continuous model's score-to-risk strip: ``(cells, score_bins, None, (None, None))``, with
-    no finite list of scores and no collapsed tails, so no printed risk range.
+def binned_strip(training_table, edges, intercept):
+    """A continuous model's score-to-risk strip: ``(cells, score_bins, None)``, with no finite
+    list of scores and no collapsed tails, so no printed risk range.
 
     It is read off the training sample's calibration table, as the R's ``get.risk.xtable``
     reads the training ``calibration_df``: one cell per risk bin of ``edges`` that holds training
@@ -851,7 +927,7 @@ def binned_strip(value_sets, intercept, checklist_m, *, training_table, edges):
         cell_by_bin[bin_index] = cell
     score_bins = {"edges": [float(edge) for edge in logit(edges[1:-1]) - intercept],
                   "cells": cell_by_bin}
-    return cells, score_bins, None, (None, None)
+    return cells, score_bins, None
 
 
 def score_decimals(*values):
@@ -896,26 +972,11 @@ def roc_section(y, score, intercept):
     }
 
 
-# Row keys: one key per row from its score and margin (score + intercept); rows sharing a key
-# share a calibration bin (or an ECE group).
-
-def score_bin_key(score, margin):
-    """A discrete model's bin: the rows sharing a score and a risk, so one bin per score for one
-    model and one per score and fold intercept for a CV sample."""
-    return np.column_stack([score, margin])
-
-
-def risk_key(score, margin):
-    """The row's predicted risk: a discrete model's ECE groups rows by the risk they are given,
-    not by the score that gave it, so two fold models that predict the same risk from different
-    scores share a group, as in the R's ``avg_cal_err_distinct``."""
-    return expit(margin)
-
-
-def risk_bin_key(edges, score, margin):
-    """A continuous model's bin: the index of the risk bin of ``edges`` the row's risk falls in,
-    the bin whose left edge is the last at or below it, as the R's ``findInterval``: only the
-    interior edges decide, so a risk of 1 is in the last bin."""
+def risk_bin_key(edges, margin):
+    """A continuous model's bin of each row, from its margin (score + intercept): the index of
+    the risk bin of ``edges`` the row's risk falls in, the bin whose left edge is the last at or
+    below it, as the R's ``findInterval``: only the interior edges decide, so a risk of 1 is in
+    the last bin."""
     return np.searchsorted(edges[1:-1], expit(margin), side="right")
 
 
@@ -948,19 +1009,30 @@ def group_range(rows, values, n_groups):
     return low, high
 
 
-def calibration_table(y, score, intercept, bin_key):
-    """A sample's calibration bins (``group_rows``), its rows keyed by ``bin_key``."""
+def calibration_table(y, score, intercept, score_type, risk_edges):
+    """A sample's calibration bins (``group_rows``). A discrete model's rows share a bin when
+    they share a score and a risk, so one bin per score for one model and one per score and fold
+    intercept for a CV sample; a continuous model's when they share a risk bin of ``risk_edges``
+    (``risk_bin_key``)."""
     margin = score + intercept
-    return group_rows(bin_key(score, margin), y, score, expit(margin))
+    if score_type == "discrete":
+        key = np.column_stack([score, margin])
+    else:
+        key = risk_bin_key(risk_edges, margin)
+    return group_rows(key, y, score, expit(margin))
 
 
-def calibration_section(y, score, intercept, table, ece_key, bin_scores):
-    """Per bin of the sample's calibration ``table``: its scores (``bin_scores``), predicted
-    risk, observed rate, n and ``local_error``; and the sample's ``ece`` over its rows grouped
-    by ``ece_key`` (``expected_calibration_error``)."""
-    margin = score + intercept
-    return {**bin_scores(table), **bin_numbers(table),
-            "ece": expected_calibration_error(y, expit(margin), ece_key(score, margin))}
+def calibration_section(table, ece, score_type):
+    """Per bin of the sample's calibration ``table``: its scores, predicted risk, observed rate,
+    n and ``local_error``; and the sample's ``ece``. A discrete model's bins are one score each,
+    ``{"scores": [...]}``; a continuous model's span scores, ``{"score_ranges": [[min, max],
+    ...]}``."""
+    if score_type == "discrete":
+        scores = {"scores": [number(s) for s in table["score_min"]]}
+    else:
+        scores = {"score_ranges": [[number(low), number(high)]
+                                   for low, high in zip(table["score_min"], table["score_max"])]}
+    return {**scores, **bin_numbers(table), "ece": ece}
 
 
 def bin_numbers(table):
@@ -972,24 +1044,18 @@ def bin_numbers(table):
             "local_error": [float(v) for v in table["local_error"]]}
 
 
-def bin_score_values(table):
-    """A discrete model's bins are one score each: ``{"scores": [...]}``."""
-    return {"scores": [number(s) for s in table["score_min"]]}
+def expected_calibration_error(y, score, intercept, score_type, risk_edges):
+    """The n-weighted mean of ``|predicted - observed|`` over a sample's rows, grouped by risk.
 
-
-def bin_score_ranges(table):
-    """A continuous model's bins span scores: ``{"score_ranges": [[min, max], ...]}``."""
-    return {"score_ranges": [[number(low), number(high)]
-                             for low, high in zip(table["score_min"], table["score_max"])]}
-
-
-def expected_calibration_error(y, risk, key):
-    """The n-weighted mean of ``|predicted - observed|`` over the rows grouped by ``key``.
-
-    Keyed by risk (``risk_key``), this is the R's ``avg_cal_err_distinct``
-    (``classification_utils.R:204-226``); keyed by risk bin (``risk_bin_key``), its
-    ``avg_cal_err_binned`` (``compute.score.based.metrics``, ``reporting_utils.R:1039``).
+    A discrete model groups the rows by the risk they are given, not by the score that gave it,
+    so two fold models that predict the same risk from different scores share a group: the R's
+    ``avg_cal_err_distinct`` (``classification_utils.R:204-226``). A continuous model groups them
+    by risk bin of ``risk_edges`` (``risk_bin_key``): its ``avg_cal_err_binned``
+    (``compute.score.based.metrics``, ``reporting_utils.R:1039``).
     """
+    margin = score + intercept
+    risk = expit(margin)
+    key = risk if score_type == "discrete" else risk_bin_key(risk_edges, margin)
     table = group_rows(key, y, risk, risk)
     return float(np.sum(table["n"] * table["local_error"]) / len(y))
 
@@ -1000,19 +1066,23 @@ def summary_row(key, label, values, span=1):
     return {"key": key, "label": label, "values": values, "span": span}
 
 
-def summary_section(labels, model, roc, calibration, log_loss, training, constraints):
+def summary_section(sample_numbers, model, training, constraints):
     """One flat table of formatted strings: ``columns`` (a blank label column, then the samples)
     and ``rows`` in reading order -- the data, the constraints, the solver, the performance.
 
     There are no block subheaders and no "value" header: the samples name the columns, and a row
     that is not per-sample simply carries one value.
 
-    ``labels`` is ``{sample name: y in {0, 1}}``, in column order.
+    ``sample_numbers`` is the ``Evaluation``'s, in column order: each per-sample row reads its
+    strings from there.
     """
-    names = list(labels)
-    rows = [summary_row("n", "N", [f"{len(labels[s]):,}" for s in names]),
-            summary_row("outcome_rate", "Outcome Rate",
-                        [percent(labels[s].mean()) for s in names])]
+    names = list(sample_numbers)
+
+    def per_sample(key):
+        return [sample_numbers[s][key] for s in names]
+
+    rows = [summary_row("n", "N", per_sample("n")),
+            summary_row("outcome_rate", "Outcome Rate", per_sample("outcome_rate"))]
 
     size = f"{len(model['items'])} (max {int(constraints['max_size'])})"
     lb, ub = constraints["point_range"]
@@ -1029,9 +1099,9 @@ def summary_section(labels, model, roc, calibration, log_loss, training, constra
                     span=len(names)),
     ]
 
-    rows += [summary_row("auc", "AUC", [f"{roc[s]['auc']:.3f}" for s in names]),
-             summary_row("ece", "ECE", [percent(calibration[s]["ece"]) for s in names]),
-             summary_row("log_loss", "Log Loss", [f"{log_loss[s]:.3f}" for s in names])]
+    rows += [summary_row("auc", "AUC", per_sample("auc")),
+             summary_row("ece", "ECE", per_sample("ece")),
+             summary_row("log_loss", "Log Loss", per_sample("log_loss"))]
     return {"columns": ["", *names], "rows": rows}
 
 
@@ -1053,18 +1123,17 @@ def fmt(value, template):
 # serialized to the plain JSON the data block carries to ``Plotly.newPlot``.
 # ---------------------------------------------------------------------------
 
-def sample_labels(summary, names, metric):
+def sample_labels(sample_numbers, metric):
     """``{sample: "Training<br>(n = 8,815 p = 12.4%)<br>AUC = 0.950"}``: a legend entry.
 
-    Every number is the string the summary table already shows, so the legend and the table
-    cannot round the same number two ways. ``metric`` names the summary row of the figure's own
-    headline statistic (``auc`` or ``ece``).
+    Every number is a string of the ``Evaluation``'s ``sample_numbers``, the one the summary
+    table shows, so the legend and the table cannot round the same number two ways. ``metric``
+    names the figure's own headline statistic (``auc`` or ``ece``).
     """
-    values = {row["key"]: row["values"] for row in summary["rows"]}
     label = {"auc": "AUC", "ece": "ECE"}[metric]
-    return {name: f"{name}<br>(n = {n} p = {p})<br>{label} = {value}"
-            for name, n, p, value in zip(names, values["n"], values["outcome_rate"],
-                                         values[metric])}
+    return {name: f"{name}<br>(n = {numbers['n']} p = {numbers['outcome_rate']})<br>"
+                  f"{label} = {numbers[metric]}"
+            for name, numbers in sample_numbers.items()}
 
 
 def roc_figure(sample_keys, sections, labels):
@@ -1126,12 +1195,6 @@ def pooled_points(y, score, intercept, table, printed_risks):
               else f"{score_label(low, low)}+"
               for (_, _, side), low, high in zip(groups, pooled["score_min"], pooled["score_max"])]
     return calibration_points(pooled, labels)
-
-
-def binned_points(y, score, intercept, table, printed_risks):
-    """A continuous model's ``calibration_points``: one plain circle per risk bin of the sample.
-    Bins never pool (``printed_risks`` is ``(None, None)``: the strip has no tails)."""
-    return calibration_points(table, None)
 
 
 def calibration_figure(sample_keys, points, labels):
