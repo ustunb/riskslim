@@ -18,11 +18,12 @@ from .coefficient_set import CoefficientSet
 from .data import BinaryClassificationDataset
 from .defaults import DEFAULT_LCPA_SETTINGS, INTERCEPT_NAME, OUTCOME_NAME
 from .report import ModelReport
-from .utils import print_model
+from .utils import data_fingerprint, print_model
 
 
 # fitted state that belongs to one fit and is dropped when fit runs again
-STATE_FROM_PREVIOUS_FIT = ("calibrated_estimator_", "cv_", "cv_results_", "cv_calibrated_estimators_")
+STATE_FROM_PREVIOUS_FIT = ("calibrated_estimator_", "cv_", "cv_results_", "cv_data_fingerprint_",
+                           "cv_calibrated_estimators_")
 
 
 class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
@@ -58,6 +59,9 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         Set by ``fit_cv``.
     cv_results_ : dict
         Cross-validation results. Set by ``fit_cv``.
+    cv_data_fingerprint_ : str
+        Digest of the X and y passed to ``fit_cv`` (``riskslim.utils.data_fingerprint``). Set by
+        ``fit_cv``; ``report`` checks it against the data passed to ``fit``.
     cv_calibrated_estimators_ : list of sklearn.calibration.CalibratedClassifierCV
         Calibrators trained per fold. Set by ``recalibrate`` after ``fit_cv``.
     """
@@ -239,7 +243,8 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
             data passed to ``fit``.
         cv_models : list of RiskSLIMClassifier, optional
             Fitted per-fold models for the CV sample, scoring the test rows of ``fit_cv``. None
-            uses ``cv_results_["estimator"]`` after ``fit_cv``.
+            uses ``cv_results_["estimator"]`` after ``fit_cv``. Raises ValueError when
+            ``fit_cv`` ran on other data than ``fit``.
         **settings
             Fields of ``riskslim.report.ReportSettings``: ``components`` (the cards, in order),
             ``samples`` (the samples shown, in order), ``low_risk_threshold`` and
@@ -334,7 +339,11 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         return self
 
     def fit_cv(self, X, y, cv=5, scoring="roc_auc", n_jobs=1, **kwargs):
-        """Cross-validate RiskSLIM; stores ``cv_`` and ``cv_results_``.
+        """Cross-validate RiskSLIM; stores ``cv_``, ``cv_results_`` and ``cv_data_fingerprint_``.
+
+        ``cv_data_fingerprint_`` is a digest of ``X`` and ``y`` (no copy of them): ``report``
+        scores each fold's test rows of the data passed to ``fit``, so it raises ValueError
+        unless ``fit_cv`` ran on that same data.
 
         Parameters
         ----------
@@ -354,6 +363,7 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         scoring = check_scoring(self, scoring)
         self.__dict__.pop("cv_calibrated_estimators_", None)  # calibrated the previous folds
         self.cv_ = check_cv(cv=cv, y=y, classifier=True)
+        fingerprint = data_fingerprint(X, y)
         self.cv_results_ = cross_validate(
                 self,
                 X=X,
@@ -365,5 +375,6 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
                 params=kwargs,
                 n_jobs=n_jobs
                 )
+        self.cv_data_fingerprint_ = fingerprint
         return self
 

@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import sys
 import os
@@ -225,6 +226,32 @@ def validate_settings(settings=None, defaults=None, raise_key_error=True):
         settings = _settings
 
     return settings
+
+def data_fingerprint(X, y):
+    """Digest of a feature matrix and its labels, to tell whether two calls saw the same data.
+
+    ``X`` is read as a float64 matrix and ``y`` as the index of each label among its sorted
+    classes, as ``RiskSLIMClassifier.fit`` reads them, so the same data gives the same digest
+    whatever its container (ndarray, DataFrame, list) or label coding ({0, 1}, {-1, 1}, strings).
+
+    Parameters
+    ----------
+    X : array-like of shape (n_samples, n_features)
+    y : array-like of shape (n_samples,)
+
+    Returns
+    -------
+    fingerprint : str
+        A 32-character hex digest of the shape, values and labels.
+    """
+    X = np.ascontiguousarray(X, dtype=np.float64)
+    labels = np.unique(np.ravel(y), return_inverse=True)[1].astype(np.int64)
+    digest = hashlib.blake2b(digest_size=16)
+    digest.update(np.asarray(X.shape, dtype=np.int64).tobytes())
+    digest.update(X.tobytes())
+    digest.update(labels.tobytes())
+    return digest.hexdigest()
+
 
 # Data Types
 def is_integer(x):

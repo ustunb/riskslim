@@ -43,9 +43,9 @@ Rejection paths owned here (one invalid mutation of a valid call each): non-fini
 model_type, model_type="checklist" with a non-binary item or a coefficient other than +1 or -1,
 X_test column count != the fitted feature count, y_test row count != X_test row count, y_test
 labels outside the classes seen in fit, a sample with a single class, a sample whose finite
-values overflow to a non-finite score, and components / samples that are empty, repeat an entry or
-name an unknown one, risk thresholds out of order or outside 0..1, and a max_scores_printed
-below 2.
+values overflow to a non-finite score, fit_cv run on other data than fit, and components /
+samples that are empty, repeat an entry or name an unknown one, risk thresholds out of order or
+outside 0..1, and a max_scores_printed below 2.
 
 Checks that need no browser: `plotly.graph_objects.Figure(fig)` rejects misspelled or invalid
 properties, and one test asserts the Plotly template's and the sample colours are the ones
@@ -343,6 +343,14 @@ def test_invalid_inputs_are_rejected(request, invalid, match):
     classifier = request.getfixturevalue(call.pop("fixture"))
     with pytest.raises(ValueError, match=match):
         make_report(classifier, **call)
+
+
+def test_report_rejects_fit_cv_on_other_data_than_fit():
+    # the same rows in reverse: fit_cv's test rows no longer index the data passed to fit
+    classifier = fit_classifier().fit_cv(X_TRAIN[::-1], Y_TRAIN[::-1], cv=2)
+
+    with pytest.raises(ValueError, match="fit_cv ran on different data than fit"):
+        classifier.report()
 
 
 def test_html_holds_one_data_block_that_round_trips(fitted):

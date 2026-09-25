@@ -86,7 +86,7 @@ from sklearn.utils.validation import check_is_fitted, validate_data
 from ..data import BinaryClassificationDataset, RuleName
 from ..defaults import INTERCEPT_NAME
 from ..loss_functions.log_loss import log_loss_value_from_scores
-from ..utils import is_integer
+from ..utils import data_fingerprint, is_integer
 
 SCHEMA_VERSION = 2
 MODEL_TYPES = {"risk_score": "Risk Score", "checklist": "Checklist"}
@@ -271,7 +271,10 @@ class ModelReport:
     cv_models : list of RiskSLIMClassifier, optional
         Fitted per-fold models for the CV sample, one per fold of ``classifier.fit_cv``; each
         scores its own test rows, ``classifier.cv_results_["indices"]["test"]``. None uses
-        ``cv_results_["estimator"]``; without ``fit_cv`` there is no CV sample.
+        ``cv_results_["estimator"]``; without ``fit_cv`` there is no CV sample. Those rows are
+        rows of the data passed to ``fit``, so the report raises ValueError when ``fit_cv`` ran
+        on other data (its ``cv_data_fingerprint_`` differs; a classifier without one is not
+        checked).
     model_type : {"risk_score", "checklist"}, optional
         Inferred when None: a checklist when every nonzero coefficient is +1 or -1 and its item
         is binary on the training data. A checklist needs both: an explicit ``"checklist"``
@@ -650,6 +653,9 @@ def cv_sample(classifier, cv_models):
     The fold models are ``cv_models``, else ``cv_results_["estimator"]``. Each scores its own test
     rows of the data passed to fit, read from ``cv_results_["indices"]["test"]`` and never
     re-derived, so the report and ``fit_cv`` cannot disagree about which rows a fold held out.
+    Those indices point into the data ``fit_cv`` ran on: when its ``cv_data_fingerprint_`` is not
+    the data passed to fit, this raises ValueError before scoring. A classifier without a
+    fingerprint (pickled before ``fit_cv`` stored one) is not checked.
     """
     cv_results = getattr(classifier, "cv_results_", None)
     if cv_models is None:
@@ -667,6 +673,11 @@ def cv_sample(classifier, cv_models):
         return None
 
     fit_data = classifier._data
+    fingerprint = getattr(classifier, "cv_data_fingerprint_", None)
+    if (cv_results is not None and fingerprint is not None
+            and fingerprint != data_fingerprint(fit_data.X, fit_data.y)):
+        raise ValueError("fit_cv ran on different data than fit, so its test rows do not index "
+                         "the data passed to fit; re-run fit_cv on the data passed to fit")
     test_rows = [] if cv_results is None else [np.asarray(rows) for rows in
                                                cv_results["indices"]["test"]]
     if len(test_rows) != len(cv_models) or any(rows.max(initial=-1) >= fit_data.n
