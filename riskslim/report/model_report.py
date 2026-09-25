@@ -560,7 +560,9 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, t
     (``binned_score_to_risk_cells``), no finite list of scores (``n_scores`` is None) and no
     collapsed tails. ``score_bins`` holds the lookup: ``edges``, the score where each bin after
     the first begins, and ``cells``, each bin's strip cell (None for a bin with no training
-    rows).
+    rows); and ``score_digits``, the decimals the readout prints a score with, by the rule of
+    the bin labels (``score_range_label``): 0 when every score the card reaches is an integer
+    (every item's points times each of its values), else 1.
 
     Returns the section, the decimals every discrete score label on the page prints
     (``score_digits``; None for a continuous model) and the printed risk range,
@@ -598,6 +600,8 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, t
     else:
         printed_risks, digits, n_scores, cell_by_score = (low_risk, high_risk), None, None, None
         cells, score_bins = binned_score_to_risk_cells(train_scores, intercept, bin_edges)
+        score_bins["score_digits"] = 0 if all(float(v).is_integer()
+                                              for values in value_sets for v in values) else 1
     model = {
         "type": model_type,
         "score_type": "discrete" if bin_edges is None else "continuous",

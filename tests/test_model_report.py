@@ -593,14 +593,14 @@ def test_report_renders_in_browser_without_errors(chromium, saved_report, width)
         def assert_readout_follows(score):
             """The readout and the outlined strip cell are those of ``score``: a discrete score's
             cell in cell_by_score; a continuous score's bin by the shipped score edges, whose
-            cell may be None (a bin without training rows: "—", nothing outlined)."""
+            cell may be None (a bin without training rows: risk "—", nothing outlined)."""
             bins = model["score_bins"]
             if bins is None:
                 current = model["cell_by_score"][f"{score:g}"]
                 cell, label = current["cell"], current["label"]
             else:
                 cell = bins["cells"][sum(score >= edge for edge in bins["edges"])]
-                label = "—" if cell is None else model["score_to_risk"][cell]["score"]
+                label = f"{score:.{bins['score_digits']}f}"
             assert page.locator("#rs-score").text_content() == label
             assert page.locator("#rs-risk").text_content() == (
                 "—" if cell is None else model["score_to_risk"][cell]["risk"])

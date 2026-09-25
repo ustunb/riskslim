@@ -1,8 +1,8 @@
 // riskslim report: make the Model card add up and draw the figures. The markup is all
 // Jinja's; Python computes every number, so the card only sums points x value over its inputs
 // and finds the strip cell whose risk that score shows: a discrete score is looked up in
-// model.cell_by_score, a continuous one is compared with the bin edges in model.score_bins --
-// the browser derives no model fact.
+// model.cell_by_score, a continuous one is compared with the bin edges in model.score_bins and
+// printed with its score_digits decimals -- the browser derives no model fact.
 (function () {
   "use strict";
   const data = JSON.parse(document.getElementById("report-data").textContent);
@@ -24,9 +24,9 @@
       let cell, label;
       if (scoreBins) {
         // a continuous score is in the bin after every edge at or below it; a bin that holds no
-        // training row has no cell
+        // training row has no cell (and no risk), but the score still prints
         cell = scoreBins.cells[scoreBins.edges.filter((edge) => score >= edge).length];
-        label = cell == null ? "—" : strip[cell].score;
+        label = score.toFixed(scoreBins.score_digits);
       } else {
         // a discrete score is an integer, keyed as Python writes it ("3"); missing only for a
         // score no value set reaches, e.g. a non-integer value typed in
