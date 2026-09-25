@@ -9,7 +9,7 @@
   // the Model card first: it needs no library, so it works even when Plotly fails to load
   // (the page may leave the card out)
   if (document.getElementById("rs-score")) {
-    const { score_bins: scoreBins, score_to_risk: strip } = data.model;
+    const { score_bins: scoreBins, score_to_risk: stripCells } = data.model;
     const inputs = document.querySelectorAll(".rs-model-table input");
     const cells = document.querySelectorAll(".rs-score-grid [data-cell]");
     function update() {
@@ -24,7 +24,7 @@
       // row has no cell (and no risk), but the score still prints
       const cell = scoreBins.cells[scoreBins.edges.filter((edge) => score >= edge).length];
       document.getElementById("rs-score").textContent = score.toFixed(scoreBins.score_digits);
-      document.getElementById("rs-risk").textContent = cell == null ? "—" : strip[cell].risk;
+      document.getElementById("rs-risk").textContent = cell == null ? "—" : stripCells[cell].risk;
       cells.forEach((element, i) => element.classList.toggle("rs-current", cell === i));
     }
     inputs.forEach((input) => input.addEventListener("input", update));

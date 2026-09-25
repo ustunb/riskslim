@@ -24,7 +24,8 @@ Dimensions:
                 separate value: it is printed and plotted like any other, which the first case
                 already covers. The strip and the calibration points collapse from one rule, so
                 the strip carries the three cases and the points one pooling case. A discrete
-                strip over max_scores_printed narrows its printed risk range (one case).
+                strip over max_scores_printed narrows its printed risk range (distinct risks,
+                and risks saturated at 1.0).
   score type:   discrete (binary items, integer points: every other case), continuous (a
                 non-binary item, fractional points: one case -- risk bins for the strip, the
                 calibration points and the ECE, empty bins dropped per sample, plain circles)
@@ -39,9 +40,10 @@ Dimensions:
                                       it is not a separate case)
 
 Rejection paths owned here (one invalid mutation of a valid call each): non-finite weights, unknown
-model_type, model_type="checklist" with a non-binary item, X_test column count != the fitted
-feature count, y_test row count != X_test row count, y_test labels outside the classes seen in
-fit, a sample with a single class, and components / samples that are empty, repeat an entry or
+model_type, model_type="checklist" with a non-binary item or a coefficient other than +1 or -1,
+X_test column count != the fitted feature count, y_test row count != X_test row count, y_test
+labels outside the classes seen in fit, a sample with a single class, a sample whose finite
+values overflow to a non-finite score, and components / samples that are empty, repeat an entry or
 name an unknown one, risk thresholds out of order or outside 0..1, and a max_scores_printed
 below 2.
 
@@ -185,25 +187,38 @@ def test_score_to_risk_collapses_the_tails_of_the_strip(fitted, weights, expecte
     assert not any(cell["positive"] for cell in model["score_to_risk"])
 
 
-def test_a_discrete_strip_over_max_scores_printed_narrows_its_printed_risks(fitted):
-    report = make_report(fitted, [-5, 5, 4, 2], low_risk_threshold=0.001,
-                         high_risk_threshold=0.999, max_scores_printed=5)
+@pytest.mark.parametrize(
+    "weights, thresholds, max_scores_printed, n_scores, cells, printed_risks, points, edges", [
+        # scores 0, 2, 4, 5, 6, 7, 9, 11, all inside 0.1%..99.9%: eight cells before folding; the
+        # most extreme score folds into its tail, one at a time (11, 0, 9, 2, 7), and each tail
+        # reads the risk of the nearest score still printed on its own. The calibration points
+        # (the training rows hold every score) and the Model card collapse the same tails
+        pytest.param([-5, 5, 4, 2], (0.001, 0.999), 5, 8,
+                     [("0 to 2", "< 26.9%"), ("4", "26.9%"), ("5", "50.0%"), ("6", "73.1%"),
+                      ("7 to 11", "> 73.1%")],
+                     (expit(4 - 5), expit(6 - 5)), ["≤2", "4", "5", "6", "7+"], [4, 5, 6, 7],
+                     id="distinct-risks"),
+        # scores 0..4 all at risk exactly 1.0: they fold by position, the highest first; the
+        # points group by risk, and no risk lies beyond 100%, so none pool
+        pytest.param([40, 2, 1, 1], (0, 1), 2, 5, [("0", "100.0%"), ("1 to 4", "> 100.0%")],
+                     (0, 1), ["0", "1", "2", "3", "4"], [1], id="saturated-risks"),
+    ])
+def test_a_discrete_strip_over_max_scores_printed_narrows_its_printed_risks(
+        fitted, weights, thresholds, max_scores_printed, n_scores, cells, printed_risks, points,
+        edges):
+    report = make_report(fitted, weights, low_risk_threshold=thresholds[0],
+                         high_risk_threshold=thresholds[1], max_scores_printed=max_scores_printed)
     model, settings = report.data["model"], report.data["settings"]
 
-    # scores 0, 2, 4, 5, 6, 7, 9, 11, all inside 0.1%..99.9%: eight cells before folding
-    assert (model["score_type"], model["n_scores"], model["n_scores_printed"]) == ("discrete", 8, 5)
-    # the most extreme score folds into its tail, one at a time (11, 0, 9, 2, 7), and each tail
-    # reads the risk of the nearest score still printed on its own
-    assert [(cell["score"], cell["risk"]) for cell in model["score_to_risk"]] == [
-        ("0 to 2", "< 26.9%"), ("4", "26.9%"), ("5", "50.0%"), ("6", "73.1%"),
-        ("7 to 11", "> 73.1%")]
-    assert (settings["low_risk_threshold"], settings["high_risk_threshold"]) == (0.001, 0.999)
-    assert settings["min_printed_risk"] == pytest.approx(expit(4 - 5))
-    assert settings["max_printed_risk"] == pytest.approx(expit(6 - 5))
-    # the calibration points (the training rows hold every score) and the Model card collapse
-    # the same tails
-    assert report.data["figures"]["calibration"]["data"][-1]["text"] == ["≤2", "4", "5", "6", "7+"]
-    assert model["score_bins"] == {"edges": [4, 5, 6, 7], "cells": [0, 1, 2, 3, 4], "score_digits": 0}
+    assert (model["score_type"], model["n_scores"], model["n_scores_printed"]) == (
+        "discrete", n_scores, max_scores_printed)
+    assert [(cell["score"], cell["risk"]) for cell in model["score_to_risk"]] == cells
+    assert (settings["low_risk_threshold"], settings["high_risk_threshold"]) == thresholds
+    assert (settings["min_printed_risk"], settings["max_printed_risk"]) == pytest.approx(
+        printed_risks)
+    assert report.data["figures"]["calibration"]["data"][-1]["text"] == points
+    assert model["score_bins"] == {"edges": edges, "cells": list(range(len(cells))),
+                                   "score_digits": 0}
 
 
 @pytest.mark.parametrize("weights, expected_m, expected_rule", [
@@ -298,6 +313,9 @@ def test_data_is_strict_json(fitted, weights):
                  id="unknown-model-type"),
     pytest.param({"fixture": "fitted_wide", "weights": CHECKLIST_WEIGHTS, "model_type": "checklist"},
                  r"model_type='checklist' needs binary items .*\['a'\]", id="non-binary-checklist-item"),
+    pytest.param({"weights": [-3, 2, 2, 0], "model_type": "checklist"},
+                 r"model_type='checklist' needs coefficients of \+1 or -1; \['a', 'b'\]",
+                 id="non-unit-checklist-coefficient"),
     pytest.param({"test": (X_TEST[:, :2], Y_TEST)}, "expecting 3 features", id="column-count"),
     pytest.param({"test": (X_TEST, Y_TEST[:-1])}, "inconsistent numbers of samples",
                  id="row-count"),
@@ -305,6 +323,8 @@ def test_data_is_strict_json(fitted, weights):
                  "labels outside the classes seen in fit", id="unsupported-labels"),
     pytest.param({"test": (X_TEST, np.zeros(4))}, "'Test' has a single class",
                  id="single-class"),
+    pytest.param({"test": (np.where(X_TEST == 1, 1e308, 0), Y_TEST)},
+                 "'Test' has non-finite scores", id="overflowing-score"),
     pytest.param({"components": []}, "components must name at least one", id="no-components"),
     pytest.param({"components": ["roc", "roc"]}, "components must not repeat", id="repeated-component"),
     pytest.param({"components": ["legend"]}, "components must be drawn from", id="unknown-component"),

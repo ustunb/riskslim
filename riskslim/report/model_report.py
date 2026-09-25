@@ -110,8 +110,11 @@ OPERATOR_SYMBOLS = {"geq": "≥", "leq": "≤", "lt": "<", "gt": ">", "eq": "=",
                     "is": "=", "isnot": "≠", "in": "∈", "notin": "∉"}
 
 ASSETS = files(__package__) / "assets"
-# Inlined after the markup, which Jinja writes in full: the script only draws the figures and
-# wires the Model card's inputs.
+# Inlined after the markup, which Jinja writes in full. The script adds up the Model card (the
+# score of its inputs, the risk of that score's strip cell, the cell outlined), wraps the strip
+# when it does not fit on one row, draws the figures and fits each to its width (the narrow
+# overrides), hides a calibration label another covers, and mirrors a legend change onto the
+# other plot.
 SCRIPTS = ("report.js",)
 
 # ---------------------------------------------------------------------------
@@ -126,6 +129,7 @@ AXIS_TEXT = "#4D4D4D"
 GRID = "#DFE4E9"
 BACKGROUND = "#FFFFFF"
 MUTED = "#98A2AD"
+LABEL_TEXT = "#000000"  # a calibration circle's score on the lighter samples' circles
 # each sample's colour, keyed as the samples argument names them, so a sample keeps its colour
 # whichever samples are shown and in whatever order. Validation has no house colour: it borrows
 # the palette's muted grey as a placeholder.
@@ -180,6 +184,7 @@ NARROW_PX = 480
 NARROW_LAYOUT = go.Layout(
     legend={"orientation": "h", "xref": "paper", "x": 0, "xanchor": "left",
             "yref": "container", "y": 0, "yanchor": "bottom"},
+    # set all four: report.js reads margin.t, .r, .b and .l from here to size the square panel
     margin={"t": 24, "r": 16, "b": 56, "l": 56},
     xaxis={"tickfont": {"size": 12}, "title": {"font": {"size": 13}}},
     yaxis={"tickfont": {"size": 12}, "title": {"font": {"size": 13}}},
@@ -210,8 +215,8 @@ class ModelReport:
         ``cv_results_["estimator"]``; without ``fit_cv`` there is no CV sample.
     model_type : {"risk_score", "checklist"}, optional
         Inferred when None: a checklist when every nonzero coefficient is +1 or -1 and its item
-        is binary on the training data. A checklist needs binary items: an explicit
-        ``"checklist"`` with a non-binary item raises ValueError.
+        is binary on the training data. A checklist needs both: an explicit ``"checklist"``
+        with a non-binary item or another coefficient raises ValueError.
     X_test, y_test : array-like, optional
         A held-out sample, shown as ``Test``. Ignored, with a warning, when ``data`` already has
         a test split.
@@ -223,6 +228,7 @@ class ModelReport:
     low_risk_threshold, high_risk_threshold : float, optional
         Risks below the first (above the second) collapse into one ``< x%`` (``> y%``) cell of
         the score-to-risk strip and one calibration point. The R's defaults, 0.01 and 0.99.
+        A continuous model, whose strip has no tails, ignores them.
     max_scores_printed : int, optional
         The most cells a discrete model's score-to-risk strip prints, at least 2 (the two
         tails). When the thresholds leave more, the most extreme score printed on its own (risk
@@ -241,18 +247,18 @@ class ModelReport:
         low_risk, high_risk = checked_risk_thresholds(low_risk_threshold, high_risk_threshold)
         max_scores_printed = checked_max_scores_printed(max_scores_printed)
         dataset = checked_dataset(data, classifier)
-        self.weights, self.variable_names = checked_coefficients(classifier, dataset)
-        self.outcome_name = str(dataset.names.y)
-        self.training = classifier.solution_info_
-        self.constraints = fitted_constraints(classifier)
+        weights, variable_names = checked_coefficients(classifier, dataset)
+        outcome_name = str(dataset.names.y)
+        solution_info = classifier.solution_info_
+        constraints = fitted_constraints(classifier)
 
         # the splits stay local: the page needs only what they produce, and holding them would pin
         # a float64 copy of every X for the report's lifetime
         splits = split_samples(classifier, data, X_test, y_test)
-        intercept, points = float(self.weights[0]), self.weights[1:]
+        intercept, points = float(weights[0]), weights[1:]
         X_train = splits[TRAINING][0]
         binary = binary_items(points, X_train)
-        self.model_type = checked_model_type(model_type, points, binary, self.variable_names[1:])
+        model_type = checked_model_type(model_type, points, binary, variable_names[1:])
 
         # the score type decides, here and only here, how a sample's rows fall into calibration
         # bins and ECE groups, how the strip is built, and whether calibration points pool
@@ -286,6 +292,7 @@ class ModelReport:
         sample_keys = {available[key]: key for key in shown}
         scored = {name: scored[name] for name in sample_keys}
         checked_classes(scored)
+        checked_finite_scores({TRAINING: training, **scored})
 
         # each sample's calibration bins, the training sample's whether or not it is shown: the
         # Model card reads the training rows only, so a sample left off the page cannot change it
@@ -294,7 +301,7 @@ class ModelReport:
         # printed_risks is (min_printed_risk, max_printed_risk): the thresholds, or narrower; both
         # None for a continuous model, whose strip has no tails
         model, printed_risks = model_section(
-            points, intercept, self.variable_names[1:], self.outcome_name, self.model_type,
+            points, intercept, variable_names[1:], outcome_name, model_type,
             X_train, binary, score_type, partial(strip, training_table=tables[TRAINING]))
 
         roc = {name: roc_section(y, score, b) for name, (y, score, b) in scored.items()}
@@ -303,11 +310,11 @@ class ModelReport:
         log_loss = {name: float(log_loss_value_from_scores((2 * y - 1) * (score + b)))
                     for name, (y, score, b) in scored.items()}
         summary = summary_section({name: y for name, (y, _, _) in scored.items()}, model,
-                                  roc, calibration, log_loss, self.training, self.constraints)
+                                  roc, calibration, log_loss, solution_info, constraints)
         self.data = {
             "schema_version": SCHEMA_VERSION,
-            "title": f"{MODEL_TYPES[self.model_type]}: {self.outcome_name}",
-            "outcome_name": self.outcome_name,
+            "title": f"{MODEL_TYPES[model_type]}: {outcome_name}",
+            "outcome_name": outcome_name,
             "samples": list(sample_keys),
             "model": model,
             "summary": summary,
@@ -429,6 +436,11 @@ def checked_model_type(model_type, points, binary, names):
         if non_binary:
             raise ValueError(f"model_type='checklist' needs binary items (0 or 1 on the training "
                              f"data); {non_binary} take other values")
+        # and counts each box once: other points break M and the rule the same way
+        non_unit = [str(names[j]) for j in binary if abs(points[j]) != 1]
+        if non_unit:
+            raise ValueError(f"model_type='checklist' needs coefficients of +1 or -1; "
+                             f"{non_unit} have other points")
     return model_type
 
 
@@ -540,6 +552,15 @@ def checked_classes(scored):
         if len(labels) < 2:
             raise ValueError(f"sample {name!r} has a single class ({labels}); ROC and "
                              f"calibration need both classes in every sample")
+
+
+def checked_finite_scores(scored):
+    """Every row of every sample has a finite score and margin: finite values can still overflow
+    (a huge value times its points), and ROC, calibration and the log loss need finite ones."""
+    for name, (_, score, intercept) in scored.items():
+        if not np.all(np.isfinite(score + intercept)):
+            raise ValueError(f"sample {name!r} has non-finite scores: points x values overflow "
+                             f"for some row")
 
 
 def display_name(name):
@@ -670,24 +691,29 @@ def collapse_scores(risks, low_risk, high_risk, max_scores_printed):
     least 2) of them, and the risk range printed one score per cell.
 
     The range starts at the thresholds, ``low_risk``..``high_risk``. While the strip prints too
-    many cells, the most extreme risk printed on its own (nearest 0 or 1) folds into its tail,
-    one at a time: the range then starts (ends) at the risk of the next score in, the lowest
-    (highest) still printed on its own, so a tail's label (``< 26.9%``) is the risk of the
-    score beside it. A tail that ends up holding a single score is printed as its own cell, as
-    at the thresholds, and keeps its threshold. When every score folds (``max_scores_printed``
-    of 2), no score is printed on its own and each tail reads the risk of the nearest score in
-    the other: ``min_printed_risk`` then exceeds ``max_printed_risk``.
+    many cells, the most extreme score printed on its own (risk nearest 0 or 1) folds into its
+    tail, one at a time: the range then starts (ends) at the risk of the next score in, the
+    lowest (highest) still printed on its own, so a tail's label (``< 26.9%``) is the risk of the
+    score beside it. Scores fold by position, not by risk, so scores sharing a risk (saturated at
+    0 or 1) fold one at a time too. A tail that ends up holding a single score is printed as its
+    own cell, as at the thresholds, and keeps its threshold. When every score folds
+    (``max_scores_printed`` of 2), no score is printed on its own and each tail reads the risk of
+    the nearest score in the other: ``min_printed_risk`` then exceeds ``max_printed_risk``.
     """
+    n = len(risks)
     min_printed_risk, max_printed_risk = low_risk, high_risk
-    groups = tail_groups(risks, (low_risk, high_risk))
+    # the number of scores in each tail; scores low..n - high - 1 are printed on their own
+    low, high = tail_sizes(risks, (low_risk, high_risk))
+    groups = index_groups(n, low, high)
     while len(groups) > max_scores_printed:
-        # with more than 2 cells, some risk is printed on its own and has a risk beyond it
-        printed = risks[(risks >= min_printed_risk) & (risks <= max_printed_risk)]
-        if printed[0] <= 1 - printed[-1]:
-            min_printed_risk = risks[risks > printed[0]][0]
+        # with more than 2 cells, some score is printed on its own and has a score beyond it
+        if risks[low] <= 1 - risks[n - high - 1]:
+            low += 1
+            min_printed_risk = risks[low]
         else:
-            max_printed_risk = risks[risks < printed[-1]][-1]
-        groups = tail_groups(risks, (min_printed_risk, max_printed_risk))
+            high += 1
+            max_printed_risk = risks[n - high - 1]
+        groups = index_groups(n, low, high)
     # an end whose tail did not collapse prints no tail label: it keeps its threshold
     if groups[0][2] != "low":
         min_printed_risk = low_risk
@@ -710,12 +736,24 @@ def tail_groups(risks, printed_risks):
     and the calibration points in ``collapse.calibration.df`` (``ibid.:1310-1352``) -- and a tail
     holding a single risk is left alone by both.
     """
+    return index_groups(len(risks), *tail_sizes(risks, printed_risks))
+
+
+def tail_sizes(risks, printed_risks):
+    """``(low, high)``: how many of the ascending ``risks`` lie below ``low_risk`` and above
+    ``high_risk``, for ``printed_risks`` = ``(low_risk, high_risk)``."""
     risks = np.asarray(risks, dtype=float)
     n = len(risks)
     low_risk, high_risk = printed_risks
     low = int(np.searchsorted(risks, low_risk))  # risks are ascending, so the tails are prefixes
     # the tails never share a risk, even when low > high (``collapse_scores`` folded every score)
     high = min(n - int(np.searchsorted(risks, high_risk, side="right")), n - low)
+    return low, high
+
+
+def index_groups(n, low, high):
+    """``tail_groups``' groups of ``n`` ascending scores whose first ``low`` form the low tail
+    and last ``high`` the high tail; a tail of one score is a group of its own."""
     groups = [(i, i, None) for i in range(n)]
     if high > 1:
         groups[n - high:] = [(n - high, n - 1, "high")]
@@ -934,25 +972,20 @@ def summary_section(labels, model, roc, calibration, log_loss, training, constra
             summary_row("outcome_rate", "Outcome Rate",
                         [percent(labels[s].mean()) for s in names])]
 
-    size = str(len(model["items"]))
-    if constraints.get("max_size") is not None:
-        size += f" (max {int(constraints['max_size'])})"
-    rows.append(summary_row("model_size", "Model Size", [size], span=len(names)))
-    if constraints.get("point_range") is not None:
-        lb, ub = constraints["point_range"]
-        rows.append(summary_row("point_range", "Point Range", [f"{number(lb)} to {number(ub)}"],
-                                span=len(names)))
-
-    if training is not None:
-        run_time = "{:.2f} s" if (training.get("run_time") or 0) < 1 else "{:.1f} s"
-        rows += [
-            summary_row("objective_value", "Objective Value",
-                        [fmt(training.get("objective_value"), "{:.4f}")], span=len(names)),
-            summary_row("optimality_gap", "Optimality Gap",
-                        [fmt(training.get("optimality_gap"), "{:.1%}")], span=len(names)),
-            summary_row("run_time", "Run Time", [fmt(training.get("run_time"), run_time)],
-                        span=len(names)),
-        ]
+    size = f"{len(model['items'])} (max {int(constraints['max_size'])})"
+    lb, ub = constraints["point_range"]
+    run_time = "{:.2f} s" if (training.get("run_time") or 0) < 1 else "{:.1f} s"
+    rows += [
+        summary_row("model_size", "Model Size", [size], span=len(names)),
+        summary_row("point_range", "Point Range", [f"{number(lb)} to {number(ub)}"],
+                    span=len(names)),
+        summary_row("objective_value", "Objective Value",
+                    [fmt(training.get("objective_value"), "{:.4f}")], span=len(names)),
+        summary_row("optimality_gap", "Optimality Gap",
+                    [fmt(training.get("optimality_gap"), "{:.1%}")], span=len(names)),
+        summary_row("run_time", "Run Time", [fmt(training.get("run_time"), run_time)],
+                    span=len(names)),
+    ]
 
     rows += [summary_row("auc", "AUC", [f"{roc[s]['auc']:.3f}" for s in names]),
              summary_row("ece", "ECE", [percent(calibration[s]["ece"]) for s in names]),
@@ -1076,7 +1109,7 @@ def calibration_figure(sample_keys, points, labels):
         # lighter ones
         circles = {"mode": "lines+markers"} if cal["labels"] is None else {
             "mode": "lines+markers+text", "text": cal["labels"], "textposition": "middle center",
-            "textfont": {"size": LABEL_PX, "color": BACKGROUND if key == "training" else "#000000"}}
+            "textfont": {"size": LABEL_PX, "color": BACKGROUND if key == "training" else LABEL_TEXT}}
         traces.append(go.Scatter(
             **circles,
             name=labels[name], meta=name,

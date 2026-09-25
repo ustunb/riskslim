@@ -238,7 +238,8 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
             ``data`` already has a test split.
         model_type : {"risk_score", "checklist"}, optional
             How to show the model. Inferred from the coefficients when None: a checklist when
-            every nonzero coefficient is +1 or -1.
+            every nonzero coefficient is +1 or -1 and its item is binary on the training data.
+            An explicit ``"checklist"`` needs both. See ``ModelReport``.
         data : riskslim.data.BinaryClassificationDataset, optional
             The dataset the model was fit on: its names label the page, and when it has splits
             (``data.split(...)``) each split is a sample; otherwise the training sample is the
@@ -251,7 +252,8 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         samples : sequence of {"training", "cv", "validation", "test"}, optional
             The samples shown, in order. See ``ModelReport``.
         low_risk_threshold, high_risk_threshold : float, optional
-            Where the risks collapse at each end. See ``ModelReport``.
+            Where the risks collapse at each end; a continuous model ignores them. See
+            ``ModelReport``.
         max_scores_printed : int, optional
             The most cells a discrete model's score-to-risk strip prints, at least 2; the most
             extreme scores fold into the tails to fit. A continuous model's number of risk bins.
