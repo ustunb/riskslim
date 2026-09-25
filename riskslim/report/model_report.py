@@ -69,7 +69,7 @@ import json
 import math
 import numbers
 import warnings
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from functools import cache
 from importlib.resources import files
 from pathlib import Path
@@ -250,9 +250,12 @@ class ReportSettings:
 class ModelReport:
     """An HTML report for a risk score or a checklist.
 
-    ``report.settings`` is the ``ReportSettings`` it was built with, ``report.data`` is everything
-    the page shows, ``report.html`` is the page as a string, ``report.save(path)`` writes it, and
-    notebooks display it inline in an iframe.
+    ``report.model`` is the classifier, ``report.dataset`` the ``BinaryClassificationDataset``
+    (``data``, else the one ``fit`` built), ``report.settings`` is the ``ReportSettings`` it was
+    built with, ``report.components`` is ``{name: ReportComponent}`` over the components shown,
+    in their order, ``report.data`` is everything the page shows, ``report.html`` is the page as a
+    string, ``report.save(path)`` writes it, and notebooks display it inline in an iframe.
+    ``report.with_settings(**changes)`` builds a new report with other settings.
     ``RiskSLIMClassifier.report(...)`` builds one.
 
     Parameters
@@ -286,13 +289,28 @@ class ModelReport:
                  y_test=None, **settings):
         check_is_fitted(classifier)
         self.settings = settings = ReportSettings(**settings)
-        evaluation = evaluate(classifier, data, cv_models, model_type, X_test, y_test, settings)
+        self.model = classifier
+        self.dataset = checked_dataset(data, classifier)
+        # the arguments as passed, for with_settings to rebuild from: references to the caller's
+        # objects, not the float64 arrays evaluate checks them into, so they pin no copy. The fold
+        # models are listed, so an iterator of them serves both this build and a rebuild.
+        self._inputs = {"data": data,
+                        "cv_models": None if cv_models is None else list(cv_models),
+                        "model_type": model_type, "X_test": X_test, "y_test": y_test}
+        evaluation = evaluate(classifier, **self._inputs, settings=settings)
         # every component, shown or not: the data block holds every section's numbers
         builders = {"model": build_model_component, "summary": build_summary_component,
                     "roc": build_roc_component, "calibration": build_calibration_component}
         built = {name: builders[name](evaluation, settings) for name in COMPONENTS}
         self.components = {name: built[name] for name in settings.components}
         self.data = report_data(built, evaluation, settings)
+
+    def with_settings(self, **changes):
+        """A new report of the same model and data with ``changes`` to its settings, fields of
+        ``ReportSettings`` (an unknown one raises TypeError). This report is unchanged; a sample
+        left to None is resolved afresh."""
+        settings = replace(self.settings, **changes)
+        return type(self)(self.model, **self._inputs, **asdict(settings))
 
     @property
     def html(self):
@@ -378,7 +396,8 @@ def evaluate(classifier, data, cv_models, model_type, X_test, y_test, settings):
     constraints = fitted_constraints(classifier)
 
     # the splits stay local: the page needs only what they produce, and holding them would pin
-    # a float64 copy of every X for the report's lifetime
+    # a float64 copy of every X for the report's lifetime (the report keeps the arguments as
+    # passed instead)
     splits = split_samples(classifier, data, X_test, y_test)
     intercept, points = float(weights[0]), weights[1:]
     X_train = splits[TRAINING][0]
