@@ -1,8 +1,10 @@
 """The report: one object that computes the page, builds its figures and renders the HTML.
 
 ``ModelReport`` takes a fitted ``RiskSLIMClassifier`` and, optionally, the
-``BinaryClassificationDataset`` it was fit on (no solver runs). It computes one
-JSON-serializable data block with no NaN or inf, builds the two Plotly figures from it, and
+``BinaryClassificationDataset`` it was fit on (no solver runs). It evaluates the model on its
+samples once (``evaluate``), builds each card of the page from that evaluation alone (a
+``ReportComponent``: its numbers, and for the ROC and calibration cards a Plotly figure),
+serializes them into one JSON-serializable data block with no NaN or inf (``report_data``), and
 renders a single self-contained page (libraries load from a pinned CDN). The browser only
 displays what Python computed.
 
@@ -285,46 +287,12 @@ class ModelReport:
         check_is_fitted(classifier)
         self.settings = settings = ReportSettings(**settings)
         evaluation = evaluate(classifier, data, cv_models, model_type, X_test, y_test, settings)
-        components, sample_keys = settings.components, evaluation.sample_keys
-        scored, tables = evaluation.scored, evaluation.tables
-
-        model = model_section(evaluation, settings)
-        calibration = {name: calibration_section(tables[name], evaluation.ece[name],
-                                                 evaluation.score_type)
-                       for name in scored}
-        summary = summary_section(evaluation.sample_numbers, model, evaluation.solution_info,
-                                  evaluation.constraints)
-        self.data = {
-            "schema_version": SCHEMA_VERSION,
-            "title": f"{MODEL_TYPES[evaluation.model_type]}: {evaluation.outcome_name}",
-            "outcome_name": evaluation.outcome_name,
-            "samples": list(sample_keys),
-            "model": model,
-            "summary": summary,
-            "roc": evaluation.roc,
-            "calibration": calibration,
-            "settings": {"components": list(components), "samples": evaluation.samples,
-                         "low_risk_threshold": settings.low_risk_threshold,
-                         "high_risk_threshold": settings.high_risk_threshold,
-                         "min_printed_risk": evaluation.printed_risks[0],
-                         "max_printed_risk": evaluation.printed_risks[1],
-                         "max_scores_printed": settings.max_scores_printed},
-        }
-        # only the figures on the page: the sections above hold their numbers either way
-        self.data["figures"] = {}
-        if "roc" in components:
-            self.data["figures"]["roc"] = roc_figure(
-                sample_keys, evaluation.roc, sample_labels(evaluation.sample_numbers, "auc"))
-        if "calibration" in components:
-            # a discrete model's points pool its collapsed tails (pooled_points); a continuous
-            # model's are its risk bins, plain circles that never pool: its strip has no tails
-            points = {name: (pooled_points(*scored[name], tables[name], evaluation.printed_risks)
-                             if evaluation.score_type == "discrete"
-                             else calibration_points(tables[name], None))
-                      for name in sample_keys}
-            self.data["figures"]["calibration"] = calibration_figure(
-                sample_keys, points, sample_labels(evaluation.sample_numbers, "ece"))
-        self.data["narrow"] = narrow_overrides(self.data["figures"])
+        # every component, shown or not: the data block holds every section's numbers
+        builders = {"model": build_model_component, "summary": build_summary_component,
+                    "roc": build_roc_component, "calibration": build_calibration_component}
+        built = {name: builders[name](evaluation, settings) for name in COMPONENTS}
+        self.components = {name: built[name] for name in settings.components}
+        self.data = report_data(built, evaluation, settings)
 
     @property
     def html(self):
@@ -353,9 +321,9 @@ class ModelReport:
 
 @dataclass(frozen=True)
 class Evaluation:
-    """What ``evaluate`` computes from the model and its samples, before any section is built.
+    """What ``evaluate`` computes from the model and its samples, before any component is built.
 
-    Everything two sections share is here, so no section reads another. Samples are
+    Everything two components share is here, so no component reads another. Samples are
     ``{name: ...}`` over the samples shown, in page order, except ``tables``, which also holds
     the training sample's.
 
@@ -401,7 +369,7 @@ class Evaluation:
 
 
 def evaluate(classifier, data, cv_models, model_type, X_test, y_test, settings):
-    """Check the inputs against the fit, score every sample and compute what the sections share:
+    """Check the inputs against the fit, score every sample and compute what the components share:
     an ``Evaluation``. The arguments are ``ModelReport``'s, ``settings`` a ``ReportSettings``."""
     dataset = checked_dataset(data, classifier)
     weights, variable_names = checked_coefficients(classifier, dataset)
@@ -472,6 +440,45 @@ def evaluate(classifier, data, cv_models, model_type, X_test, y_test, settings):
         binary=binary, item_values=item_values, score_type=score_type, risk_edges=risk_edges,
         printed_risks=printed_risks, samples=samples, sample_keys=sample_keys, scored=scored,
         tables=tables, roc=roc, ece=ece, sample_numbers=sample_numbers)
+
+
+@dataclass(frozen=True)
+class ReportComponent:
+    """One card of the page: its section of the data block (``data``, numbers and display
+    strings) and its Plotly figure (``figure``, a ``go.Figure``; None for the tables). Each is
+    built from the ``Evaluation`` alone, by ``build_model_component``,
+    ``build_summary_component``, ``build_roc_component`` or ``build_calibration_component``."""
+
+    data: dict
+    figure: go.Figure | None = None
+
+
+def report_data(components, evaluation, settings):
+    """The data block: ``report.data``, the one place the components become JSON.
+
+    ``components`` is ``{name: ReportComponent}`` over all of ``COMPONENTS``, shown or not:
+    every section's numbers are in the block either way, and only the figures of the components
+    in ``settings.components`` (a ``ReportSettings``) are, as Plotly JSON, with their narrow
+    overrides. ``evaluation`` is the ``Evaluation`` they were built from.
+    """
+    data = {
+        "schema_version": SCHEMA_VERSION,
+        "title": f"{MODEL_TYPES[evaluation.model_type]}: {evaluation.outcome_name}",
+        "outcome_name": evaluation.outcome_name,
+        "samples": list(evaluation.sample_keys),
+        **{name: components[name].data for name in COMPONENTS},
+        "settings": {"components": list(settings.components), "samples": evaluation.samples,
+                     "low_risk_threshold": settings.low_risk_threshold,
+                     "high_risk_threshold": settings.high_risk_threshold,
+                     "min_printed_risk": evaluation.printed_risks[0],
+                     "max_printed_risk": evaluation.printed_risks[1],
+                     "max_scores_printed": settings.max_scores_printed},
+        # only the figures on the page, in COMPONENTS order
+        "figures": {name: components[name].figure.to_plotly_json() for name in COMPONENTS
+                    if name in settings.components and components[name].figure is not None},
+    }
+    data["narrow"] = narrow_overrides(data["figures"])
+    return data
 
 
 def is_binary(values):
@@ -690,8 +697,9 @@ def point_label(points, binary, model_type):
     return str(points) if binary else f"{points} × value"
 
 
-def model_section(evaluation, settings):
-    """Items, score type, score range, score-to-risk strip and (for checklists) M and the rule.
+def build_model_component(evaluation, settings):
+    """The Model card, a table with no figure: items, score type, score range, score-to-risk
+    strip and (for checklists) M and the rule.
 
     ``points_header`` is the item table's points column, and None when there is no such column
     (a checklist whose items are all ``+1``: every box counts the same, so a column of ``+`` says
@@ -768,7 +776,7 @@ def model_section(evaluation, settings):
                     f"of checked (−) items is at least {m}")
         model["checklist_m"] = m
         model["rule"] = rule
-    return model
+    return ReportComponent(model)
 
 
 def discrete_strip(value_sets, intercept, checklist_m, *, low_risk, high_risk,
@@ -1066,16 +1074,20 @@ def summary_row(key, label, values, span=1):
     return {"key": key, "label": label, "values": values, "span": span}
 
 
-def summary_section(sample_numbers, model, training, constraints):
-    """One flat table of formatted strings: ``columns`` (a blank label column, then the samples)
-    and ``rows`` in reading order -- the data, the constraints, the solver, the performance.
+def build_summary_component(evaluation, settings):
+    """The Summary card, a table with no figure: one flat table of formatted strings,
+    ``columns`` (a blank label column, then the samples) and ``rows`` in reading order -- the
+    data, the constraints, the solver, the performance.
 
     There are no block subheaders and no "value" header: the samples name the columns, and a row
     that is not per-sample simply carries one value.
 
-    ``sample_numbers`` is the ``Evaluation``'s, in column order: each per-sample row reads its
-    strings from there.
+    Each per-sample row reads its strings from the ``Evaluation``'s ``sample_numbers``, in
+    column order; the model size counts its nonzero items (``item_values``). ``settings``, a
+    ``ReportSettings``, changes nothing here: every builder takes it.
     """
+    sample_numbers, constraints = evaluation.sample_numbers, evaluation.constraints
+    training = evaluation.solution_info
     names = list(sample_numbers)
 
     def per_sample(key):
@@ -1084,7 +1096,7 @@ def summary_section(sample_numbers, model, training, constraints):
     rows = [summary_row("n", "N", per_sample("n")),
             summary_row("outcome_rate", "Outcome Rate", per_sample("outcome_rate"))]
 
-    size = f"{len(model['items'])} (max {int(constraints['max_size'])})"
+    size = f"{len(evaluation.item_values)} (max {int(constraints['max_size'])})"
     lb, ub = constraints["point_range"]
     run_time = "{:.2f} s" if (training.get("run_time") or 0) < 1 else "{:.1f} s"
     rows += [
@@ -1102,7 +1114,7 @@ def summary_section(sample_numbers, model, training, constraints):
     rows += [summary_row("auc", "AUC", per_sample("auc")),
              summary_row("ece", "ECE", per_sample("ece")),
              summary_row("log_loss", "Log Loss", per_sample("log_loss"))]
-    return {"columns": ["", *names], "rows": rows}
+    return ReportComponent({"columns": ["", *names], "rows": rows})
 
 
 def number(value):
@@ -1119,9 +1131,35 @@ def fmt(value, template):
 
 
 # ---------------------------------------------------------------------------
-# Plotly figures: built as ``go.Figure`` objects, so every property is validated here, and
-# serialized to the plain JSON the data block carries to ``Plotly.newPlot``.
+# Plotly figures: built as ``go.Figure`` objects, so every property is validated here;
+# ``report_data`` serializes them to the plain JSON the data block carries to ``Plotly.newPlot``.
 # ---------------------------------------------------------------------------
+
+def build_roc_component(evaluation, settings):
+    """The ROC card: each sample's ``roc_section`` and its ``roc_figure``, with the AUC of
+    ``sample_numbers`` in the legend. ``settings`` changes nothing here."""
+    labels = sample_labels(evaluation.sample_numbers, "auc")
+    return ReportComponent(evaluation.roc,
+                           roc_figure(evaluation.sample_keys, evaluation.roc, labels))
+
+
+def build_calibration_component(evaluation, settings):
+    """The Calibration card: each sample's ``calibration_section`` and the
+    ``calibration_figure``, with the ECE of ``sample_numbers`` in the legend. ``settings``
+    changes nothing here: the printed risk range the points pool at is the ``Evaluation``'s."""
+    scored, tables = evaluation.scored, evaluation.tables
+    sections = {name: calibration_section(tables[name], evaluation.ece[name],
+                                          evaluation.score_type)
+                for name in scored}
+    # a discrete model's points pool its collapsed tails (pooled_points); a continuous model's
+    # are its risk bins, plain circles that never pool: its strip has no tails
+    points = {name: (pooled_points(*scored[name], tables[name], evaluation.printed_risks)
+                     if evaluation.score_type == "discrete"
+                     else calibration_points(tables[name], None))
+              for name in scored}
+    labels = sample_labels(evaluation.sample_numbers, "ece")
+    return ReportComponent(sections, calibration_figure(evaluation.sample_keys, points, labels))
+
 
 def sample_labels(sample_numbers, metric):
     """``{sample: "Training<br>(n = 8,815 p = 12.4%)<br>AUC = 0.950"}``: a legend entry.
@@ -1156,8 +1194,7 @@ def roc_figure(sample_keys, sections, labels):
                           "False Positive Rate %{x:.1%}<br>True Positive Rate %{y:.1%}"
                           "<extra></extra>",
         ))
-    return go.Figure(traces, figure_layout("False Positive Rate",
-                                           "True Positive Rate")).to_plotly_json()
+    return go.Figure(traces, figure_layout("False Positive Rate", "True Positive Rate"))
 
 
 def calibration_points(table, labels):
@@ -1229,7 +1266,7 @@ def calibration_figure(sample_keys, points, labels):
                           "Calibration Error %{customdata[2]:.1%}<br>n = %{customdata[1]:,}"
                           "<extra></extra>",
         ))
-    return go.Figure(traces, figure_layout("Predicted Risk", "Observed Risk")).to_plotly_json()
+    return go.Figure(traces, figure_layout("Predicted Risk", "Observed Risk"))
 
 
 def figure_layout(x_title, y_title):
