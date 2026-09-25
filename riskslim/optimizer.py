@@ -220,7 +220,7 @@ class RiskSLIMOptimizer:
                     self.coef_set.lb,
                     self.get_L0_penalty,
                     self.compute_loss_from_scores,
-                    active_set_flag,
+                    active_set_flag=active_set_flag,
                     )
 
             rounder = lambda weights, cutoff: sequential_rounding(
