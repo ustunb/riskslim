@@ -75,6 +75,12 @@ def test_report_shows_training_data_and_labelled_test_sample():
     assert 'run_time' in rows
 
 
+def test_solution_info_reports_positive_run_time():
+    info = fit_classifier().solution_info_
+
+    assert info['run_time'] > 0
+    assert info['solver_time'] >= 0
+
 def test_intercept_bound_counts_only_max_size_items():
     # 3 binary items with |coef| <= 5: one nonzero item scores at most 5, so the intercept needs at most 5 + 1
     clf = fit_classifier(max_size=1)

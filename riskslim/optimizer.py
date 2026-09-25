@@ -1,5 +1,7 @@
 """RiskSLIM optimizer."""
 
+import time
+
 import numpy as np
 
 from riskslim.loss_computation import get_loss_functions
@@ -397,7 +399,9 @@ class RiskSLIMOptimizer:
 
         # Set runtime
         self.mip.set_time_limit(self.settings["max_runtime"])
+        start_time = time.time()
         self.mip.solve()
+        self.stats.total_run_time = time.time() - start_time
         self.fitted = True
 
     def add_constraint(self, var_names, var_type, values, rhs, sense, name=None):
