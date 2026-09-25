@@ -3,6 +3,7 @@
 import numpy as np
 from riskslim.utils import Stats
 from riskslim.bounds import Bounds
+from riskslim.data import BinaryClassificationDataset
 
 
 def test_bounds():
@@ -41,3 +42,13 @@ def test_stats():
             assert hasattr(stats, k)
             assert isinstance(val, (int, float))
             assert (val == 0) or not np.isfinite(val)
+
+
+def test_read_csv_without_data_suffix_infers_columns(tmp_path):
+    # a file not named *_data.csv has no implied helper file, so column roles come from the data
+    data_file = tmp_path / "x_binarized.csv"
+    data_file.write_text("y,a,b\n" + "0,1,0\n1,0,1\n" * 5)
+
+    data = BinaryClassificationDataset.read_csv(data_file)
+
+    assert data.names.y == "y" and data.names.X == ["a", "b"]

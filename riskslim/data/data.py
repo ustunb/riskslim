@@ -382,24 +382,22 @@ class BinaryClassificationDataset(DillSerializableMixin):
             If None, preserve original values. If provided (e.g., (-1, 1) or (0, 1)),
             recode labels so that the smaller unique value maps to neg_class
             and the larger unique value maps to pos_class. Default is (-1, 1).
-        :param helper_file: Path to the helper_file or None.
+        :param helper_file: Path to the helper_file or None. If None, NAME_data.csv implies
+            NAME_helper.csv; other data file names imply no helper file.
         :return: BinaryClassificationDataset
         """
-
-        # extract common file header from dataset file
-        file_header = str(data_file).rsplit('_data.csv')[0]
-
-        # convert file names into path objects with the correct extension
+        data_path = Path(data_file)
+        if helper_file is None and data_path.name.endswith('_data.csv'):
+            helper_file = data_path.with_name(data_path.name[:-len('_data.csv')] + '_helper.csv')
         files = {
-            'data': f"{file_header}_data",
-            'helper': helper_file or f"{file_header}_helper",
+            'data': data_path,
+            'helper': Path(helper_file).with_suffix('.csv') if helper_file is not None else None,
             }
-        files = {k: Path(v).with_suffix('.csv') for k, v in files.items()}
         assert files[
             'data'].is_file(), f"could not find dataset file: {files['data']}"
 
         # read helper file
-        if files['helper'].is_file():
+        if files['helper'] is not None and files['helper'].is_file():
             hf = pd.read_csv(files['helper'], sep = ',')
             hf['is_variable'] = ~(hf['is_outcome'].astype(bool) | hf[
                 'is_group_attribute'].astype(bool))
