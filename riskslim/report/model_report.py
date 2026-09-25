@@ -1177,18 +1177,26 @@ def summary_row(key, **value):
             "definition": row.definition, **value}
 
 
-def sample_table(evaluation, keys, shared=None):
-    """A block with one column per sample: ``columns`` (a blank label column, then the samples)
-    and a ``summary_row`` per key of ``keys``: its ``values``, one per sample in column order,
+def summary_rows(evaluation, keys, shared=None):
+    """A ``summary_row`` per key of ``keys``: its ``values``, one per sample in column order,
     read from the ``Evaluation``'s ``sample_numbers``; or, for a key of ``shared``
     (``{key: value}``, the same in every sample), its one formatted ``value``."""
     shared = shared or {}
-    sample_numbers = evaluation.sample_numbers
-    return {"columns": ["", *sample_numbers],
-            "rows": [summary_row(key, value=format_row(key, shared[key])) if key in shared
-                     else summary_row(key, values=[numbers[key]
-                                                   for numbers in sample_numbers.values()])
-                     for key in keys]}
+
+    def row(key):
+        if key in shared:
+            return summary_row(key, value=format_row(key, shared[key]))
+        return summary_row(key, values=[printed[key]
+                                        for printed in evaluation.sample_numbers.values()])
+
+    return [row(key) for key in keys]
+
+
+def sample_table(evaluation, keys, shared=None):
+    """A block with one column per sample: ``columns`` (a blank label column, then the samples)
+    and its ``summary_rows``."""
+    return {"columns": ["", *evaluation.sample_numbers],
+            "rows": summary_rows(evaluation, keys, shared)}
 
 
 def build_dataset_component(evaluation, settings):
@@ -1210,8 +1218,7 @@ def build_training_component(evaluation, settings):
     values = {"model_size": (len(evaluation.item_values), evaluation.max_size),
               "optimality_gap": solution.get("optimality_gap"),
               "run_time": solution.get("run_time")}
-    return ReportComponent({"rows": [summary_row(key, value=format_row(key, values[key]))
-                                     for key in TRAINING_ROWS]})
+    return ReportComponent({"rows": summary_rows(evaluation, TRAINING_ROWS, shared=values)})
 
 
 def build_performance_component(evaluation, settings):

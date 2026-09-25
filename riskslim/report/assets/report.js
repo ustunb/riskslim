@@ -36,10 +36,13 @@
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     document.querySelectorAll(".rs-label:hover, .rs-label:focus-within").forEach((cell) => {
+      if (cell.classList.contains("rs-dismissed")) return;
       cell.classList.add("rs-dismissed");
-      const restore = () => cell.classList.remove("rs-dismissed");
-      cell.addEventListener("mouseleave", restore, { once: true });
-      cell.addEventListener("focusin", restore, { once: true });
+      // whichever comes first restores it and drops both listeners
+      const listening = new AbortController();
+      const restore = () => { cell.classList.remove("rs-dismissed"); listening.abort(); };
+      cell.addEventListener("mouseleave", restore, { signal: listening.signal });
+      cell.addEventListener("focusin", restore, { signal: listening.signal });
     });
     if (document.activeElement?.classList.contains("rs-term")) document.activeElement.blur();
   });
