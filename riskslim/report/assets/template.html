@@ -59,7 +59,7 @@
   </table>
   {#- report.js fills in the two outputs, from the inputs above #}
   <p class="rs-readout" aria-live="polite">
-    <span class="rs-score-label">{{ model.score_header }}</span> <output id="rs-total"></output>
+    <span class="rs-score-label">{{ model.score_header }}</span> <output id="rs-score"></output>
     · <span class="rs-score-label">{{ model.risk_header }}</span> <output id="rs-risk"></output>
   </p>
   {%- if model.rule %}

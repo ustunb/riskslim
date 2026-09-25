@@ -23,7 +23,8 @@ Dimensions:
                 many scores, a low tail holding every score -- a tail of one score is not a
                 separate value: it is printed and plotted like any other, which the first case
                 already covers. The strip and the calibration points collapse from one rule, so
-                the strip carries the three cases and the points one pooling case.
+                the strip carries the three cases and the points one pooling case. A discrete
+                strip over max_scores_printed tightens its thresholds (one case).
   figure:       roc, calibration   -- one trace per sample, plotted straight from the data block's
                                       roc / calibration sections, each named for its legend entry
                                       (sample, n and outcome rate, AUC / ECE)
@@ -38,7 +39,8 @@ Rejection paths owned here (one invalid mutation of a valid call each): non-fini
 model_type, model_type="checklist" with a non-binary item, X_test column count != the fitted
 feature count, y_test row count != X_test row count, y_test labels outside the classes seen in
 fit, a sample with a single class, and components / samples that are empty, repeat an entry or
-name an unknown one, and risk thresholds out of order or outside 0..1.
+name an unknown one, risk thresholds out of order or outside 0..1, and a max_scores_printed
+below 1.
 
 Checks that need no browser: `plotly.graph_objects.Figure(fig)` rejects misspelled or invalid
 properties, and one test asserts the Plotly template's and the sample colours are the ones
@@ -63,6 +65,7 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.io as pio
 import pytest
+from scipy.special import expit
 from utils import (
     CHECKLIST_WEIGHTS,
     NAMES,
@@ -161,8 +164,8 @@ def test_non_binary_feature_score_range_spans_points_times_value_range(fitted_wi
                                  "value_range": [1, 8], "name_label": "a (1–8)",
                                  "points_label": "2 × value"}
     assert model["score_range"] == [1, 17]
-    # the Model card's lookup: a total in a collapsed tail reads the risk its cell shows
-    cells = [model["cell_by_total"][total]["cell"] for total in ("6", "7", "17")]
+    # the Model card's lookup: a score in a collapsed tail reads the risk its cell shows
+    cells = [model["cell_by_score"][score]["cell"] for score in ("6", "7", "17")]
     assert cells == [5, 6, 6]
     assert [model["score_to_risk"][cell]["risk"] for cell in cells] == ["98.2%", "> 99.0%",
                                                                          "> 99.0%"]
@@ -186,6 +189,27 @@ def test_score_to_risk_collapses_the_tails_of_the_strip(fitted, fitted_wide, wid
 
     assert [(cell["score"], cell["risk"]) for cell in model["score_to_risk"]] == expected
     assert not any(cell["positive"] for cell in model["score_to_risk"])
+
+
+def test_a_discrete_strip_over_max_scores_printed_tightens_its_thresholds(fitted):
+    report = make_report(fitted, [-5, 5, 4, 2], low_risk_threshold=0.001,
+                         high_risk_threshold=0.999, max_scores_printed=5)
+    model, settings = report.data["model"], report.data["settings"]
+
+    # scores 0, 2, 4, 5, 6, 7, 9, 11, all inside 0.1%..99.9%: eight cells before tightening
+    assert (model["score_type"], model["n_scores"], model["n_scores_printed"]) == ("discrete", 8, 5)
+    # the most extreme score folds into its tail, one at a time (11, 0, 9, 2, 7), and each tail
+    # is labelled with the threshold used: halfway, in score, to the next score in
+    assert [(cell["score"], cell["risk"]) for cell in model["score_to_risk"]] == [
+        ("0 to 2", "< 11.9%"), ("4", "26.9%"), ("5", "50.0%"), ("6", "73.1%"),
+        ("7 to 11", "> 81.8%")]
+    assert (settings["low_risk_threshold"], settings["high_risk_threshold"]) == (0.001, 0.999)
+    assert settings["low_risk_threshold_used"] == pytest.approx(expit(3 - 5))
+    assert settings["high_risk_threshold_used"] == pytest.approx(expit(6.5 - 5))
+    # the calibration points (the training rows hold every score) and the Model card collapse
+    # the same tails
+    assert report.data["figures"]["calibration"]["data"][-1]["text"] == ["≤2", "4", "5", "6", "7+"]
+    assert model["cell_by_score"]["9"]["cell"] == 4
 
 
 @pytest.mark.parametrize("weights, expected_m, expected_rule", [
@@ -297,6 +321,8 @@ def test_data_is_strict_json(fitted, weights):
     pytest.param({"low_risk_threshold": 0.5, "high_risk_threshold": 0.5}, "risk thresholds must",
                  id="thresholds-out-of-order"),
     pytest.param({"high_risk_threshold": 1.5}, "risk thresholds must", id="threshold-above-one"),
+    pytest.param({"max_scores_printed": 0}, "max_scores_printed must be a positive integer",
+                 id="max-scores-printed-below-one"),
 ])
 def test_invalid_inputs_are_rejected(request, invalid, match):
     call = {"fixture": "fitted", "weights": RISK_SCORE_WEIGHTS, **invalid}
@@ -354,7 +380,9 @@ def test_settings_choose_the_cards_the_samples_and_where_the_tails_collapse(fitt
 
     assert data["settings"] == {"components": ["calibration", "model"],
                                 "samples": ["test", "training"],
-                                "low_risk_threshold": 0.01, "high_risk_threshold": 0.95}
+                                "low_risk_threshold": 0.01, "high_risk_threshold": 0.95,
+                                "low_risk_threshold_used": 0.01, "high_risk_threshold_used": 0.95,
+                                "max_scores_printed": 12}
     assert re.findall(r"<h3>(.*?)</h3>", report.html) == ["Calibration", "Model"]
     assert data["samples"] == list(data["roc"]) == list(data["calibration"]) == \
         ["Test", "Training"]
@@ -540,24 +568,24 @@ def test_report_renders_in_browser_without_errors(chromium, saved_report, width)
         assert (fit["rows"] == 1) != ((saved_report.stem, width) in STRIP_WRAPS)
 
         def assert_readout_follows(before, added):
-            """The readout's total moved by ``added``; its risk and outlined cell follow it."""
-            total = page.locator("#rs-total").text_content()
-            assert float(total) == before + added
-            cell = model["cell_by_total"][total]["cell"]
+            """The readout's score moved by ``added``; its risk and outlined cell follow it."""
+            score = page.locator("#rs-score").text_content()
+            assert float(score) == before + added
+            cell = model["cell_by_score"][score]["cell"]
             assert page.locator("#rs-risk").text_content() == model["score_to_risk"][cell]["risk"]
             assert page.locator(".rs-current").get_attribute("data-cell") == str(cell)
-            return float(total)
+            return float(score)
 
-        # checking an item adds its points to the total
+        # checking an item adds its points to the score
         checkbox = page.locator(".rs-model-table input[type=checkbox]").first
-        before = float(page.locator("#rs-total").text_content())
+        before = float(page.locator("#rs-score").text_content())
         checkbox.check()
-        total = assert_readout_follows(before, float(checkbox.get_attribute("data-points")))
+        score = assert_readout_follows(before, float(checkbox.get_attribute("data-points")))
 
         # typing a non-binary item's largest value adds points x (largest - smallest)
         for box in page.locator(".rs-model-table input[type=number]").all():
             box.fill(box.get_attribute("max"))
-            total = assert_readout_follows(total, float(box.get_attribute("data-points")) * (
+            score = assert_readout_follows(score, float(box.get_attribute("data-points")) * (
                 float(box.get_attribute("max")) - float(box.get_attribute("min"))))
 
         # a sample clicked in one plot's legend is hidden in both plots (a single sample has no

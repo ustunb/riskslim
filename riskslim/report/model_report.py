@@ -23,13 +23,22 @@ Conventions
   ``feature symbol value`` (``ClumpThickness ≥ 5``); any other name is shown as it is.
 - **Checklist M:** with k = (#checked +1 items) - (#checked -1 items), M is the smallest integer
   k with ``k + intercept > 0``, i.e. ``floor(-intercept) + 1``.
+- **Score function:** ``points @ x``, the linear function of a row's item values ``x``; the
+  **score** is its value on one row.
 - **Score range:** ``sum(points * [min, max])`` of each item over the training data (a binary
-  item contributes ``points * [0, 1]``). The score-to-risk row lists every achievable total when
-  all item values are integers, and otherwise the totals observed in the training rows.
+  item contributes ``points * [0, 1]``).
+- **Score type:** ``discrete`` when every nonzero item is binary on the training data and every
+  point is an integer: the score function then takes a few integer values, every one of which
+  the score-to-risk strip lists (``possible_scores``: model-derived, whatever the sample).
+  Otherwise ``continuous``.
 - **Collapsed endpoints:** ``logit(k) ≈ logit(k + 1)`` once the risk is near 0 or 1, so the
   scores whose risk falls outside ``low_risk_threshold``..``high_risk_threshold`` (1%..99% by
   default) collapse into one cell of the score-to-risk strip and
   one point of the calibration plot at each end, as they do in the R report (``tail_groups``).
+  A discrete strip that would still print more than ``max_scores_printed`` cells tightens the
+  thresholds for this model (``tightened_risk_thresholds``); the strip, the calibration points
+  and the Model card all use the thresholds used, which ``data["settings"]`` records next to the
+  requested ones.
   Display only: every reported number is computed per score bin, before any collapsing.
 - **Calibration error:** ``|predicted - observed|`` per score bin (``local_error``), and the
   sample's ``ece`` (the R's ``avg_cal_err_distinct``). Score bins with no rows in a sample are
@@ -40,6 +49,7 @@ Conventions
 import html
 import json
 import math
+import numbers
 import warnings
 from functools import cache
 from importlib.resources import files
@@ -60,7 +70,6 @@ from ..loss_functions.log_loss import log_loss_value_from_scores
 from ..utils import is_integer
 
 SCHEMA_VERSION = 2
-MAX_TOTALS = 10_000  # score totals to enumerate before falling back to observed scores
 MODEL_TYPES = {"risk_score": "Risk Score", "checklist": "Checklist"}
 
 # the page's cards, in their default order
@@ -69,6 +78,10 @@ COMPONENTS = ("model", "summary", "roc", "calibration")
 # calibration point: the R's defaults
 LOW_RISK_THRESHOLD = 0.01
 HIGH_RISK_THRESHOLD = 0.99
+# the most cells a discrete score-to-risk strip prints: at 1%..99% a discrete strip holds at most
+# 12 (the logit band, 9.2 wide, holds at most 10 integer scores, plus the two tails), so the cap
+# only tightens thresholds a caller has widened
+MAX_SCORES_PRINTED = 12
 
 # sample names, in page order: the training sample, the CV sample ("5-CV"), then the other splits;
 # keyed by the stable names the samples argument takes (the CV sample's key is "cv")
@@ -193,14 +206,21 @@ class ModelReport:
     low_risk_threshold, high_risk_threshold : float, optional
         Risks below the first (above the second) collapse into one ``< x%`` (``> y%``) cell of
         the score-to-risk strip and one calibration point. The R's defaults, 0.01 and 0.99.
+    max_scores_printed : int, optional
+        The most cells a discrete model's score-to-risk strip prints. When the thresholds leave
+        more, they tighten for this model: the most extreme score left between the tails (risk
+        nearest 0 or 1) folds into its tail, one at a time, until the strip fits. 12 by default,
+        which the default thresholds never exceed.
     """
 
     def __init__(self, classifier, data=None, cv_models=None, model_type=None, X_test=None,
                  y_test=None, *, components=COMPONENTS, samples=None,
-                 low_risk_threshold=LOW_RISK_THRESHOLD, high_risk_threshold=HIGH_RISK_THRESHOLD):
+                 low_risk_threshold=LOW_RISK_THRESHOLD, high_risk_threshold=HIGH_RISK_THRESHOLD,
+                 max_scores_printed=MAX_SCORES_PRINTED):
         check_is_fitted(classifier)
         components = checked_selection("components", components, COMPONENTS)
-        thresholds = checked_risk_thresholds(low_risk_threshold, high_risk_threshold)
+        requested_thresholds = checked_risk_thresholds(low_risk_threshold, high_risk_threshold)
+        max_scores_printed = checked_max_scores_printed(max_scores_printed)
         dataset = checked_dataset(data, classifier)
         self.weights, self.variable_names = checked_coefficients(classifier, dataset)
         self.outcome_name = str(dataset.names.y)
@@ -218,10 +238,10 @@ class ModelReport:
         # own fold model, so the CV sample carries one intercept per row
         scored = {name: (y, X @ points, intercept) for name, (X, y) in splits.items()}
         # the Model card reads the training rows only: a sample left off the page must not
-        # change it
-        model, digits = model_section(points, intercept, self.variable_names[1:],
-                                      self.outcome_name, self.model_type, splits[TRAINING][0],
-                                      scored[TRAINING][1], thresholds)
+        # change it. thresholds are the ones used: the requested ones, or tighter
+        model, digits, thresholds = model_section(
+            points, intercept, self.variable_names[1:], self.outcome_name, self.model_type,
+            splits[TRAINING][0], scored[TRAINING][1], requested_thresholds, max_scores_printed)
         # {key: sample name} of every available sample, in page order: Training, the CV sample,
         # then the other splits
         available = {key: name for key, name in SPLIT_SAMPLES.items() if name in scored}
@@ -254,8 +274,11 @@ class ModelReport:
             "roc": roc,
             "calibration": calibration,
             "settings": {"components": components, "samples": shown,
-                         "low_risk_threshold": thresholds[0],
-                         "high_risk_threshold": thresholds[1]},
+                         "low_risk_threshold": requested_thresholds[0],
+                         "high_risk_threshold": requested_thresholds[1],
+                         "low_risk_threshold_used": thresholds[0],
+                         "high_risk_threshold_used": thresholds[1],
+                         "max_scores_printed": max_scores_printed},
         }
         # only the figures on the page: the sections above hold their numbers either way
         self.data["figures"] = {}
@@ -382,6 +405,15 @@ def checked_risk_thresholds(low_risk_threshold, high_risk_threshold):
     return float(low_risk_threshold), float(high_risk_threshold)
 
 
+def checked_max_scores_printed(max_scores_printed):
+    """``max_scores_printed`` as an int, at least 1."""
+    if (isinstance(max_scores_printed, bool) or not isinstance(max_scores_printed, numbers.Integral)
+            or max_scores_printed < 1):
+        raise ValueError(f"max_scores_printed must be a positive integer; got "
+                         f"{max_scores_printed!r}")
+    return int(max_scores_printed)
+
+
 def split_samples(classifier, data, X_test, y_test):
     """``{name: (X, y in {0, 1})}``: the splits of ``data``, else the data passed to fit, plus
     ``X_test`` / ``y_test`` as ``Test`` when ``data`` has no test split."""
@@ -477,19 +509,24 @@ def point_label(points, binary, model_type):
 
 
 def model_section(points, intercept, names, outcome_name, model_type, X_train, train_scores,
-                  thresholds):
-    """Items, score range, score-to-risk strip and (for checklists) M and the rule.
+                  thresholds, max_scores_printed):
+    """Items, score type, score range, score-to-risk strip and (for checklists) M and the rule.
 
     ``points_header`` is the item table's points column, and None when there is no such column
     (a checklist whose items are all ``+1``: every box counts the same, so a column of ``+`` says
     nothing). ``score_header`` and ``risk_header`` label the score-to-risk strip.
-    ``cell_by_total`` maps each total in the strip, keyed by ``total_key``, to ``{"cell", "label"}``:
-    the index of the strip cell holding it and how the readout prints it. The Model card sums the
-    points of its checked items, looks the total up here and reads the risk that cell shows.
-    ``thresholds`` is ``(low, high)``, where the strip collapses its tails. When the totals
-    cannot be enumerated, the strip lists the training rows' scores (``train_scores``).
+    ``cell_by_score`` maps each score in the strip, keyed by its string (``"3"``), to
+    ``{"cell", "label"}``: the index of the strip cell holding it and how the readout prints it.
+    The Model card sums the points of its checked items, looks the score up here and reads the
+    risk that cell shows. ``n_scores`` counts the scores the strip covers, ``n_scores_printed``
+    its cells.
 
-    Returns the section and the decimals every score label on the page prints (``score_digits``).
+    ``thresholds`` is the requested ``(low, high)``, where the strip collapses its tails. A
+    discrete strip lists every possible score (``possible_scores``) and tightens the thresholds
+    until it prints at most ``max_scores_printed`` cells (``tightened_risk_thresholds``).
+
+    Returns the section, the decimals every score label on the page prints (``score_digits``)
+    and the thresholds used.
     """
     items = []
     value_sets = []
@@ -510,19 +547,27 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, t
 
     lo = sum(float(v.min()) for v in value_sets)
     hi = sum(float(v.max()) for v in value_sets)
-    totals = achievable_totals(value_sets)
-    if totals is None:
-        totals = np.unique(train_scores)
-    # {total_key: total}, ascending: one total per key, since summing in another order moves a
-    # score in its last bits
-    totals = {total_key(s): number(s) for s in totals}
-    digits = score_digits(list(totals.values()))
+    discrete = is_integer(points) and all(item["binary"] for item in items)
+    if discrete:
+        scores = possible_scores(value_sets)
+        thresholds = tightened_risk_thresholds(np.add(scores, intercept), thresholds,
+                                               max_scores_printed)
+    # TODO(report-score-type, Phase 2): a stand-in for continuous models, replaced by risk bins:
+    # every possible score when the item values are integers, else the training rows' scores
+    elif all(is_integer(values) for values in value_sets):
+        scores = possible_scores(value_sets)
+    else:
+        scores = [number(s) for s in np.unique(train_scores)]
+    digits = score_digits(scores)
     m = math.floor(-intercept) + 1 if model_type == "checklist" else None
     checklist = model_type == "checklist"
     shows_points = not checklist or any(item["points"] < 0 for item in items)
-    cells, cell_by_total = score_to_risk_cells(totals, intercept, m, thresholds, digits)
+    cells, cell_by_score = score_to_risk_cells(scores, intercept, m, thresholds, digits)
     model = {
         "type": model_type,
+        "score_type": "discrete" if discrete else "continuous",
+        "n_scores": len(scores),
+        "n_scores_printed": len(cells),
         "intercept": number(intercept),
         "items": items,
         "points_header": "Points" if shows_points else None,
@@ -530,7 +575,7 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, t
         "risk_header": "RISK",
         "score_range": [number(lo), number(hi)],
         "score_to_risk": cells,
-        "cell_by_total": cell_by_total,
+        "cell_by_score": cell_by_score,
         "checklist_m": None,
         "rule": None,
     }
@@ -549,17 +594,54 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, t
                     f"of checked (−) items is at least {m}")
         model["checklist_m"] = m
         model["rule"] = rule
-    return model, digits
+    return model, digits, thresholds
 
 
-def achievable_totals(value_sets):
-    """Every sum of one value per set, when all values are integers; else None."""
-    totals = {0}
+def possible_scores(value_sets):
+    """Every value of the score function, ascending: every sum of one value per item, where
+    ``value_sets`` holds each item's points times its values, all integers.
+
+    Model-derived, not read off a sample: a score no row reaches is listed all the same. The
+    sums stay within the integer score range, so there are few of them.
+    """
+    scores = {0}
     for values in value_sets:
-        if not is_integer(values) or len(totals) * len(values) > MAX_TOTALS:
-            return None
-        totals = {t + int(v) for t in totals for v in values}
-    return sorted(totals)
+        scores = {s + int(v) for s in scores for v in values}
+    return sorted(scores)
+
+
+def tightened_risk_thresholds(margins, thresholds, max_scores_printed):
+    """The risk thresholds that collapse the ascending ``margins`` (score + intercept) into at
+    most ``max_scores_printed`` strip cells: ``thresholds``, ``(low, high)``, when they already do.
+
+    Otherwise the most extreme score left between the tails (risk nearest 0 or 1) folds into
+    its tail, one at a time, until the strip fits or no score is left between the tails. A moved
+    threshold sits halfway, in margin, between the last score folded and the next one in, so
+    ``tail_groups`` makes the same tails from it; it only ever moves inward.
+    """
+    risks = expit(margins)
+    low, high = thresholds
+    n = len(risks)
+    n_low = int(np.searchsorted(risks, low))  # tail_groups' tails at these thresholds
+    n_high = n - int(np.searchsorted(risks, high, side="right"))
+    # a tail of one score is printed as its own cell
+    while n - max(n_low - 1, 0) - max(n_high - 1, 0) > max_scores_printed and n_low + n_high < n:
+        # the scores between the tails are margins[n_low:n - n_high]
+        if risks[n_low] <= 1 - risks[n - n_high - 1]:
+            n_low += 1
+            low = risk_between(margins, n_low)
+        else:
+            n_high += 1
+            high = risk_between(margins, n - n_high)
+    return low, high
+
+
+def risk_between(margins, i):
+    """The risk halfway, in margin, between ``margins[i - 1]`` and ``margins[i]``; half a point
+    past the end when ``i`` is 0 or ``len(margins)``."""
+    below = margins[i - 1] if i > 0 else margins[0] - 1
+    above = margins[i] if i < len(margins) else margins[-1] + 1
+    return float(expit((below + above) / 2))
 
 
 def tail_groups(risks, thresholds):
@@ -588,54 +670,38 @@ def tail_groups(risks, thresholds):
     return groups
 
 
-def score_to_risk_cells(totals, intercept, checklist_m, thresholds, digits):
+def score_to_risk_cells(scores, intercept, checklist_m, thresholds, digits):
     """The score-to-risk strip: ``{"score", "risk", "positive"}`` per cell, tails collapsed; and
-    ``{key: {"cell": index, "label": score label}}``, the cell each total falls in.
+    ``{str(score): {"cell": index, "label": score label}}``, the cell each score falls in.
 
-    ``totals`` is ``{total_key(score): score}``, ascending, so risk is too. A collapsed cell is
-    labelled with the score range it covers (``"0 to 1"``) and with the threshold it stays under
-    (``"< 1.0%"``), as in the R's ``get.risk.xtable``; every other cell shows its own score and
-    risk.
+    ``scores`` is ascending, so risk is too. A collapsed cell is labelled with the score range it
+    covers (``"0 to 1"``) and with the threshold it stays under (``"< 1.0%"``), as in the R's
+    ``get.risk.xtable``; every other cell shows its own score and risk.
     """
-    keys, scores = list(totals), list(totals.values())
     risks = expit(np.asarray(scores, dtype=float) + intercept)
     low_risk, high_risk = thresholds
-    cells, cell_by_total = [], {}
+    cells, cell_by_score = [], {}
     for first, last, side in tail_groups(risks, thresholds):
         risk = (percent(risks[first]) if side is None
                 else f"< {percent(low_risk)}" if side == "low"
                 else f"> {percent(high_risk)}")
-        cell_by_total.update({key: {"cell": len(cells), "label": score_label(score, score, digits)}
-                              for key, score in zip(keys[first:last + 1],
-                                                    scores[first:last + 1])})
+        cell_by_score.update({str(score): {"cell": len(cells),
+                                           "label": score_label(score, score, digits)}
+                              for score in scores[first:last + 1]})
         cells.append({"score": score_label(scores[first], scores[last], digits), "risk": risk,
                       "positive": checklist_m is not None and scores[first] >= checklist_m})
-    return cells, cell_by_total
+    return cells, cell_by_score
 
 
-def total_key(total):
-    """The canonical string of a score total, the key of ``cell_by_total``: the total rounded to
-    9 decimals, trailing zeros dropped (``"0.6"``, ``"-2"``, ``"0.00005"``).
-
-    report.js's ``totalKey`` computes the same string with the same float operations (a multiply,
-    an add and a floor are exact IEEE steps in both languages), so a total the page sums in
-    another order, off in its last bits, finds its cell; the rest is integer arithmetic.
-    """
-    nano = math.floor(float(total) * 1e9 + 0.5)
-    whole, fraction = divmod(abs(nano), 10**9)
-    sign = "-" if nano < 0 else ""
-    return f"{sign}{whole}" + (f".{fraction:09d}".rstrip("0") if fraction else "")
-
-
-def score_digits(totals):
-    """The fewest decimals that print every total apart: 0 when every total is integral, else
+def score_digits(scores):
+    """The fewest decimals that print every score apart: 0 when every score is integral, else
     at least 1, and at most 6.
 
-    ``totals`` is ascending, and rounding keeps that order, so two totals print alike only if
+    ``scores`` is ascending, and rounding keeps that order, so two scores print alike only if
     two neighbours do.
     """
-    digits = 0 if all(float(t).is_integer() for t in totals) else 1
-    neighbours = list(zip(totals, totals[1:]))
+    digits = 0 if all(float(s).is_integer() for s in scores) else 1
+    neighbours = list(zip(scores, scores[1:]))
     while digits < 6 and any(f"{a:.{digits}f}" == f"{b:.{digits}f}" for a, b in neighbours):
         digits += 1
     return digits

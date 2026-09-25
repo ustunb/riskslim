@@ -116,7 +116,7 @@
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 5em), 1fr));
 }
 .rs-wrapped .rs-score-cell { grid-row: auto; grid-template-rows: auto auto; white-space: normal; }
-/* the cell holding the Model card's current total; an outline, so it leaves the background's
+/* the cell holding the Model card's current score; an outline, so it leaves the background's
    meaning (predicted positive) alone and does not change the cell's size */
 .rs-score-cell.rs-current { outline: 2px solid var(--rs-ink); outline-offset: -2px; }
 
