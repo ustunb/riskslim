@@ -1,0 +1,103 @@
+# CI is temporarily manual-only while the default branch is brought up to date.
+# Restore pull_request and push triggers after all jobs pass on master.
+name: ci
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uvx ruff check riskslim tests
+      - run: >-
+          uvx ruff format --check examples/quickstart.py tests/conftest.py
+          tests/generate_training_test_cases.py tests/test_training.py
+          tests/test_training_known.py tests/test_solver.py
+
+  tests:
+    name: tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --group dev
+      - name: Check CPLEX
+        run: uv run pytest --noconftest tests/test_solver.py -q -s
+      - name: Run tests
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            uv run pytest
+          else
+            uv run pytest -m "not browser"
+          fi
+
+  install-check:
+    name: install check (wheel + sdist)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+
+      - name: Build artifacts
+        run: uv build
+
+      - name: Check metadata and contents
+        run: |
+          uvx twine check dist/*
+          uvx check-wheel-contents dist/*.whl
+          uvx check-manifest
+
+      - name: Forbidden paths must not ship
+        run: |
+          python - <<'PY'
+          import glob, tarfile, zipfile, sys
+          FORBIDDEN = ("scripts/", "data/", "notebooks/", "reports/", ".claude/", ".github/")
+          whl = glob.glob("dist/*.whl")[0]
+          sdist = glob.glob("dist/*.tar.gz")[0]
+          names = zipfile.ZipFile(whl).namelist()
+          names += [n.split("/", 1)[1] for n in tarfile.open(sdist).getnames() if "/" in n]
+          bad = [n for n in names for f in FORBIDDEN if n.startswith(f) or (f"/{f}" in n and not n.startswith("riskslim/"))]
+          if bad:
+              sys.exit(f"forbidden paths in artifacts: {sorted(set(bad))[:20]}")
+          print("artifacts clean")
+          PY
+
+      - name: Wheel - quickstart + tests
+        working-directory: ${{ runner.temp }}
+        run: |
+          uv run --isolated --no-project \
+            --with "$(ls "$GITHUB_WORKSPACE"/dist/*.whl)" --with pytest --with plotly \
+            python "$GITHUB_WORKSPACE/examples/quickstart.py"
+          uv run --isolated --no-project \
+            --with "$(ls "$GITHUB_WORKSPACE"/dist/*.whl)" --with pytest --with plotly \
+            python -m pytest "$GITHUB_WORKSPACE/tests" --import-mode=importlib -m "not slow and not browser"
+
+      - name: Sdist - quickstart + tests
+        working-directory: ${{ runner.temp }}
+        run: |
+          uv run --isolated --no-project \
+            --with "$(ls "$GITHUB_WORKSPACE"/dist/*.tar.gz)" --with pytest --with plotly \
+            python "$GITHUB_WORKSPACE/examples/quickstart.py"
+          uv run --isolated --no-project \
+            --with "$(ls "$GITHUB_WORKSPACE"/dist/*.tar.gz)" --with pytest --with plotly \
+            python -m pytest "$GITHUB_WORKSPACE/tests" --import-mode=importlib -m "not slow and not browser"
