@@ -246,11 +246,8 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
             uses ``cv_results_["estimator"]`` after ``fit_cv``. Raises ValueError when
             ``fit_cv`` ran on other data than ``fit``.
         **settings
-            Fields of ``riskslim.report.ReportSettings``: ``components`` (the cards, in order),
-            ``samples`` (the samples shown, in order), ``low_risk_threshold`` and
-            ``high_risk_threshold`` (where the risks collapse at each end) and
-            ``max_scores_printed`` (the most cells of a discrete model's score-to-risk strip, or
-            a continuous model's number of risk bins). See ``ReportSettings``.
+            Fields of ``riskslim.report.ReportSettings``, which lists them with their defaults
+            and meanings.
 
         Returns
         -------

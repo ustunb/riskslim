@@ -3,7 +3,7 @@
 ``ModelReport`` takes a fitted ``RiskSLIMClassifier`` and, optionally, the
 ``BinaryClassificationDataset`` it was fit on (no solver runs). It evaluates the model on its
 samples once (``evaluate``), builds each card of the page from that evaluation alone (a
-``ReportComponent``: its numbers, and for the ROC and calibration cards a Plotly figure),
+``ReportComponent``: its numbers, and for the ROC and calibration cards shown a Plotly figure),
 serializes them into one JSON-serializable data block with no NaN or inf (``report_data``), and
 renders a single self-contained page (libraries load from a pinned CDN). The browser only
 displays what Python computed.
@@ -300,8 +300,9 @@ class ModelReport:
         self._inputs = {"data": data,
                         "cv_models": None if cv_models is None else list(cv_models),
                         "model_type": model_type, "X_test": X_test, "y_test": y_test}
-        evaluation = evaluate(classifier, **self._inputs, settings=settings)
-        # every component, shown or not: the data block holds every section's numbers
+        evaluation = evaluate(classifier, self.dataset, **self._inputs, settings=settings)
+        # every component, shown or not: the data block holds every section's numbers (a figure
+        # is built only for a component shown)
         builders = {"model": build_model_component, "summary": build_summary_component,
                     "roc": build_roc_component, "calibration": build_calibration_component}
         built = {name: builders[name](evaluation, settings) for name in COMPONENTS}
@@ -347,52 +348,45 @@ class Evaluation:
     Everything two components share is here, so no component reads another. Samples are
     ``{name: ...}`` over the samples shown, in page order, except ``tables``, which also holds
     the training sample's.
-
-    - ``outcome_name``, ``model_type``, ``solution_info`` (``solution_info_``) and
-      ``constraints`` (``fitted_constraints``).
-    - ``points``, ``intercept`` and ``item_names``: the coefficients, intercept apart, and the
-      name of each item.
-    - ``binary`` (``binary_items``) and ``item_values``: ``{j: values}`` of each nonzero item on
-      the training rows, ``[0, 1]`` for a binary one: all the report keeps of the training X.
-    - ``score_type``, and ``risk_edges``: a continuous model's ``risk_bins``, None for a
-      discrete one.
-    - ``printed_risks``: ``(min_printed_risk, max_printed_risk)``, the thresholds, or narrower
-      for a discrete strip over ``max_scores_printed`` (``collapse_scores``); both None for a
-      continuous model, whose strip has no tails. The strip and the calibration points read it.
-    - ``samples``, the keys of the samples shown, and ``sample_keys``, ``{name: key}``.
-    - ``scored``: ``(y, score, intercept)``; ``tables``: the calibration bins
-      (``calibration_table``); ``roc`` (``roc_section``); ``ece``
-      (``expected_calibration_error``).
-    - ``sample_numbers``: ``{"n", "outcome_rate", "auc", "ece", "log_loss"}`` as printed, the
-      strings the summary table and the legends both show, so they cannot round the same
-      number two ways.
     """
 
     outcome_name: str
     model_type: str
-    solution_info: dict
-    constraints: dict
-    points: np.ndarray
+    solution_info: dict  # the classifier's solution_info_
+    constraints: dict  # fitted_constraints
+    points: np.ndarray  # the coefficients, intercept apart
     intercept: float
     item_names: list
-    binary: dict
+    binary: dict  # binary_items
+    # {j: values} of each nonzero item on the training rows, [0, 1] for a binary one: all the
+    # report keeps of the training X
     item_values: dict
     score_type: str
-    risk_edges: np.ndarray | None
+    risk_edges: np.ndarray | None  # a continuous model's risk_bins; None for a discrete one
+    checklist_m: int | None  # a checklist's M; None for a risk score
+    # the score-to-risk strip (discrete_strip or binned_strip): its cells, the Model card's
+    # lookup, the number of scores (None for a continuous model) and the printed risk range
+    strip_cells: list
+    score_bins: dict
+    n_scores: int | None
+    # (min_printed_risk, max_printed_risk): the thresholds, or narrower for a discrete strip
+    # over max_scores_printed; both None for a continuous model, whose strip has no tails. The
+    # strip and the calibration points read it.
     printed_risks: tuple
-    samples: list
-    sample_keys: dict
-    scored: dict
-    tables: dict
-    roc: dict
-    ece: dict
+    sample_keys: dict  # {name: key}: the key picks a sample's colour
+    scored: dict  # (y, score, intercept)
+    tables: dict  # calibration_table
+    roc: dict  # roc_section
+    ece: dict  # expected_calibration_error
+    # {"n", "outcome_rate", "auc", "ece", "log_loss"} as printed, the strings the summary table
+    # and the legends both show, so they cannot round the same number two ways
     sample_numbers: dict
 
 
-def evaluate(classifier, data, cv_models, model_type, X_test, y_test, settings):
+def evaluate(classifier, dataset, data, cv_models, model_type, X_test, y_test, settings):
     """Check the inputs against the fit, score every sample and compute what the components share:
-    an ``Evaluation``. The arguments are ``ModelReport``'s, ``settings`` a ``ReportSettings``."""
-    dataset = checked_dataset(data, classifier)
+    an ``Evaluation``. ``dataset`` is ``data`` checked (``checked_dataset``), the other arguments
+    are ``ModelReport``'s, ``settings`` a ``ReportSettings``."""
     weights, variable_names = checked_coefficients(classifier, dataset)
     outcome_name = str(dataset.names.y)
     solution_info = classifier.solution_info_
@@ -438,15 +432,15 @@ def evaluate(classifier, data, cv_models, model_type, X_test, y_test, settings):
     # Model card reads the training rows only, so a sample left off the page cannot change it
     tables = {name: calibration_table(y, score, b, score_type, risk_edges)
               for name, (y, score, b) in {TRAINING: training, **scored}.items()}
+    checklist_m = math.floor(-intercept) + 1 if model_type == "checklist" else None
     if score_type == "discrete":
-        # the strip's collapse (discrete_strip builds the same one from the same scores)
-        risks = expit(np.asarray(all_scores(points[j] * values for j, values in
-                                            item_values.items()), dtype=float) + intercept)
-        _, printed_risks = collapse_scores(risks, settings.low_risk_threshold,
-                                           settings.high_risk_threshold,
-                                           settings.max_scores_printed)
+        strip = discrete_strip(
+            [points[j] * values for j, values in item_values.items()], intercept, checklist_m,
+            low_risk=settings.low_risk_threshold, high_risk=settings.high_risk_threshold,
+            max_scores_printed=settings.max_scores_printed)
     else:
-        printed_risks = (None, None)
+        strip = binned_strip(tables[TRAINING], risk_edges, intercept)
+    strip_cells, score_bins, n_scores, printed_risks = strip
 
     roc = {name: roc_section(y, score, b) for name, (y, score, b) in scored.items()}
     ece = {name: expected_calibration_error(y, score, b, score_type, risk_edges)
@@ -460,14 +454,16 @@ def evaluate(classifier, data, cv_models, model_type, X_test, y_test, settings):
         outcome_name=outcome_name, model_type=model_type, solution_info=solution_info,
         constraints=constraints, points=points, intercept=intercept, item_names=variable_names[1:],
         binary=binary, item_values=item_values, score_type=score_type, risk_edges=risk_edges,
-        printed_risks=printed_risks, samples=samples, sample_keys=sample_keys, scored=scored,
+        checklist_m=checklist_m, strip_cells=strip_cells, score_bins=score_bins,
+        n_scores=n_scores, printed_risks=printed_risks, sample_keys=sample_keys, scored=scored,
         tables=tables, roc=roc, ece=ece, sample_numbers=sample_numbers)
 
 
 @dataclass(frozen=True)
 class ReportComponent:
     """One card of the page: its section of the data block (``data``, numbers and display
-    strings) and its Plotly figure (``figure``, a ``go.Figure``; None for the tables). Each is
+    strings) and its Plotly figure (``figure``, a ``go.Figure``; None for the tables and for a
+    card not shown). Each is
     built from the ``Evaluation`` alone, by ``build_model_component``,
     ``build_summary_component``, ``build_roc_component`` or ``build_calibration_component``."""
 
@@ -479,9 +475,10 @@ def report_data(components, evaluation, settings):
     """The data block: ``report.data``, the one place the components become JSON.
 
     ``components`` is ``{name: ReportComponent}`` over all of ``COMPONENTS``, shown or not:
-    every section's numbers are in the block either way, and only the figures of the components
-    in ``settings.components`` (a ``ReportSettings``) are, as Plotly JSON, with their narrow
-    overrides. ``evaluation`` is the ``Evaluation`` they were built from.
+    every section's numbers are in the block either way. Only a component in
+    ``settings.components`` (a ``ReportSettings``) has a figure, and the block holds each as
+    Plotly JSON, with its narrow overrides. ``evaluation`` is the ``Evaluation`` they were built
+    from.
     """
     data = {
         "schema_version": SCHEMA_VERSION,
@@ -489,15 +486,16 @@ def report_data(components, evaluation, settings):
         "outcome_name": evaluation.outcome_name,
         "samples": list(evaluation.sample_keys),
         **{name: components[name].data for name in COMPONENTS},
-        "settings": {"components": list(settings.components), "samples": evaluation.samples,
+        "settings": {"components": list(settings.components),
+                     "samples": list(evaluation.sample_keys.values()),
                      "low_risk_threshold": settings.low_risk_threshold,
                      "high_risk_threshold": settings.high_risk_threshold,
                      "min_printed_risk": evaluation.printed_risks[0],
                      "max_printed_risk": evaluation.printed_risks[1],
                      "max_scores_printed": settings.max_scores_printed},
-        # only the figures on the page, in COMPONENTS order
+        # only the figures on the page (the only ones built), in COMPONENTS order
         "figures": {name: components[name].figure.to_plotly_json() for name in COMPONENTS
-                    if name in settings.components and components[name].figure is not None},
+                    if components[name].figure is not None},
     }
     data["narrow"] = narrow_overrides(data["figures"])
     return data
@@ -737,11 +735,11 @@ def build_model_component(evaluation, settings):
     sums the points times the values of its items, finds the strip cell of that score and reads
     the risk that cell shows. ``n_scores_printed`` counts the strip's cells.
 
-    The strip (``discrete_strip``, or ``binned_strip`` off the training sample's calibration
-    table) gives the cells, ``n_scores`` and the Model card's lookup ``score_bins`` (``edges``,
-    ``cells``); ``score_digits`` adds the decimals the readout prints a score with: 0 when every
-    score the card reaches is an integer, else 1. ``evaluation`` is an ``Evaluation``,
-    ``settings`` a ``ReportSettings``.
+    The ``Evaluation``'s strip (``discrete_strip``, or ``binned_strip`` off the training
+    sample's calibration table) gives the cells, ``n_scores`` and the Model card's lookup
+    ``score_bins`` (``edges``, ``cells``); ``score_digits`` adds the decimals the readout prints
+    a score with: 0 when every score the card reaches is an integer, else 1. ``settings``, a
+    ``ReportSettings``, changes nothing here: the strip is built by ``evaluate``.
     """
     points, intercept, model_type = evaluation.points, evaluation.intercept, evaluation.model_type
     items = []
@@ -763,21 +761,13 @@ def build_model_component(evaluation, settings):
     lo = sum(float(v.min()) for v in value_sets)
     hi = sum(float(v.max()) for v in value_sets)
     checklist = model_type == "checklist"
-    m = math.floor(-intercept) + 1 if checklist else None
+    m = evaluation.checklist_m
     shows_points = not checklist or any(item["points"] < 0 for item in items)
-    if evaluation.score_type == "discrete":
-        cells, score_bins, n_scores = discrete_strip(
-            value_sets, intercept, m, low_risk=settings.low_risk_threshold,
-            high_risk=settings.high_risk_threshold,
-            max_scores_printed=settings.max_scores_printed)
-    else:
-        cells, score_bins, n_scores = binned_strip(evaluation.tables[TRAINING],
-                                                   evaluation.risk_edges, intercept)
-    score_bins["score_digits"] = score_decimals(*value_sets)
+    cells = evaluation.strip_cells
     model = {
         "type": model_type,
         "score_type": evaluation.score_type,
-        "n_scores": n_scores,
+        "n_scores": evaluation.n_scores,
         "n_scores_printed": len(cells),
         "intercept": number(intercept),
         "items": items,
@@ -786,7 +776,7 @@ def build_model_component(evaluation, settings):
         "risk_header": "RISK",
         "score_range": [number(lo), number(hi)],
         "score_to_risk": cells,
-        "score_bins": score_bins,
+        "score_bins": {**evaluation.score_bins, "score_digits": score_decimals(*value_sets)},
         "checklist_m": None,
         "rule": None,
     }
@@ -811,11 +801,12 @@ def build_model_component(evaluation, settings):
 
 def discrete_strip(value_sets, intercept, checklist_m, *, low_risk, high_risk,
                    max_scores_printed):
-    """A discrete model's score-to-risk strip: ``(cells, score_bins, n_scores)``.
+    """A discrete model's score-to-risk strip: ``(cells, score_bins, n_scores, printed_risks)``.
 
     It lists every possible score (``all_scores``, counted by ``n_scores``) and collapses them
-    into at most ``max_scores_printed`` cells (``collapse_scores``), starting from the requested
-    thresholds ``low_risk`` and ``high_risk``. The Model card's ``score_bins``: ``edges`` holds
+    into at most ``max_scores_printed`` cells (``collapse_scores``, which gives
+    ``printed_risks``), starting from the requested thresholds ``low_risk`` and ``high_risk``.
+    The Model card's ``score_bins``: ``edges`` holds
     the first score of each cell after the first, and ``cells`` is one bin per cell. The strip
     is model-derived, read off no sample.
     """
@@ -825,7 +816,7 @@ def discrete_strip(value_sets, intercept, checklist_m, *, low_risk, high_risk,
     cells = score_to_risk_cells(scores, risks, groups, checklist_m, printed_risks)
     score_bins = {"edges": [scores[first] for first, _, _ in groups[1:]],
                   "cells": list(range(len(cells)))}
-    return cells, score_bins, len(scores)
+    return cells, score_bins, len(scores), printed_risks
 
 
 def all_scores(value_sets):
@@ -948,8 +939,8 @@ def risk_bins(n_bins):
 
 
 def binned_strip(training_table, edges, intercept):
-    """A continuous model's score-to-risk strip: ``(cells, score_bins, None)``, with no finite
-    list of scores and no collapsed tails, so no printed risk range.
+    """A continuous model's score-to-risk strip: ``(cells, score_bins, None, (None, None))``,
+    with no finite list of scores and no collapsed tails, so no printed risk range.
 
     It is read off the training sample's calibration table, as the R's ``get.risk.xtable``
     reads the training ``calibration_df``: one cell per risk bin of ``edges`` that holds training
@@ -965,7 +956,7 @@ def binned_strip(training_table, edges, intercept):
         cell_by_bin[bin_index] = cell
     score_bins = {"edges": [float(edge) for edge in logit(edges[1:-1]) - intercept],
                   "cells": cell_by_bin}
-    return cells, score_bins, None
+    return cells, score_bins, None, (None, None)
 
 
 def score_decimals(*values):
@@ -1166,21 +1157,26 @@ def fmt(value, template):
 # ---------------------------------------------------------------------------
 
 def build_roc_component(evaluation, settings):
-    """The ROC card: each sample's ``roc_section`` and its ``roc_figure``, with the AUC of
-    ``sample_numbers`` in the legend. ``settings`` changes nothing here."""
+    """The ROC card: each sample's ``roc_section`` and, when ``settings.components`` shows it,
+    its ``roc_figure``, with the AUC of ``sample_numbers`` in the legend (else no figure)."""
+    if "roc" not in settings.components:
+        return ReportComponent(evaluation.roc)
     labels = sample_labels(evaluation.sample_numbers, "auc")
     return ReportComponent(evaluation.roc,
                            roc_figure(evaluation.sample_keys, evaluation.roc, labels))
 
 
 def build_calibration_component(evaluation, settings):
-    """The Calibration card: each sample's ``calibration_section`` and the
-    ``calibration_figure``, with the ECE of ``sample_numbers`` in the legend. ``settings``
-    changes nothing here: the printed risk range the points pool at is the ``Evaluation``'s."""
+    """The Calibration card: each sample's ``calibration_section`` and, when
+    ``settings.components`` shows it, the ``calibration_figure``, with the ECE of
+    ``sample_numbers`` in the legend (else no figure). The printed risk range the points pool at
+    is the ``Evaluation``'s."""
     scored, tables = evaluation.scored, evaluation.tables
     sections = {name: calibration_section(tables[name], evaluation.ece[name],
                                           evaluation.score_type)
                 for name in scored}
+    if "calibration" not in settings.components:
+        return ReportComponent(sections)
     # a discrete model's points pool its collapsed tails (pooled_points); a continuous model's
     # are its risk bins, plain circles that never pool: its strip has no tails
     points = {name: (pooled_points(*scored[name], tables[name], evaluation.printed_risks)
