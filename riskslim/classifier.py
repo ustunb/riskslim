@@ -253,8 +253,8 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
         low_risk_threshold, high_risk_threshold : float, optional
             Where the risks collapse at each end. See ``ModelReport``.
         max_scores_printed : int, optional
-            The most cells a discrete model's score-to-risk strip prints; the thresholds tighten
-            to fit. See ``ModelReport``.
+            The most cells a discrete model's score-to-risk strip prints, at least 2; the most
+            extreme scores fold into the tails to fit. See ``ModelReport``.
 
         Returns
         -------

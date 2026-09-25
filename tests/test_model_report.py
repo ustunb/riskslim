@@ -24,7 +24,7 @@ Dimensions:
                 separate value: it is printed and plotted like any other, which the first case
                 already covers. The strip and the calibration points collapse from one rule, so
                 the strip carries the three cases and the points one pooling case. A discrete
-                strip over max_scores_printed tightens its thresholds (one case).
+                strip over max_scores_printed narrows its printed risk range (one case).
   figure:       roc, calibration   -- one trace per sample, plotted straight from the data block's
                                       roc / calibration sections, each named for its legend entry
                                       (sample, n and outcome rate, AUC / ECE)
@@ -40,7 +40,7 @@ model_type, model_type="checklist" with a non-binary item, X_test column count !
 feature count, y_test row count != X_test row count, y_test labels outside the classes seen in
 fit, a sample with a single class, and components / samples that are empty, repeat an entry or
 name an unknown one, risk thresholds out of order or outside 0..1, and a max_scores_printed
-below 1.
+below 2.
 
 Checks that need no browser: `plotly.graph_objects.Figure(fig)` rejects misspelled or invalid
 properties, and one test asserts the Plotly template's and the sample colours are the ones
@@ -191,21 +191,21 @@ def test_score_to_risk_collapses_the_tails_of_the_strip(fitted, fitted_wide, wid
     assert not any(cell["positive"] for cell in model["score_to_risk"])
 
 
-def test_a_discrete_strip_over_max_scores_printed_tightens_its_thresholds(fitted):
+def test_a_discrete_strip_over_max_scores_printed_narrows_its_printed_risks(fitted):
     report = make_report(fitted, [-5, 5, 4, 2], low_risk_threshold=0.001,
                          high_risk_threshold=0.999, max_scores_printed=5)
     model, settings = report.data["model"], report.data["settings"]
 
-    # scores 0, 2, 4, 5, 6, 7, 9, 11, all inside 0.1%..99.9%: eight cells before tightening
+    # scores 0, 2, 4, 5, 6, 7, 9, 11, all inside 0.1%..99.9%: eight cells before folding
     assert (model["score_type"], model["n_scores"], model["n_scores_printed"]) == ("discrete", 8, 5)
     # the most extreme score folds into its tail, one at a time (11, 0, 9, 2, 7), and each tail
-    # is labelled with the threshold used: halfway, in score, to the next score in
+    # reads the risk of the nearest score still printed on its own
     assert [(cell["score"], cell["risk"]) for cell in model["score_to_risk"]] == [
-        ("0 to 2", "< 11.9%"), ("4", "26.9%"), ("5", "50.0%"), ("6", "73.1%"),
-        ("7 to 11", "> 81.8%")]
+        ("0 to 2", "< 26.9%"), ("4", "26.9%"), ("5", "50.0%"), ("6", "73.1%"),
+        ("7 to 11", "> 73.1%")]
     assert (settings["low_risk_threshold"], settings["high_risk_threshold"]) == (0.001, 0.999)
-    assert settings["low_risk_threshold_used"] == pytest.approx(expit(3 - 5))
-    assert settings["high_risk_threshold_used"] == pytest.approx(expit(6.5 - 5))
+    assert settings["min_printed_risk"] == pytest.approx(expit(4 - 5))
+    assert settings["max_printed_risk"] == pytest.approx(expit(6 - 5))
     # the calibration points (the training rows hold every score) and the Model card collapse
     # the same tails
     assert report.data["figures"]["calibration"]["data"][-1]["text"] == ["≤2", "4", "5", "6", "7+"]
@@ -321,8 +321,8 @@ def test_data_is_strict_json(fitted, weights):
     pytest.param({"low_risk_threshold": 0.5, "high_risk_threshold": 0.5}, "risk thresholds must",
                  id="thresholds-out-of-order"),
     pytest.param({"high_risk_threshold": 1.5}, "risk thresholds must", id="threshold-above-one"),
-    pytest.param({"max_scores_printed": 0}, "max_scores_printed must be a positive integer",
-                 id="max-scores-printed-below-one"),
+    pytest.param({"max_scores_printed": 1}, "max_scores_printed must be an integer of at least 2",
+                 id="max-scores-printed-below-two"),
 ])
 def test_invalid_inputs_are_rejected(request, invalid, match):
     call = {"fixture": "fitted", "weights": RISK_SCORE_WEIGHTS, **invalid}
@@ -381,7 +381,7 @@ def test_settings_choose_the_cards_the_samples_and_where_the_tails_collapse(fitt
     assert data["settings"] == {"components": ["calibration", "model"],
                                 "samples": ["test", "training"],
                                 "low_risk_threshold": 0.01, "high_risk_threshold": 0.95,
-                                "low_risk_threshold_used": 0.01, "high_risk_threshold_used": 0.95,
+                                "min_printed_risk": 0.01, "max_printed_risk": 0.95,
                                 "max_scores_printed": 12}
     assert re.findall(r"<h3>(.*?)</h3>", report.html) == ["Calibration", "Model"]
     assert data["samples"] == list(data["roc"]) == list(data["calibration"]) == \

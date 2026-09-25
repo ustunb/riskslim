@@ -29,16 +29,18 @@ Conventions
   item contributes ``points * [0, 1]``).
 - **Score type:** ``discrete`` when every nonzero item is binary on the training data and every
   point is an integer: the score function then takes a few integer values, every one of which
-  the score-to-risk strip lists (``possible_scores``: model-derived, whatever the sample).
+  the score-to-risk strip lists (``all_scores``: model-derived, whatever the sample).
   Otherwise ``continuous``.
 - **Collapsed endpoints:** ``logit(k) ≈ logit(k + 1)`` once the risk is near 0 or 1, so the
-  scores whose risk falls outside ``low_risk_threshold``..``high_risk_threshold`` (1%..99% by
-  default) collapse into one cell of the score-to-risk strip and
-  one point of the calibration plot at each end, as they do in the R report (``tail_groups``).
-  A discrete strip that would still print more than ``max_scores_printed`` cells tightens the
-  thresholds for this model (``tightened_risk_thresholds``); the strip, the calibration points
-  and the Model card all use the thresholds used, which ``data["settings"]`` records next to the
-  requested ones.
+  scores whose risk falls outside the printed risk range collapse into one cell of the
+  score-to-risk strip and one point of the calibration plot at each end, as they do in the R
+  report (``tail_groups``). The printed range is ``low_risk_threshold``..``high_risk_threshold``
+  (1%..99% by default); a discrete strip that would still print more than
+  ``max_scores_printed`` cells narrows it for this model to the risks of the lowest and highest
+  scores it still prints on their own (``collapse_scores``). The tails read ``< {min}`` and
+  ``> {max}`` of the printed range; the strip, the calibration points and the Model card all
+  use it, and ``data["settings"]`` records it (``min_printed_risk``, ``max_printed_risk``) next
+  to the requested thresholds.
   Display only: every reported number is computed per score bin, before any collapsing.
 - **Calibration error:** ``|predicted - observed|`` per score bin (``local_error``), and the
   sample's ``ece`` (the R's ``avg_cal_err_distinct``). Score bins with no rows in a sample are
@@ -80,7 +82,7 @@ LOW_RISK_THRESHOLD = 0.01
 HIGH_RISK_THRESHOLD = 0.99
 # the most cells a discrete score-to-risk strip prints: at 1%..99% a discrete strip holds at most
 # 12 (the logit band, 9.2 wide, holds at most 10 integer scores, plus the two tails), so the cap
-# only tightens thresholds a caller has widened
+# only folds scores when a caller has widened the thresholds
 MAX_SCORES_PRINTED = 12
 
 # sample names, in page order: the training sample, the CV sample ("5-CV"), then the other splits;
@@ -207,10 +209,11 @@ class ModelReport:
         Risks below the first (above the second) collapse into one ``< x%`` (``> y%``) cell of
         the score-to-risk strip and one calibration point. The R's defaults, 0.01 and 0.99.
     max_scores_printed : int, optional
-        The most cells a discrete model's score-to-risk strip prints. When the thresholds leave
-        more, they tighten for this model: the most extreme score left between the tails (risk
-        nearest 0 or 1) folds into its tail, one at a time, until the strip fits. 12 by default,
-        which the default thresholds never exceed.
+        The most cells a discrete model's score-to-risk strip prints, at least 2 (the two
+        tails). When the thresholds leave more, the most extreme score printed on its own (risk
+        nearest 0 or 1) folds into its tail, one at a time, until the strip fits; each tail then
+        reads the risk of the nearest score still printed. 12 by default, which the default
+        thresholds never exceed.
     """
 
     def __init__(self, classifier, data=None, cv_models=None, model_type=None, X_test=None,
@@ -219,7 +222,7 @@ class ModelReport:
                  max_scores_printed=MAX_SCORES_PRINTED):
         check_is_fitted(classifier)
         components = checked_selection("components", components, COMPONENTS)
-        requested_thresholds = checked_risk_thresholds(low_risk_threshold, high_risk_threshold)
+        low_risk, high_risk = checked_risk_thresholds(low_risk_threshold, high_risk_threshold)
         max_scores_printed = checked_max_scores_printed(max_scores_printed)
         dataset = checked_dataset(data, classifier)
         self.weights, self.variable_names = checked_coefficients(classifier, dataset)
@@ -238,10 +241,11 @@ class ModelReport:
         # own fold model, so the CV sample carries one intercept per row
         scored = {name: (y, X @ points, intercept) for name, (X, y) in splits.items()}
         # the Model card reads the training rows only: a sample left off the page must not
-        # change it. thresholds are the ones used: the requested ones, or tighter
-        model, digits, thresholds = model_section(
+        # change it. printed_risks is (min_printed_risk, max_printed_risk): the thresholds, or
+        # narrower
+        model, digits, printed_risks = model_section(
             points, intercept, self.variable_names[1:], self.outcome_name, self.model_type,
-            splits[TRAINING][0], scored[TRAINING][1], requested_thresholds, max_scores_printed)
+            splits[TRAINING][0], scored[TRAINING][1], low_risk, high_risk, max_scores_printed)
         # {key: sample name} of every available sample, in page order: Training, the CV sample,
         # then the other splits
         available = {key: name for key, name in SPLIT_SAMPLES.items() if name in scored}
@@ -274,10 +278,9 @@ class ModelReport:
             "roc": roc,
             "calibration": calibration,
             "settings": {"components": components, "samples": shown,
-                         "low_risk_threshold": requested_thresholds[0],
-                         "high_risk_threshold": requested_thresholds[1],
-                         "low_risk_threshold_used": thresholds[0],
-                         "high_risk_threshold_used": thresholds[1],
+                         "low_risk_threshold": low_risk, "high_risk_threshold": high_risk,
+                         "min_printed_risk": printed_risks[0],
+                         "max_printed_risk": printed_risks[1],
                          "max_scores_printed": max_scores_printed},
         }
         # only the figures on the page: the sections above hold their numbers either way
@@ -287,7 +290,7 @@ class ModelReport:
                 sample_keys, roc, sample_labels(summary, sample_keys, "auc"))
         if "calibration" in components:
             self.data["figures"]["calibration"] = calibration_figure(
-                sample_keys, {name: calibration_points(calibration[name], thresholds, digits)
+                sample_keys, {name: calibration_points(calibration[name], printed_risks, digits)
                               for name in sample_keys},
                 sample_labels(summary, sample_keys, "ece"))
         self.data["narrow"] = narrow_overrides(self.data["figures"])
@@ -406,11 +409,12 @@ def checked_risk_thresholds(low_risk_threshold, high_risk_threshold):
 
 
 def checked_max_scores_printed(max_scores_printed):
-    """``max_scores_printed`` as an int, at least 1."""
+    """``max_scores_printed`` as an int, at least 2: folding scores only moves them into the two
+    tails, so a strip of two or more scores never prints fewer than 2 cells."""
     if (isinstance(max_scores_printed, bool) or not isinstance(max_scores_printed, numbers.Integral)
-            or max_scores_printed < 1):
-        raise ValueError(f"max_scores_printed must be a positive integer; got "
-                         f"{max_scores_printed!r}")
+            or max_scores_printed < 2):
+        raise ValueError(f"max_scores_printed must be an integer of at least 2 (the strip's two "
+                         f"tails); got {max_scores_printed!r}")
     return int(max_scores_printed)
 
 
@@ -509,7 +513,7 @@ def point_label(points, binary, model_type):
 
 
 def model_section(points, intercept, names, outcome_name, model_type, X_train, train_scores,
-                  thresholds, max_scores_printed):
+                  low_risk, high_risk, max_scores_printed):
     """Items, score type, score range, score-to-risk strip and (for checklists) M and the rule.
 
     ``points_header`` is the item table's points column, and None when there is no such column
@@ -521,12 +525,12 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, t
     risk that cell shows. ``n_scores`` counts the scores the strip covers, ``n_scores_printed``
     its cells.
 
-    ``thresholds`` is the requested ``(low, high)``, where the strip collapses its tails. A
-    discrete strip lists every possible score (``possible_scores``) and tightens the thresholds
-    until it prints at most ``max_scores_printed`` cells (``tightened_risk_thresholds``).
+    ``low_risk`` and ``high_risk`` are the requested thresholds, where the strip collapses its
+    tails. A discrete strip lists every possible score (``all_scores``) and collapses them into
+    at most ``max_scores_printed`` cells (``collapse_scores``).
 
     Returns the section, the decimals every score label on the page prints (``score_digits``)
-    and the thresholds used.
+    and the printed risk range, ``(min_printed_risk, max_printed_risk)``.
     """
     items = []
     value_sets = []
@@ -548,21 +552,23 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, t
     lo = sum(float(v.min()) for v in value_sets)
     hi = sum(float(v.max()) for v in value_sets)
     discrete = is_integer(points) and all(item["binary"] for item in items)
-    if discrete:
-        scores = possible_scores(value_sets)
-        thresholds = tightened_risk_thresholds(np.add(scores, intercept), thresholds,
-                                               max_scores_printed)
     # TODO(report-score-type, Phase 2): a stand-in for continuous models, replaced by risk bins:
     # every possible score when the item values are integers, else the training rows' scores
-    elif all(is_integer(values) for values in value_sets):
-        scores = possible_scores(value_sets)
+    if discrete or all(is_integer(values) for values in value_sets):
+        scores = all_scores(value_sets)
     else:
         scores = [number(s) for s in np.unique(train_scores)]
+    risks = expit(np.asarray(scores, dtype=float) + intercept)
+    if discrete:
+        groups, printed_risks = collapse_scores(risks, low_risk, high_risk, max_scores_printed)
+    else:
+        printed_risks = (low_risk, high_risk)
+        groups = tail_groups(risks, printed_risks)
     digits = score_digits(scores)
     m = math.floor(-intercept) + 1 if model_type == "checklist" else None
     checklist = model_type == "checklist"
     shows_points = not checklist or any(item["points"] < 0 for item in items)
-    cells, cell_by_score = score_to_risk_cells(scores, intercept, m, thresholds, digits)
+    cells, cell_by_score = score_to_risk_cells(scores, risks, groups, m, printed_risks, digits)
     model = {
         "type": model_type,
         "score_type": "discrete" if discrete else "continuous",
@@ -594,10 +600,10 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, t
                     f"of checked (−) items is at least {m}")
         model["checklist_m"] = m
         model["rule"] = rule
-    return model, digits, thresholds
+    return model, digits, printed_risks
 
 
-def possible_scores(value_sets):
+def all_scores(value_sets):
     """Every value of the score function, ascending: every sum of one value per item, where
     ``value_sets`` holds each item's points times its values, all integers.
 
@@ -610,44 +616,42 @@ def possible_scores(value_sets):
     return sorted(scores)
 
 
-def tightened_risk_thresholds(margins, thresholds, max_scores_printed):
-    """The risk thresholds that collapse the ascending ``margins`` (score + intercept) into at
-    most ``max_scores_printed`` strip cells: ``thresholds``, ``(low, high)``, when they already do.
+def collapse_scores(risks, low_risk, high_risk, max_scores_printed):
+    """``(groups, (min_printed_risk, max_printed_risk))``: the strip cells of the scores whose
+    ascending ``risks`` are given (``tail_groups``' groups), at most ``max_scores_printed`` (at
+    least 2) of them, and the risk range printed one score per cell.
 
-    Otherwise the most extreme score left between the tails (risk nearest 0 or 1) folds into
-    its tail, one at a time, until the strip fits or no score is left between the tails. A moved
-    threshold sits halfway, in margin, between the last score folded and the next one in, so
-    ``tail_groups`` makes the same tails from it; it only ever moves inward.
+    The range starts at the thresholds, ``low_risk``..``high_risk``. While the strip prints too
+    many cells, the most extreme risk printed on its own (nearest 0 or 1) folds into its tail,
+    one at a time: the range then starts (ends) at the risk of the next score in, the lowest
+    (highest) still printed on its own, so a tail's label (``< 26.9%``) is the risk of the
+    score beside it. A tail that ends up holding a single score is printed as its own cell, as
+    at the thresholds, and keeps its threshold. When every score folds (``max_scores_printed``
+    of 2), no score is printed on its own and each tail reads the risk of the nearest score in
+    the other: ``min_printed_risk`` then exceeds ``max_printed_risk``.
     """
-    risks = expit(margins)
-    low, high = thresholds
-    n = len(risks)
-    n_low = int(np.searchsorted(risks, low))  # tail_groups' tails at these thresholds
-    n_high = n - int(np.searchsorted(risks, high, side="right"))
-    # a tail of one score is printed as its own cell
-    while n - max(n_low - 1, 0) - max(n_high - 1, 0) > max_scores_printed and n_low + n_high < n:
-        # the scores between the tails are margins[n_low:n - n_high]
-        if risks[n_low] <= 1 - risks[n - n_high - 1]:
-            n_low += 1
-            low = risk_between(margins, n_low)
+    min_printed_risk, max_printed_risk = low_risk, high_risk
+    groups = tail_groups(risks, (low_risk, high_risk))
+    while len(groups) > max_scores_printed:
+        # with more than 2 cells, some risk is printed on its own and has a risk beyond it
+        printed = risks[(risks >= min_printed_risk) & (risks <= max_printed_risk)]
+        if printed[0] <= 1 - printed[-1]:
+            min_printed_risk = risks[risks > printed[0]][0]
         else:
-            n_high += 1
-            high = risk_between(margins, n - n_high)
-    return low, high
+            max_printed_risk = risks[risks < printed[-1]][-1]
+        groups = tail_groups(risks, (min_printed_risk, max_printed_risk))
+    if np.count_nonzero(risks < min_printed_risk) < 2:
+        min_printed_risk = low_risk
+    if np.count_nonzero(risks > max_printed_risk) < 2:
+        max_printed_risk = high_risk
+    return groups, (float(min_printed_risk), float(max_printed_risk))
 
 
-def risk_between(margins, i):
-    """The risk halfway, in margin, between ``margins[i - 1]`` and ``margins[i]``; half a point
-    past the end when ``i`` is 0 or ``len(margins)``."""
-    below = margins[i - 1] if i > 0 else margins[0] - 1
-    above = margins[i] if i < len(margins) else margins[-1] + 1
-    return float(expit((below + above) / 2))
-
-
-def tail_groups(risks, thresholds):
+def tail_groups(risks, printed_risks):
     """``[(first, last, side)]`` over ascending ``risks``: one group per risk, except that the
-    risks below ``low`` become one group and those above ``high`` another, for ``thresholds`` =
-    ``(low, high)``. ``side`` is ``"low"`` or ``"high"`` for a collapsed tail, else None.
+    risks below ``low`` become one group and those above ``high`` another, for
+    ``printed_risks`` = ``(low, high)``. ``side`` is ``"low"`` or ``"high"`` for a collapsed
+    tail, else None.
 
     The endpoints collapse because ``logit(k) ≈ logit(k + 1)`` once the risk is near 0 or 1: a
     wide score range otherwise ends in a run of cells all reading ``100.0%`` and a run of plot
@@ -659,9 +663,10 @@ def tail_groups(risks, thresholds):
     """
     risks = np.asarray(risks, dtype=float)
     n = len(risks)
-    low_risk, high_risk = thresholds
+    low_risk, high_risk = printed_risks
     low = int(np.searchsorted(risks, low_risk))  # risks are ascending, so the tails are prefixes
-    high = n - int(np.searchsorted(risks, high_risk, side="right"))
+    # the tails never share a risk, even when low > high (``collapse_scores`` folded every score)
+    high = min(n - int(np.searchsorted(risks, high_risk, side="right")), n - low)
     groups = [(i, i, None) for i in range(n)]
     if high > 1:
         groups[n - high:] = [(n - high, n - 1, "high")]
@@ -670,21 +675,22 @@ def tail_groups(risks, thresholds):
     return groups
 
 
-def score_to_risk_cells(scores, intercept, checklist_m, thresholds, digits):
-    """The score-to-risk strip: ``{"score", "risk", "positive"}`` per cell, tails collapsed; and
-    ``{str(score): {"cell": index, "label": score label}}``, the cell each score falls in.
+def score_to_risk_cells(scores, risks, groups, checklist_m, printed_risks, digits):
+    """The score-to-risk strip: ``{"score", "risk", "positive"}`` per cell, one per group of
+    ``groups`` (``tail_groups``); and ``{str(score): {"cell": index, "label": score label}}``,
+    the cell each score falls in.
 
-    ``scores`` is ascending, so risk is too. A collapsed cell is labelled with the score range it
-    covers (``"0 to 1"``) and with the threshold it stays under (``"< 1.0%"``), as in the R's
+    ``scores`` is ascending, and ``risks`` holds their risks. A collapsed cell is labelled with
+    the score range it covers (``"0 to 1"``) and with the end of ``printed_risks``,
+    ``(min_printed_risk, max_printed_risk)``, it lies beyond (``"< 1.0%"``), as in the R's
     ``get.risk.xtable``; every other cell shows its own score and risk.
     """
-    risks = expit(np.asarray(scores, dtype=float) + intercept)
-    low_risk, high_risk = thresholds
+    min_printed_risk, max_printed_risk = printed_risks
     cells, cell_by_score = [], {}
-    for first, last, side in tail_groups(risks, thresholds):
+    for first, last, side in groups:
         risk = (percent(risks[first]) if side is None
-                else f"< {percent(low_risk)}" if side == "low"
-                else f"> {percent(high_risk)}")
+                else f"< {percent(min_printed_risk)}" if side == "low"
+                else f"> {percent(max_printed_risk)}")
         cell_by_score.update({str(score): {"cell": len(cells),
                                            "label": score_label(score, score, digits)}
                               for score in scores[first:last + 1]})
@@ -881,11 +887,12 @@ def roc_figure(sample_keys, sections, labels):
                                            "True Positive Rate")).to_plotly_json()
 
 
-def calibration_points(section, thresholds, digits):
+def calibration_points(section, printed_risks, digits):
     """The points of one sample, in risk order, in the shape of the section they come from.
 
     One point per score bin, except that the bins of a collapsed tail become a single point:
-    the same grouping as the strip (``tail_groups``, over the bins in risk order), with the
+    the same grouping as the strip (``tail_groups`` at the strip's ``printed_risks``, over the
+    bins in risk order), with the
     group's rows pooled as the R pools them in ``collapse.calibration.df`` -- n adds up, and the
     predicted and observed risk are the n-weighted means, so the point sits where its rows are.
     ``scores`` is the strip's label for the group (``"10 to 13"``), and ``labels`` the short one
@@ -899,7 +906,7 @@ def calibration_points(section, thresholds, digits):
                    key=lambda i: (section["predicted"][i], section["scores"][i]))
     risks = [section["predicted"][i] for i in order]
     points = []
-    for first, last, side in tail_groups(risks, thresholds):
+    for first, last, side in tail_groups(risks, printed_risks):
         rows = order[first:last + 1]
         n = sum(section["n"][i] for i in rows)
         predicted = sum(section["predicted"][i] * section["n"][i] for i in rows) / n
