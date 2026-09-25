@@ -112,7 +112,7 @@ class RiskSLIMOptimizer:
         self.min_size = 0
 
         # coefficient bounds
-        self.coef_set.update_intercept_bounds(X = X_with_intercept, y = y_signed, max_offset = max_abs_offset)
+        self.coef_set.update_intercept_bounds(X = X_with_intercept, y = y_signed, max_offset = max_abs_offset, max_L0_value = max_size)
         self.min_coef = self.coef_set.lb
         self.max_coef = self.coef_set.ub
 

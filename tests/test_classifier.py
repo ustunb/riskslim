@@ -73,3 +73,11 @@ def test_report_shows_training_data_and_labelled_test_sample():
     assert rows['n'] == ['80', '40']
     assert rows['outcome_rate'] == ['62.5%', '62.5%']
     assert 'run_time' in rows
+
+
+def test_intercept_bound_counts_only_max_size_items():
+    # 3 binary items with |coef| <= 5: one nonzero item scores at most 5, so the intercept needs at most 5 + 1
+    clf = fit_classifier(max_size=1)
+
+    assert clf.coef_set_.ub[0] == 6
+    assert clf.coef_set_.lb[0] == -6

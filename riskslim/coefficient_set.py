@@ -63,7 +63,8 @@ class CoefficientSet:
         X
         y
         max_offset
-        max_L0_value
+        max_L0_value : int, optional
+            Maximum number of nonzero penalized, non-intercept coefficients; None means no limit.
 
         Returns
         -------
@@ -73,48 +74,29 @@ class CoefficientSet:
         if INTERCEPT_NAME not in self._coef_elements:
             raise ValueError(f"coef_set must contain a variable for the offset called {INTERCEPT_NAME}")
 
-        e = self._coef_elements[INTERCEPT_NAME]
-
-        # get idx of intercept/variables
-        names = self.variable_names
-        variable_names = list(names)
-        variable_names.remove(INTERCEPT_NAME)
-        variable_idx = np.array([names.index(n) for n in variable_names])
-
-        # get max # of non-zero coefficients given model size limit
-        penalized_idx = [self._coef_elements[n].penalized for n in variable_names]
-        trivial_max_size = len(penalized_idx)
-
+        # non-intercept coefficients: the model-size limit counts only their nonzeros
+        idx = np.array([i for i, n in enumerate(self._variable_names) if n != INTERCEPT_NAME])
         if max_L0_value is None:
-            max_L0_value = trivial_max_size
+            max_L0_value = len(idx)
+        else:
+            max_L0_value = min(len(idx), max_L0_value)
 
-        if max_L0_value > 0:
-            max_L0_value = min(trivial_max_size, max_L0_value)
-
-        # update intercept bounds
-        Z = X * y[:, None]
-        Z_min = np.min(Z, axis = 0)
-        Z_max = np.max(Z, axis = 0)
-
-        # get regularized indices
-        L0_reg_ind = self.penalized_indices()[variable_idx]
-
-        # get smallest / largest score
-        s_min, s_max = get_score_bounds(Z_min = Z_min[variable_idx],
-                                        Z_max = Z_max[variable_idx],
-                                        weights_lb = self.lb[variable_idx],
-                                        weights_ub = self.ub[variable_idx],
-                                        L0_reg_ind = L0_reg_ind,
+        # smallest / largest score over the data, with at most max_L0_value penalized nonzeros
+        Z = X[:, idx] * y[:, None]
+        s_min, s_max = get_score_bounds(Z_min = np.min(Z, axis = 0),
+                                        Z_max = np.max(Z, axis = 0),
+                                        weights_lb = self.lb[idx],
+                                        weights_ub = self.ub[idx],
+                                        L0_reg_ind = self.penalized_indices()[idx],
                                         max_size = max_L0_value)
 
         # set intercept
-        conservative_offset = max(abs(s_min), abs(s_max)) + 1
-        if max_offset is None:
-            max_offset = conservative_offset
-        else:
-            max_offset = min(max_offset, conservative_offset)
-        e.ub = max_offset
-        e.lb = -max_offset
+        offset_bound = max(abs(s_min), abs(s_max)) + 1
+        if max_offset is not None:
+            offset_bound = min(max_offset, offset_bound)
+        e = self._coef_elements[INTERCEPT_NAME]
+        e.ub = offset_bound
+        e.lb = -offset_bound
 
     def tabulate(self):
         t = PrettyTable()
