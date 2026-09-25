@@ -47,15 +47,14 @@ class CoefficientSet:
     ### methods ###
     def update_intercept_bounds(self, X, y, max_offset, max_L0_value = None):
         """
-        uses data to set the lower and upper bound on the offset to a conservative value
-        the value is guaranteed to avoid a loss in performance
+        uses data to set the lower and upper bound on the offset to values that never exclude an optimal offset
 
-        optimal_offset = max_abs_score + 1
+        offset_ub = max_abs_score + max(log(n_pos / n_neg), 0) + 1
+        offset_lb = -(max_abs_score + max(log(n_neg / n_pos), 0) + 1)
         where max_abs_score is the largest absolute score that can be achieved using the coefficients in coef_set
-        with the training data. note:
-        when offset >= optimal_offset, then we predict y = +1 for every example
-        when offset <= optimal_offset, then we predict y = -1 for every example
-        thus, any feasible model should do better.
+        (with at most max_L0_value penalized nonzeros) with the training data. above offset_ub - 1, the logistic
+        loss increases with the offset for any feasible coefficients (below offset_lb + 1, it decreases); the +1
+        covers rounding to an integer offset.
 
 
         Parameters
@@ -90,13 +89,20 @@ class CoefficientSet:
                                         L0_reg_ind = self.penalized_indices()[idx],
                                         max_size = max_L0_value)
 
-        # set intercept
-        offset_bound = max(abs(s_min), abs(s_max)) + 1
+        # an optimal intercept exceeds max_abs_score only by the class log-odds (the loss gradient
+        # in the intercept is positive beyond it); +1 covers rounding to an integer intercept
+        max_abs_score = max(abs(s_min), abs(s_max))
+        n_pos = np.count_nonzero(y > 0)
+        n_neg = len(y) - n_pos
+        log_odds = np.log(n_pos / n_neg) if n_pos > 0 and n_neg > 0 else 0.0
+        offset_ub = max_abs_score + max(log_odds, 0.0) + 1
+        offset_lb = -(max_abs_score + max(-log_odds, 0.0) + 1)
         if max_offset is not None:
-            offset_bound = min(max_offset, offset_bound)
+            offset_ub = min(max_offset, offset_ub)
+            offset_lb = max(-max_offset, offset_lb)
         e = self._coef_elements[INTERCEPT_NAME]
-        e.ub = offset_bound
-        e.lb = -offset_bound
+        e.ub = offset_ub
+        e.lb = offset_lb
 
     def tabulate(self):
         t = PrettyTable()

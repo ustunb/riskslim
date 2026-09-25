@@ -82,8 +82,9 @@ def test_solution_info_reports_positive_run_time():
     assert info['solver_time'] >= 0
 
 def test_intercept_bound_counts_only_max_size_items():
-    # 3 binary items with |coef| <= 5: one nonzero item scores at most 5, so the intercept needs at most 5 + 1
+    # 3 binary items with |coef| <= 5: one nonzero item scores at most 5, so the intercept needs at most
+    # 5 + 1, plus the log-odds of the majority class (50 of 80 positive) on its side
     clf = fit_classifier(max_size=1)
 
-    assert clf.coef_set_.ub[0] == 6
+    assert clf.coef_set_.ub[0] == pytest.approx(6 + np.log(50 / 30))
     assert clf.coef_set_.lb[0] == -6

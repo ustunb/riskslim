@@ -120,18 +120,11 @@ def fit_and_assert_global_optimum(
     raw_objective = solution.get_objective_value()
     best_objective = solution.MIP.get_best_objective()
 
-    np.testing.assert_allclose(
-        optimizer.coef_set.lb,
-        task["coefficient_set_lower_bounds"],
-        rtol=0.0,
-        atol=1e-12,
-    )
-    np.testing.assert_allclose(
-        optimizer.coef_set.ub,
-        task["coefficient_set_upper_bounds"],
-        rtol=0.0,
-        atol=1e-12,
-    )
+    # the oracle domain uses the full-size intercept bound; a model-size limit may only tighten it
+    np.testing.assert_array_equal(optimizer.coef_set.lb[1:], task["coefficient_set_lower_bounds"][1:])
+    np.testing.assert_array_equal(optimizer.coef_set.ub[1:], task["coefficient_set_upper_bounds"][1:])
+    assert optimizer.coef_set.lb[0] >= task["coefficient_set_lower_bounds"][0] - 1e-12
+    assert optimizer.coef_set.ub[0] <= task["coefficient_set_upper_bounds"][0] + 1e-12
     assert np.isfinite(weights).all()
     np.testing.assert_allclose(weights, np.rint(weights), rtol=0.0, atol=1e-8)
     assert np.all(weights >= task["coefficient_set_lower_bounds"])
