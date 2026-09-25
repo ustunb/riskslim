@@ -30,11 +30,21 @@ Conventions
 - **Score type:** ``discrete`` when every nonzero item is binary on the training data and every
   point is an integer: the score function then takes a few integer values, every one of which
   the score-to-risk strip lists (``all_scores``: model-derived, whatever the sample).
-  Otherwise ``continuous``.
-- **Collapsed endpoints:** ``logit(k) ≈ logit(k + 1)`` once the risk is near 0 or 1, so the
-  scores whose risk falls outside the printed risk range collapse into one cell of the
+  Otherwise ``continuous``: its rows are binned by predicted risk into ``max_scores_printed``
+  risk bins (``risk_bins``, the one place that chooses them), and the strip, the calibration
+  points and the ECE are per non-empty bin.
+- **Risk bins (continuous):** a sample's rows fall in the bins of their own predicted risk; a
+  bin's predicted risk is its rows' mean, its observed risk their outcome rate, and it is
+  labelled by the range of its rows' scores (``3.2 to 5.1``, as the R's ``print.score.column``).
+  A bin with no rows in a sample is absent from that sample; the strip holds the training
+  sample's non-empty bins. Risk is monotone in the score, so each bin is a score interval: the
+  Model card finds a score's bin by comparing it with the bins' score edges
+  (``logit(risk edge) - intercept``), which Python ships.
+- **Collapsed endpoints (discrete):** ``logit(k) ≈ logit(k + 1)`` once the risk is near 0 or 1,
+  so the scores whose risk falls outside the printed risk range collapse into one cell of the
   score-to-risk strip and one point of the calibration plot at each end, as they do in the R
-  report (``tail_groups``). The printed range is ``low_risk_threshold``..``high_risk_threshold``
+  report (``tail_groups``). Risk bins never collapse. The printed range is
+  ``low_risk_threshold``..``high_risk_threshold``
   (1%..99% by default); a discrete strip that would still print more than
   ``max_scores_printed`` cells narrows it for this model to the risks of the lowest and highest
   scores it still prints on their own (``collapse_scores``). The tails read ``< {min}`` and
@@ -43,9 +53,11 @@ Conventions
   to the requested thresholds.
   Display only: every reported number is computed per score bin, before any collapsing.
 - **Calibration error:** ``|predicted - observed|`` per score bin (``local_error``), and the
-  sample's ``ece`` (the R's ``avg_cal_err_distinct``). Score bins with no rows in a sample are
-  absent from that sample. A CV sample pools fold models, so one score can fall in several bins,
-  one per fold intercept.
+  sample's ``ece``: the R's ``avg_cal_err_distinct`` for a discrete model, its
+  ``avg_cal_err_binned`` over the risk bins for a continuous one. Score bins with no rows in a
+  sample are absent from that sample. A CV sample pools fold models, so one score can fall in
+  several discrete bins, one per fold intercept, and each CV row falls in the risk bin of its
+  own fold model's risk.
 """
 
 import html
@@ -62,7 +74,7 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from jinja2 import Environment
 from markupsafe import Markup
-from scipy.special import expit
+from scipy.special import expit, logit
 from sklearn.metrics import auc, roc_curve
 from sklearn.utils.validation import check_is_fitted, validate_data
 
@@ -80,9 +92,10 @@ COMPONENTS = ("model", "summary", "roc", "calibration")
 # calibration point: the R's defaults
 LOW_RISK_THRESHOLD = 0.01
 HIGH_RISK_THRESHOLD = 0.99
-# the most cells a discrete score-to-risk strip prints: at 1%..99% a discrete strip holds at most
-# 12 (the logit band, 9.2 wide, holds at most 10 integer scores, plus the two tails), so the cap
-# only folds scores when a caller has widened the thresholds
+# the most cells a discrete score-to-risk strip prints, and a continuous model's number of risk
+# bins: at 1%..99% a discrete strip holds at most 12 (the logit band, 9.2 wide, holds at most 10
+# integer scores, plus the two tails), so the cap only folds scores when a caller has widened the
+# thresholds
 MAX_SCORES_PRINTED = 12
 
 # sample names, in page order: the training sample, the CV sample ("5-CV"), then the other splits;
@@ -213,7 +226,8 @@ class ModelReport:
         tails). When the thresholds leave more, the most extreme score printed on its own (risk
         nearest 0 or 1) folds into its tail, one at a time, until the strip fits; each tail then
         reads the risk of the nearest score still printed. 12 by default, which the default
-        thresholds never exceed.
+        thresholds never exceed. A continuous model bins its rows into this many equal-width
+        risk bins instead (``risk_bins``), and prints the bins that hold training rows.
     """
 
     def __init__(self, classifier, data=None, cv_models=None, model_type=None, X_test=None,
@@ -236,6 +250,9 @@ class ModelReport:
         intercept, points = float(self.weights[0]), self.weights[1:]
         self.model_type = checked_model_type(model_type, points, splits[TRAINING][0],
                                              self.variable_names[1:])
+        # a continuous model's risk bins, as edges on the risk scale; None for a discrete model
+        bin_edges = (None if infer_score_type(points, splits[TRAINING][0]) == "discrete"
+                     else risk_bins(max_scores_printed))
 
         # {name: (y, score, intercept)}: the model scores each split; a CV row is scored by its
         # own fold model, so the CV sample carries one intercept per row
@@ -245,7 +262,8 @@ class ModelReport:
         # narrower
         model, digits, printed_risks = model_section(
             points, intercept, self.variable_names[1:], self.outcome_name, self.model_type,
-            splits[TRAINING][0], scored[TRAINING][1], low_risk, high_risk, max_scores_printed)
+            splits[TRAINING][0], scored[TRAINING][1], low_risk, high_risk, max_scores_printed,
+            bin_edges)
         # {key: sample name} of every available sample, in page order: Training, the CV sample,
         # then the other splits
         available = {key: name for key, name in SPLIT_SAMPLES.items() if name in scored}
@@ -262,7 +280,8 @@ class ModelReport:
         checked_classes(scored)
 
         roc = {name: roc_section(y, score, b) for name, (y, score, b) in scored.items()}
-        calibration = {name: calibration_section(y, score, b)
+        calibration = {name: calibration_section(y, score, b) if bin_edges is None
+                       else binned_calibration_section(y, score, b, bin_edges)
                        for name, (y, score, b) in scored.items()}
         log_loss = {name: float(log_loss_value_from_scores((2 * y - 1) * (score + b)))
                     for name, (y, score, b) in scored.items()}
@@ -291,6 +310,7 @@ class ModelReport:
         if "calibration" in components:
             self.data["figures"]["calibration"] = calibration_figure(
                 sample_keys, {name: calibration_points(calibration[name], printed_risks, digits)
+                              if bin_edges is None else binned_calibration_points(calibration[name])
                               for name in sample_keys},
                 sample_labels(summary, sample_keys, "ece"))
         self.data["narrow"] = narrow_overrides(self.data["figures"])
@@ -333,6 +353,14 @@ def infer_model_type(points, X_train):
             and all(is_binary(X_train[:, j]) for j in nonzero)):
         return "checklist"
     return "risk_score"
+
+
+def infer_score_type(points, X_train):
+    """``discrete`` when every nonzero item is binary on the training rows and every point is an
+    integer; else ``continuous``."""
+    if is_integer(points) and all(is_binary(X_train[:, j]) for j in np.flatnonzero(points)):
+        return "discrete"
+    return "continuous"
 
 
 def checked_dataset(data, classifier):
@@ -513,24 +541,30 @@ def point_label(points, binary, model_type):
 
 
 def model_section(points, intercept, names, outcome_name, model_type, X_train, train_scores,
-                  low_risk, high_risk, max_scores_printed):
+                  low_risk, high_risk, max_scores_printed, bin_edges):
     """Items, score type, score range, score-to-risk strip and (for checklists) M and the rule.
 
     ``points_header`` is the item table's points column, and None when there is no such column
     (a checklist whose items are all ``+1``: every box counts the same, so a column of ``+`` says
-    nothing). ``score_header`` and ``risk_header`` label the score-to-risk strip.
-    ``cell_by_score`` maps each score in the strip, keyed by its string (``"3"``), to
+    nothing). ``score_header`` and ``risk_header`` label the score-to-risk strip. The Model card
+    sums the points times the values of its items, finds the strip cell of that score and reads
+    the risk that cell shows. ``n_scores_printed`` counts the strip's cells.
+
+    A discrete model (``bin_edges`` None) lists every possible score (``all_scores``, counted
+    by ``n_scores``) and collapses them into at most ``max_scores_printed`` cells
+    (``collapse_scores``), starting from the requested thresholds ``low_risk`` and
+    ``high_risk``. ``cell_by_score`` maps each score, keyed by its string (``"3"``), to
     ``{"cell", "label"}``: the index of the strip cell holding it and how the readout prints it.
-    The Model card sums the points of its checked items, looks the score up here and reads the
-    risk that cell shows. ``n_scores`` counts the scores the strip covers, ``n_scores_printed``
-    its cells.
 
-    ``low_risk`` and ``high_risk`` are the requested thresholds, where the strip collapses its
-    tails. A discrete strip lists every possible score (``all_scores``) and collapses them into
-    at most ``max_scores_printed`` cells (``collapse_scores``).
+    A continuous model has one cell per risk bin of ``bin_edges`` that holds training rows
+    (``binned_score_to_risk_cells``), no finite list of scores (``n_scores`` is None) and no
+    collapsed tails. ``score_bins`` holds the lookup: ``edges``, the score where each bin after
+    the first begins, and ``cells``, each bin's strip cell (None for a bin with no training
+    rows).
 
-    Returns the section, the decimals every score label on the page prints (``score_digits``)
-    and the printed risk range, ``(min_printed_risk, max_printed_risk)``.
+    Returns the section, the decimals every discrete score label on the page prints
+    (``score_digits``; None for a continuous model) and the printed risk range,
+    ``(min_printed_risk, max_printed_risk)``: the thresholds, or narrower.
     """
     items = []
     value_sets = []
@@ -551,28 +585,23 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, t
 
     lo = sum(float(v.min()) for v in value_sets)
     hi = sum(float(v.max()) for v in value_sets)
-    discrete = is_integer(points) and all(item["binary"] for item in items)
-    # TODO(report-score-type, Phase 2): a stand-in for continuous models, replaced by risk bins:
-    # every possible score when the item values are integers, else the training rows' scores
-    if discrete or all(is_integer(values) for values in value_sets):
-        scores = all_scores(value_sets)
-    else:
-        scores = [number(s) for s in np.unique(train_scores)]
-    risks = expit(np.asarray(scores, dtype=float) + intercept)
-    if discrete:
-        groups, printed_risks = collapse_scores(risks, low_risk, high_risk, max_scores_printed)
-    else:
-        printed_risks = (low_risk, high_risk)
-        groups = tail_groups(risks, printed_risks)
-    digits = score_digits(scores)
     m = math.floor(-intercept) + 1 if model_type == "checklist" else None
     checklist = model_type == "checklist"
     shows_points = not checklist or any(item["points"] < 0 for item in items)
-    cells, cell_by_score = score_to_risk_cells(scores, risks, groups, m, printed_risks, digits)
+    if bin_edges is None:
+        scores = all_scores(value_sets)
+        risks = expit(np.asarray(scores, dtype=float) + intercept)
+        groups, printed_risks = collapse_scores(risks, low_risk, high_risk, max_scores_printed)
+        digits = score_digits(scores)
+        cells, cell_by_score = score_to_risk_cells(scores, risks, groups, m, printed_risks, digits)
+        n_scores, score_bins = len(scores), None
+    else:
+        printed_risks, digits, n_scores, cell_by_score = (low_risk, high_risk), None, None, None
+        cells, score_bins = binned_score_to_risk_cells(train_scores, intercept, bin_edges)
     model = {
         "type": model_type,
-        "score_type": "discrete" if discrete else "continuous",
-        "n_scores": len(scores),
+        "score_type": "discrete" if bin_edges is None else "continuous",
+        "n_scores": n_scores,
         "n_scores_printed": len(cells),
         "intercept": number(intercept),
         "items": items,
@@ -582,6 +611,7 @@ def model_section(points, intercept, names, outcome_name, model_type, X_train, t
         "score_range": [number(lo), number(hi)],
         "score_to_risk": cells,
         "cell_by_score": cell_by_score,
+        "score_bins": score_bins,
         "checklist_m": None,
         "rule": None,
     }
@@ -699,6 +729,62 @@ def score_to_risk_cells(scores, risks, groups, checklist_m, printed_risks, digit
     return cells, cell_by_score
 
 
+def risk_bins(n_bins):
+    """The edges of ``n_bins`` equal-width risk bins, ascending: ``[0, 1/n_bins, ..., 1]``.
+
+    The one place the report chooses a continuous model's bins: every other function takes the
+    edges, so swapping this function rebins the strip, the calibration points, the ECE and the
+    Model card together. These are the R's breaks, ``seq(0, n_bins - 1) / n_bins`` in
+    ``get.calibration.hist.df`` (``dev/reference/burn-rules/reporting_utils.R:1219``).
+    """
+    return np.arange(n_bins + 1) / n_bins
+
+
+def risk_bin_rows(score, risk, edges):
+    """The rows grouped by risk bin, over the bins of ``edges`` that hold rows, ascending:
+    ``(bins, rows, score_ranges)``. ``bins`` is each such bin's index among all of them,
+    ``rows`` each row's position in ``bins``, and ``score_ranges`` each bin's ``(min, max)``
+    score.
+
+    A risk falls in the bin whose left edge is the last at or below it, as the R's
+    ``findInterval``: only the interior edges decide, so a risk of 1 is in the last bin.
+    """
+    bins, rows = np.unique(np.searchsorted(edges[1:-1], risk, side="right"), return_inverse=True)
+    rows = rows.ravel()
+    score_ranges = [(float(score[rows == i].min()), float(score[rows == i].max()))
+                    for i in range(len(bins))]
+    return bins, rows, score_ranges
+
+
+def binned_score_to_risk_cells(train_scores, intercept, edges):
+    """A continuous model's score-to-risk strip: one ``{"score", "risk", "positive"}`` cell per
+    risk bin of ``edges`` that holds training rows, labelled with the range of their scores
+    (``score_range_label``) and their mean predicted risk, as the R's risk table of a
+    continuous model; and the Model card's lookup, ``{"edges", "cells"}``.
+
+    Risk is monotone in the score, so a bin is a score interval: ``edges`` holds the score
+    where each bin after the first begins (``logit(risk edge) - intercept``), and ``cells``
+    each bin's strip cell, None for a bin no training row falls in.
+    """
+    risk = expit(train_scores + intercept)
+    bins, rows, score_ranges = risk_bin_rows(train_scores, risk, edges)
+    predicted = np.bincount(rows, weights=risk) / np.bincount(rows)
+    cells = [{"score": score_range_label(low, high), "risk": percent(bin_risk), "positive": False}
+             for (low, high), bin_risk in zip(score_ranges, predicted)]
+    cell_by_bin = [None] * (len(edges) - 1)
+    for cell, bin_index in enumerate(bins):
+        cell_by_bin[bin_index] = cell
+    return cells, {"edges": [float(edge) for edge in logit(edges[1:-1]) - intercept],
+                   "cells": cell_by_bin}
+
+
+def score_range_label(low, high):
+    """A risk bin's scores as the R's ``print.score.column`` prints them: ``"3.2 to 5.1"``, or
+    one score when ``low == high``; no decimals when both are integers, else one."""
+    digits = 0 if float(low).is_integer() and float(high).is_integer() else 1
+    return score_label(low + 0.0, high + 0.0, digits)  # + 0.0: -0.0 prints as 0
+
+
 def score_digits(scores):
     """The fewest decimals that print every score apart: 0 when every score is integral, else
     at least 1, and at most 6.
@@ -771,14 +857,39 @@ def calibration_section(y, score, intercept):
     }
 
 
+def binned_calibration_section(y, score, intercept, edges):
+    """A continuous model's ``calibration_section``: per risk bin of ``edges`` that holds rows
+    of this sample, the range of its scores, its mean predicted risk, observed rate, n and
+    ``local_error``; and the sample's ``ece``, the R's ``avg_cal_err_binned`` over these bins
+    (``compute.score.based.metrics``, ``reporting_utils.R:1039``): the n-weighted mean of
+    ``local_error``.
+
+    Each row falls in the bin of its own risk, so a CV row is binned by its own fold model.
+    """
+    risk = expit(score + intercept)
+    _, rows, score_ranges = risk_bin_rows(score, risk, edges)
+    n = np.bincount(rows)
+    predicted = np.bincount(rows, weights=risk) / n
+    observed = np.bincount(rows, weights=y) / n
+    local_error = np.abs(predicted - observed)
+    return {
+        "score_ranges": [[number(low), number(high)] for low, high in score_ranges],
+        "predicted": [float(v) for v in predicted],
+        "observed": [float(v) for v in observed],
+        "n": [int(v) for v in n],
+        "local_error": [float(v) for v in local_error],
+        "ece": float(np.sum(n * local_error) / len(y)),
+    }
+
+
 def expected_calibration_error(y, risk):
     """The R's ``avg_cal_err_distinct``: the n-weighted mean of ``|predicted - observed|`` over
     the rows grouped by distinct predicted risk (``classification_utils.R:204-226``).
 
     Rows are grouped by the risk they are given, not by the score that gave it, so two fold
     models that predict the same risk from different scores land in one group, as they do in the
-    R. The R's sibling ``avg_cal_err_binned`` is the same mean over ten equal-width risk bins, and
-    is for real-valued scores, which this report does not support.
+    R. A continuous model's ECE is its sibling ``avg_cal_err_binned``
+    (``binned_calibration_section``).
     """
     risk, groups, n = np.unique(risk, return_inverse=True, return_counts=True)
     observed = np.bincount(groups.ravel(), weights=y, minlength=len(risk)) / n
@@ -922,27 +1033,39 @@ def calibration_points(section, printed_risks, digits):
     return dict(zip(keys, (list(values) for values in zip(*points))))
 
 
+def binned_calibration_points(section):
+    """A continuous model's ``calibration_points``: one point per risk bin of the sample, in risk
+    order, with no label in the circle (``labels`` is None) and the bin's score range
+    (``score_range_label``) for the hover. Bins never pool."""
+    return {"labels": None,
+            "scores": [score_range_label(low, high) for low, high in section["score_ranges"]],
+            **{key: section[key] for key in ("predicted", "observed", "n", "local_error")}}
+
+
 def calibration_figure(sample_keys, points, labels):
     """Per sample, equal circles with the score inside, joined in risk order; ECE in the legend.
 
     ``sample_keys`` is ``{sample name: key}`` in page order; the key picks the sample's colour.
-    ``points`` is each sample's ``calibration_points``. The circles follow the R report: one size,
-    since n is in the hover, and a line in the sample's colour. Each trace carries its sample's
-    name in ``meta``. The traces run in reverse page order, so the first sample is drawn on top."""
+    ``points`` is each sample's ``calibration_points``, or ``binned_calibration_points`` for a
+    continuous model, whose circles are plain (no label inside; the score range is in the
+    hover). The circles follow the R report: one size, since n is in the hover, and a line in
+    the sample's colour. Each trace carries its sample's name in ``meta``. The traces run in
+    reverse page order, so the first sample is drawn on top."""
     traces = []
     for name, key in reversed(sample_keys.items()):
         cal = points[name]
         color = SAMPLE_COLORS[key]
+        # the score inside the circle: white on the black training circles, black on the
+        # lighter ones
+        text = {} if cal["labels"] is None else {
+            "text": cal["labels"], "textposition": "middle center",
+            "textfont": {"size": LABEL_PX, "color": BACKGROUND if key == "training" else "#000000"}}
         traces.append(go.Scatter(
-            mode="lines+markers+text", name=labels[name], meta=name,
+            mode="lines+markers" if cal["labels"] is None else "lines+markers+text",
+            name=labels[name], meta=name,
             x=cal["predicted"], y=cal["observed"],
-            text=cal["labels"],
             customdata=[[s, n, e] for s, n, e in zip(cal["scores"], cal["n"], cal["local_error"])],
-            textposition="middle center",
-            # the score inside the circle: white on the black training circles, black on the
-            # lighter ones
-            textfont={"size": LABEL_PX,
-                      "color": BACKGROUND if key == "training" else "#000000"},
+            **text,
             cliponaxis=False,
             line={"width": 2, "color": color},
             # the white outline keeps overlapping circles apart

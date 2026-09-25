@@ -254,7 +254,8 @@ class RiskSLIMClassifier(ClassifierMixin, BaseEstimator):
             Where the risks collapse at each end. See ``ModelReport``.
         max_scores_printed : int, optional
             The most cells a discrete model's score-to-risk strip prints, at least 2; the most
-            extreme scores fold into the tails to fit. See ``ModelReport``.
+            extreme scores fold into the tails to fit. A continuous model's number of risk bins.
+            See ``ModelReport``.
 
         Returns
         -------
