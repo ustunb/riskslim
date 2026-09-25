@@ -1,8 +1,7 @@
 // riskslim report: make the Model card add up and draw the figures. The markup is all
-// Jinja's; Python computes every number, so the card only sums points x value over its inputs
-// and finds the strip cell whose risk that score shows: a discrete score is looked up in
-// model.cell_by_score, a continuous one is compared with the bin edges in model.score_bins and
-// printed with its score_digits decimals -- the browser derives no model fact.
+// Jinja's; Python computes every number, so the card only sums points x value over its inputs,
+// finds the strip cell of that score by comparing it with the score edges in model.score_bins
+// and prints it with their score_digits decimals -- the browser derives no model fact.
 (function () {
   "use strict";
   const data = JSON.parse(document.getElementById("report-data").textContent);
@@ -10,7 +9,7 @@
   // the Model card first: it needs no library, so it works even when Plotly fails to load
   // (the page may leave the card out)
   if (document.getElementById("rs-score")) {
-    const { cell_by_score: cellByScore, score_bins: scoreBins, score_to_risk: strip } = data.model;
+    const { score_bins: scoreBins, score_to_risk: strip } = data.model;
     const inputs = document.querySelectorAll(".rs-model-table input");
     const cells = document.querySelectorAll(".rs-score-grid [data-cell]");
     function update() {
@@ -21,20 +20,10 @@
           : Math.min(Math.max(Number(input.value), input.min), input.max);
         score += Number(input.dataset.points) * value;
       });
-      let cell, label;
-      if (scoreBins) {
-        // a continuous score is in the bin after every edge at or below it; a bin that holds no
-        // training row has no cell (and no risk), but the score still prints
-        cell = scoreBins.cells[scoreBins.edges.filter((edge) => score >= edge).length];
-        label = score.toFixed(scoreBins.score_digits);
-      } else {
-        // a discrete score is an integer, keyed as Python writes it ("3"); missing only for a
-        // score no value set reaches, e.g. a non-integer value typed in
-        const key = String(score);
-        cell = cellByScore[key]?.cell;
-        label = cellByScore[key]?.label ?? key;
-      }
-      document.getElementById("rs-score").textContent = label;
+      // the score is in the bin after every edge at or below it; a bin that holds no training
+      // row has no cell (and no risk), but the score still prints
+      const cell = scoreBins.cells[scoreBins.edges.filter((edge) => score >= edge).length];
+      document.getElementById("rs-score").textContent = score.toFixed(scoreBins.score_digits);
       document.getElementById("rs-risk").textContent = cell == null ? "—" : strip[cell].risk;
       cells.forEach((element, i) => element.classList.toggle("rs-current", cell === i));
     }
