@@ -89,11 +89,18 @@ from ..defaults import INTERCEPT_NAME
 from ..loss_functions.log_loss import log_loss_value_from_scores
 from ..utils import data_fingerprint, is_integer
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 MODEL_TYPES = {"risk_score": "Risk Score", "checklist": "Checklist"}
 # a continuous feature's value is picked on a pip meter when every continuous feature of the
 # model has at most this many levels; otherwise every one is typed into a number box
 MAX_PIP_METER_LEVELS = 10
+# the Model card's instructions box, by its layout: what the reader does with the rows
+CARD_INSTRUCTIONS = {
+    "points": "Click the features that apply to see the risk.",
+    "checklist": "Click the features that apply to see the risk.",
+    "values": "Enter each value to see the risk.",
+    "mixed": "Click the features that apply and enter each value to see the risk.",
+}
 
 # the page's components: the three summary blocks (the dataset, how the model was trained, its
 # performance), the Model card, then the ROC and calibration cards
@@ -186,7 +193,7 @@ OPERATOR_SYMBOLS = {"geq": "≥", "leq": "≤", "lt": "<", "gt": ">", "eq": "=",
 
 ASSETS = files(__package__) / "assets"
 # Inlined after the markup, which Jinja writes in full. The script runs the Model card (rows
-# toggled and values entered, their Total and its strip cell, editing, collapsing), draws the
+# toggled and values entered, their Score and its strip cell, editing, collapsing), draws the
 # figures and fits each to its width (the narrow overrides), hides a calibration label another
 # covers, and mirrors a legend change onto the other plot.
 SCRIPTS = ("report.js",)
@@ -820,21 +827,25 @@ def label_and_raw_feature(name):
 
 def model_feature(name, weight, values, is_binary, value_input):
     """The Model card's feature element: ``{id, name, label, raw_feature, kind, weight,
-    weight_label, checked | value, levels, definition}``.
+    weight_label, sign_label, digits_label, checked | value, levels, definition}``.
 
     ``id`` and ``name`` are the model's column name (unique among the columns, so a saved rename
     or order survives a change in position); ``label`` is what the card prints
     (``label_and_raw_feature``) and ``weight_label`` the weight as it prints, with a true minus
-    sign; ``values`` are the item's sorted distinct training values, the ``levels`` a pip meter
+    sign; a points card prints it as ``sign_label`` (``"+"``, ``"−"``, or ``""`` for 0) before
+    ``digits_label`` (the weight without its sign); ``values`` are the item's sorted distinct training values, the ``levels`` a pip meter
     offers (None for a binary feature and when ``value_input`` is not ``"pip_meter"``). A binary
     feature starts unchecked, a continuous one with no value; ``definition`` (shown on hover) is
     None until one is supplied.
     """
     label, raw_feature = label_and_raw_feature(name)
     weight = number(weight)
+    weight_label = str(weight).replace("-", "−")
     feature = {"id": name, "name": name, "label": label, "raw_feature": raw_feature,
                "kind": "binary" if is_binary else "continuous", "weight": weight,
-               "weight_label": str(weight).replace("-", "−")}
+               "weight_label": weight_label,
+               "sign_label": "+" if weight > 0 else "−" if weight < 0 else "",
+               "digits_label": weight_label.lstrip("−")}
     if is_binary:
         feature.update(checked=False, levels=None)
     else:
@@ -849,19 +860,26 @@ def build_model_component(evaluation, settings):
     score-to-risk strip.
 
     ``features`` holds one feature element per nonzero item (``model_feature``), binary ones
-    first, each kind by most points first as ``print_model`` orders them. The card's column
-    headers are display strings: ``value_header`` (``"Points"``; ``"Value"`` when a feature is
-    continuous; None for a checklist of +1 items, whose rows show a check mark instead,
-    ``check_marks``), ``weight_header`` (``"Weight"`` beside a Value column unless every weight
-    is 1, else None), ``total_header``, and ``score_header`` and ``risk_header``, which label the
-    score-to-risk strip for every model type. ``value_input`` says how a continuous feature's
-    value is entered, one way for the whole card: ``"pip_meter"`` when every continuous feature
-    has at most ``MAX_PIP_METER_LEVELS`` levels, else ``"number"`` (a box taking any number);
-    None without continuous features. ``n_scores_printed`` counts the strip's cells.
+    first, each kind by most points first as ``print_model`` orders them. ``card_layout`` is the
+    card's one layout discriminator: ``"points"`` (binary features, signed points),
+    ``"checklist"`` (a checklist of +1 items: a check box per row), ``"values"`` (continuous
+    features alone: a value box per row) or ``"mixed"`` (both kinds: a binary row's value is a
+    0/1 box). ``points_digits`` is the most digits any point has on a points card (the digit
+    block the points centre in; None otherwise) and ``instruction`` the instructions box's text.
+    The headers are display strings: ``value_header`` (``"Points"``, ``"Present?"`` or
+    ``"Value"``), ``weight_header`` (``"Weight"`` beside a Value column unless every weight is 1,
+    else None), and ``score_header`` and ``risk_header``, which label the Score under the rows
+    and the score-to-risk strip for every model type. ``value_input`` says how a continuous
+    feature's value is entered, one way for the whole card: ``"pip_meter"`` when every
+    continuous feature has at most ``MAX_PIP_METER_LEVELS`` levels, else ``"number"`` (a box
+    taking any number); None without continuous features. ``meter_slots`` is the most levels
+    any feature has on a pip-meter card (the width its meters open into; None otherwise).
+    ``n_scores_printed`` counts the
+    strip's cells.
 
     The ``Evaluation``'s strip (``discrete_strip``, or ``binned_strip`` off the training
     sample's calibration table) gives the cells, ``n_scores`` and the Model card's lookup
-    ``score_bins`` (``edges``, ``cells``); ``score_digits`` adds the decimals the Total prints
+    ``score_bins`` (``edges``, ``cells``); ``score_digits`` adds the decimals the Score prints
     a score with: 0 when every score the card reaches is an integer, else 1. ``settings``, a
     ``ReportSettings``, changes nothing here: the strip is built by ``evaluate``.
     """
@@ -878,8 +896,13 @@ def build_model_component(evaluation, settings):
     features.sort(key=lambda feature: (feature["kind"] == "continuous", -feature["weight"]))
     value_sets = [points[j] * values for j, values in evaluation.item_values.items()]
 
-    continuous = [feature for feature in features if feature["kind"] == "continuous"]
-    check_marks = model_type == "checklist" and all(f["weight"] == 1 for f in features)
+    kinds = {feature["kind"] for feature in features}
+    if "continuous" in kinds:
+        card_layout = "mixed" if "binary" in kinds else "values"
+    elif model_type == "checklist" and all(f["weight"] == 1 for f in features):
+        card_layout = "checklist"
+    else:
+        card_layout = "points"
     cells = evaluation.strip_cells
     model = {
         "type": model_type,
@@ -888,15 +911,19 @@ def build_model_component(evaluation, settings):
         "n_scores_printed": len(cells),
         "intercept": number(intercept),
         "features": features,
+        "card_layout": card_layout,
         "value_input": value_input,
+        "points_digits": (max((len(f["digits_label"]) for f in features), default=1)
+                          if card_layout == "points" else None),
+        "meter_slots": (max(len(f["levels"]) for f in features if f["levels"])
+                        if value_input == "pip_meter" else None),
+        "instruction": CARD_INSTRUCTIONS[card_layout],
         # the operators a label keeps on one line with their values: report.js keeps a renamed
         # label the same way
         "condition_operators": list(dict.fromkeys(OPERATOR_SYMBOLS.values())),
-        "check_marks": check_marks,
-        "value_header": "Value" if continuous else None if check_marks else "Points",
-        "weight_header": ("Weight" if continuous and any(f["weight"] != 1 for f in features)
+        "value_header": {"points": "Points", "checklist": "Present?"}.get(card_layout, "Value"),
+        "weight_header": ("Weight" if value_input and any(f["weight"] != 1 for f in features)
                           else None),
-        "total_header": "Total",
         "score_header": "Score",
         "risk_header": "Risk",
         "score_range": [number(sum(float(v.min()) for v in value_sets)),

@@ -24,6 +24,56 @@
     return message.replace(/\{(\w+)\}/g, (_, name) => values[name]);
   }
 
+  // Hover intent, for a mouse only (touch and pen get their clicks alone): a pointer resting on
+  // any of targets calls open() after openMs; once it has left them all, close() follows closeMs
+  // later unless isPinned(). Returns the one timer it runs, {schedule(action, delay), cancel()},
+  // for the caller's own delayed actions and clicks, which replace a pending open or close.
+  function openOnHover(targets, { openMs, closeMs, isOpen, open, close, isPinned }, signal) {
+    let timeout;
+    const timer = {
+      cancel: () => clearTimeout(timeout),
+      schedule: (action, delay) => { clearTimeout(timeout); timeout = setTimeout(action, delay); },
+    };
+    targets.forEach((target) => {
+      target.addEventListener("pointerenter", (event) => {
+        if (event.pointerType !== "mouse") return;
+        if (isOpen()) timer.cancel();
+        else timer.schedule(open, openMs);
+      }, { signal });
+      target.addEventListener("pointerleave", (event) => {
+        if (event.pointerType !== "mouse") return;
+        if (!isOpen()) timer.cancel();
+        else if (!isPinned()) timer.schedule(close, closeMs);
+      }, { signal });
+    });
+    signal.addEventListener("abort", timer.cancel);
+    return timer;
+  }
+
+  // A mouse resting on a definition's ⓘ previews it: the popover opens after HOVER_OPEN_MS and
+  // stays open while the pointer is on the ⓘ or the popover, closing HOVER_CLOSE_MS after it
+  // leaves both. A click pins it: on an open preview the click keeps it open; otherwise the
+  // button's own popovertarget toggles it. Touch and pen get the click alone.
+  const DEFINITION_HOVER_OPEN_MS = 400;
+  const DEFINITION_HOVER_CLOSE_MS = 200;
+  function previewOnHover(button, popover, signal) {
+    let pinned = false;
+    const isOpen = () => popover.matches(":popover-open");
+    const timer = openOnHover([button, popover], {
+      openMs: DEFINITION_HOVER_OPEN_MS, closeMs: DEFINITION_HOVER_CLOSE_MS, isOpen,
+      open: () => popover.showPopover({ source: button }), close: () => popover.hidePopover(),
+      isPinned: () => pinned,
+    }, signal);
+    button.addEventListener("click", (event) => {
+      timer.cancel();
+      if (isOpen() && !pinned) { event.preventDefault(); pinned = true; }  // no native toggle: it stays open
+      else pinned = !isOpen();  // the native toggle opens it (pinned) or closes it
+    }, { signal });
+    popover.addEventListener("toggle", (event) => {
+      if (event.newState === "closed") { pinned = false; timer.cancel(); }
+    }, { signal });
+  }
+
   // ---- value inputs --------------------------------------------------------------------------
   // Interchangeable ways to enter a continuous feature's value, behind one small protocol. Each
   // hydrates the template's markup for it:
@@ -71,8 +121,10 @@
   // Opens: a mouse resting on the box ~150ms; a click or tap; Enter or Space. A mouse-opened
   // meter closes once the pointer has left box and meter for ~250ms. A click on the box toggles
   // it (the first click on a hover-opened meter pins it instead). A choice, Escape, focus or a
-  // click leaving it close it. Keyboard, on the box or the meter: arrows step (← increases, as
-  // the meter runs), Home/End jump, a digit picks that level (0 = 10), Backspace/Delete clear.
+  // click leaving it close it; a tapped choice at once (a tray under the row folds away before
+  // the next tap, which then lands where it was aimed). Keyboard, on the box or the meter:
+  // arrows step (← increases, as the meter runs), Home/End jump, a digit picks that level
+  // (0 = 10), Backspace/Delete clear.
   class PipMeterValue extends ValueInput {
     static HOVER_OPEN_MS = 150;
     static HOVER_CLOSE_MS = 250;
@@ -89,16 +141,21 @@
       this.pips = [...this.meter.querySelectorAll(".rs-value-pip")];
       this.preview = null;  // the level under the pointer, shown in the box before it is chosen
       this.openedBy = null;
-      this.timer = null;
       const on = (target, type, listener, options) =>
         target.addEventListener(type, listener, { ...options, signal });
-      const { HOVER_OPEN_MS, HOVER_CLOSE_MS } = PipMeterValue;
+      // a hover-opened meter is not pinned; a click, tap or key pins it
+      this.timer = openOnHover([root], {
+        openMs: PipMeterValue.HOVER_OPEN_MS, closeMs: PipMeterValue.HOVER_CLOSE_MS,
+        isOpen: () => this.isOpen, open: () => this.open("hover"), close: () => this.close(),
+        isPinned: () => this.openedBy !== "hover",
+      }, signal);
 
       this.pips.forEach((pip, i) => {
         // event.detail is 0 for a keyboard click: choose; a pointer click on the value clears it
         on(pip, "click", (event) => {
           this.choose(event.detail && this.current === levels[i] ? null : levels[i]);
-          this.closeSoon();
+          if (event.pointerType === "touch" || event.pointerType === "pen") this.close();
+          else this.closeSoon();
         });
         on(pip, "mouseenter", () => this.showPreview(i));
       });
@@ -128,18 +185,8 @@
         event.preventDefault();
         this.choose(next.value);
       });
-      on(root, "pointerenter", (event) => {
-        if (event.pointerType !== "mouse") return;
-        if (this.isOpen) clearTimeout(this.timer);
-        else this.later(() => this.open("hover"), HOVER_OPEN_MS);
-      });
-      on(root, "pointerleave", (event) => {
-        if (event.pointerType !== "mouse") return;
-        if (!this.isOpen) clearTimeout(this.timer);
-        else if (this.openedBy === "hover") this.later(() => this.close(), HOVER_CLOSE_MS);
-      });
       on(this.box, "click", () => {
-        clearTimeout(this.timer);
+        this.timer.cancel();
         if (!this.isOpen) this.open("click");
         else if (this.openedBy === "hover") { this.openedBy = "click"; this.focusPip(); }  // pin it
         else this.close();
@@ -147,16 +194,10 @@
       // while open, a pointer pressed anywhere else closes it (added in open, removed in close)
       this.signal = signal;
       this.closeOnOutsidePointer = (event) => { if (!root.contains(event.target)) this.close(); };
-      signal.addEventListener("abort", () => clearTimeout(this.timer));
       this.paint();
     }
 
     get isOpen() { return this.root.classList.contains("rs-value-open"); }
-
-    later(action, delay) {
-      clearTimeout(this.timer);
-      this.timer = setTimeout(action, delay);
-    }
 
     open(openedBy) {
       if (this.isDisabled) return;
@@ -167,7 +208,7 @@
     }
 
     close() {
-      clearTimeout(this.timer);
+      this.timer.cancel();
       if (!this.isOpen) return;
       document.removeEventListener("pointerdown", this.closeOnOutsidePointer, { capture: true });
       const hadFocus = this.tray.contains(document.activeElement);
@@ -178,7 +219,7 @@
     }
 
     // after a choice: let it show first
-    closeSoon() { this.later(() => this.close(), PipMeterValue.CLOSE_AFTER_CHOICE_MS); }
+    closeSoon() { this.timer.schedule(() => this.close(), PipMeterValue.CLOSE_AFTER_CHOICE_MS); }
 
     focusPip() { this.pips.find((pip) => pip.tabIndex === 0)?.focus(); }
 
@@ -292,6 +333,14 @@
       }, { signal });
       // while editing, a double-click on the label renames the feature
       this.label.addEventListener("dblclick", () => { if (card.state.editing) this.rename(); }, { signal });
+      // a definition's ⓘ and its popover: a click on either is not a click on the row
+      const info = node.querySelector(".rs-info");
+      if (info) {
+        const definition = node.querySelector(".rs-definition");
+        [info, definition].forEach((target) =>
+          target.addEventListener("click", (event) => event.stopPropagation(), { signal }));
+        previewOnHover(info, definition, signal);
+      }
     }
 
     // the reorder group: a row moves only among rows of its own kind
@@ -350,6 +399,16 @@
       this.valueSlot = node.querySelector("[data-binary-value]");
       const toggle = () => card.dispatch({ type: "toggle", id: feature.id });
       node.addEventListener("click", toggle, { signal: card.signal });
+      // a mouse over an unchecked row previews it: its check mark (styles.css) and the score it
+      // would give
+      node.addEventListener("pointerenter", (event) => {
+        if (event.pointerType === "mouse" && !this.counts(card.state)) {
+          card.dispatch({ type: "preview", id: feature.id });
+        }
+      }, { signal: card.signal });
+      node.addEventListener("pointerleave", () => {
+        if (card.state.previewId === feature.id) card.dispatch({ type: "preview", id: null });
+      }, { signal: card.signal });
       this.toggle.addEventListener("keydown", (event) => {
         if (event.target !== this.toggle || (event.key !== " " && event.key !== "Enter")) return;
         event.preventDefault();
@@ -368,7 +427,8 @@
       super.render(state, label);
       const checked = this.counts(state);
       this.toggle.setAttribute("aria-checked", String(checked));
-      if (this.valueSlot) this.valueSlot.textContent = checked ? "1" : "0";
+      const slotText = checked ? "1" : "0";
+      if (this.valueSlot && this.valueSlot.textContent !== slotText) this.valueSlot.textContent = slotText;
     }
   }
 
@@ -410,11 +470,14 @@
   // or JSON-file adapter implements the same two methods.
   const NO_STORAGE = { load: () => null, save: () => {} };
 
+  // the card layouts of binary rows only (model.card_layout): their Score shows from the first paint
+  const BINARY_LAYOUTS = ["points", "checklist"];
+
   // The Model card: hydrates one [data-model-card] root the template rendered in full. Three
   // kinds of data, kept apart:
   //   defaults   the model's feature elements (Python's), never changed
   //   state      this view: each row's input (checked, or the value entered), whether the reader
-  //              has touched the card, editing, collapsed
+  //              has touched the card, the row a mouse previews, editing, collapsed
   //   overrides  the reader's lasting changes (renamed labels, the rows' order), through storage
   // Every change goes through dispatch(action); render() then writes text, classes and ARIA.
   class ModelCard {
@@ -432,13 +495,16 @@
         const feature = this.defaults.get(node.dataset.featureId);
         return new ROW_KINDS[feature.kind](this, node, feature);
       });
-      this.state = { touched: false, editing: false, collapsed: false, inputs: this.initialInputs() };
-      this.totalOutput = root.querySelector(".rs-total-value");
+      this.state = { touched: false, previewId: null, editing: false, collapsed: false,
+        inputs: this.initialInputs() };
+      this.scoreOutput = root.querySelector(".rs-score-value");
       this.strip = root.querySelector(".rs-strip");
       this.stripCells = [...this.strip.querySelectorAll(".rs-strip-cell")];
       this.announcer = root.querySelector("[data-announcer]");
       this.editButton = root.querySelector(".rs-edit");
       this.collapseButton = root.querySelector(".rs-collapse");
+      this.clearButton = root.querySelector(".rs-clear");
+      this.instructionsBox = root.querySelector("[data-instructions-box]");
       this.bindCard();
       if (this.overrides.order) this.showOrder(this.overrides.order);
       this.render();
@@ -455,14 +521,10 @@
         () => this.dispatch({ type: "setEditing", editing: !this.state.editing }), { signal });
       this.collapseButton.addEventListener("click",
         () => this.dispatch({ type: "setCollapsed", collapsed: !this.state.collapsed }), { signal });
-      // the last pointer's type: a tap (touch) shows the definition of the row it focuses, a
-      // mouse click does not (hovering the name does)
-      root.addEventListener("pointerdown", (event) => { root.dataset.pointer = event.pointerType; },
-        { capture: true, signal });
-      // Escape hides an open definition: it blurs the focused row or name
-      document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape" && this.list.contains(document.activeElement)) document.activeElement.blur();
-      }, { signal });
+      this.clearButton.addEventListener("click", () => this.dispatch({ type: "reset" }), { signal });
+      // the instructions box's × dismisses it for this page view
+      this.instructionsBox.querySelector("button").addEventListener("click",
+        () => { this.instructionsBox.hidden = true; }, { signal });
       // the table wraps at the card's width: mark each line's ends whenever its size changes,
       // and once the labels' web font has arrived
       this.stripObserver = new ResizeObserver(() => this.markStripLines());
@@ -484,7 +546,12 @@
           if (state.editing) return;
           state.inputs[action.id] = !state.inputs[action.id];
           state.touched = true;
+          state.previewId = null;  // the row now counts: no preview while still hovered
           break;
+        case "preview":  // a row's id, or null to end the preview: only the Score and strip change
+          state.previewId = action.id;
+          this.renderScore();
+          return;
         case "setValue":
           if (state.editing) break;  // render puts the value back
           state.inputs[action.id] = action.value;
@@ -504,7 +571,8 @@
         case "setCollapsed":
           state.collapsed = action.collapsed;
           break;
-        case "reset":  // back to the untouched card
+        case "reset":  // Clear: back to the untouched card; editing freezes the score
+          if (state.editing) return;
           Object.assign(state, { touched: false, inputs: this.initialInputs() });
           break;
         default:
@@ -515,15 +583,9 @@
       if (action.announce) this.announce(action.announce);
     }
 
-    // The Total, or null while a continuous value is unset (no score to show yet)
+    // the Score of whatever is filled in: an unset value adds nothing
     score() {
-      let total = 0;
-      for (const row of this.rows) {
-        const part = row.contribution(this.state);
-        if (part == null) return null;
-        total += part;
-      }
-      return total;
+      return this.rows.reduce((total, row) => total + (row.contribution(this.state) ?? 0), 0);
     }
 
     // the strip cell of a score: the bin after every edge at or below it; null when that bin
@@ -533,23 +595,11 @@
       return cells[edges.filter((edge) => score >= edge).length] ?? null;
     }
 
-    // writes the card; returns the score shown and its strip cell (null for none)
+    // writes the card; returns the Score and its strip cell (null for none)
     render() {
       const { state, overrides, root } = this;
       this.rows.forEach((row) => row.render(state, overrides.labels[row.feature.id] ?? row.feature.label));
-      // Untouched (before the first click or value): no Total, no cell. Then the Total, or "—"
-      // while a value is unset, and the current cell
-      const score = state.touched ? this.score() : null;
-      this.totalOutput.textContent = !state.touched ? ""
-        : score == null ? this.totalOutput.dataset.missingText
-        : formatNumber(score, this.model.score_bins.score_digits);
-      const cell = score == null ? null : this.cellOf(score);
-      this.stripCells.forEach((node) => {
-        const current = Number(node.dataset.cell) === cell;
-        node.classList.toggle("rs-current", current);
-        if (current) node.setAttribute("aria-current", "true");
-        else node.removeAttribute("aria-current");
-      });
+      const scored = this.renderScore();
       root.classList.toggle("rs-editing", state.editing);
       this.editButton.setAttribute("aria-pressed", String(state.editing));
       root.classList.toggle("rs-collapsed", state.collapsed);
@@ -558,6 +608,34 @@
       this.collapseButton.setAttribute("aria-expanded", String(!state.collapsed));
       this.collapseButton.setAttribute("aria-label", label);
       this.collapseButton.title = label;
+      return scored;
+    }
+
+    // writes the Score, the previewing class and the current strip cell; returns the Score and
+    // its strip cell (null for none)
+    renderScore() {
+      const { state, root } = this;
+      // A card of binary rows alone shows its Score (0 at first) and the current cell from the
+      // first paint. A card with values shows neither until the reader's first click or value
+      // (the Score reads the value boxes' "–"); then the Score of whatever is filled in
+      const total = this.score();
+      const score = state.touched || BINARY_LAYOUTS.includes(this.model.card_layout) ? total : null;
+      const cell = score == null ? null : this.cellOf(score);
+      // a mouse over an unchecked row: the Score and the cell it would give, in the hover's
+      // shading
+      const previewed = state.editing ? null : this.rows.find((row) => row.feature.id === state.previewId);
+      const shown = previewed ? total + previewed.feature.weight : score;
+      const shownCell = previewed ? this.cellOf(shown) : cell;
+      root.classList.toggle("rs-previewing", previewed != null);
+      this.scoreOutput.textContent = shown == null ? this.scoreOutput.dataset.blankText
+        : formatNumber(shown, this.model.score_bins.score_digits);
+      this.scoreOutput.classList.toggle("rs-score-blank", shown == null);
+      this.stripCells.forEach((node) => {
+        const current = Number(node.dataset.cell) === shownCell;
+        node.classList.toggle("rs-current", current);
+        if (current) node.setAttribute("aria-current", "true");
+        else node.removeAttribute("aria-current");
+      });
       return { score, cell };
     }
 
@@ -574,9 +652,9 @@
 
     // the rows in the order of these ids (the saved order); rows it does not name keep theirs
     showOrder(order) {
-      const total = this.list.querySelector(".rs-total");
+      const scoreRow = this.list.querySelector(".rs-score-row");
       const byId = new Map(this.rows.map((row) => [row.feature.id, row]));
-      order.forEach((id) => { if (byId.has(id)) total.before(byId.get(id).node); });
+      order.forEach((id) => { if (byId.has(id)) scoreRow.before(byId.get(id).node); });
       this.syncOrder();
     }
 

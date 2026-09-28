@@ -56,10 +56,11 @@ keeps them from drifting). The browser test is opt-in (`pytest -m browser`): one
 report (each model type, plus `wide_strip` -- a continuous model with a non-binary item) is
 built and saved once, then opened in headless Chromium at 1280 px and 375 px, requiring
 no console or page errors, 2 rendered Plotly charts, one Model card row per feature, a card that
-fits its container (its strip on one line at 1280 px), and a Model card that shows no Total until
-the first click, "—" while a continuous value is unset, and then the Total and highlighted strip
-cell of every value entered (on wide_strip, by the shipped bin edges, including a bin with no
-training rows); screenshots and the HTML go to a tmp_path or --report-dir=DIR
+fits its container (its strip on one line at 1280 px), and a Model card whose Score reads 0 with
+its strip cell highlighted from the first paint on a card of binary rows, "–" and no cell on a
+card with values until the first click or value, then the Score and highlighted strip cell of
+whatever is filled in (on wide_strip, by the shipped bin edges, including a bin with no training
+rows), and that Clear takes back to the first paint; screenshots and the HTML go to a tmp_path or --report-dir=DIR
 (write it with "=": with a space, pytest reads an existing DIR as a test path and misses the
 config).
 """
@@ -155,9 +156,17 @@ def test_risk_score_model_has_features_and_score_range(fitted):
         ("a", 2), ("b", 1), ("c", -1)]
     assert model["features"][0] == {"id": "a", "name": "a", "label": "a", "raw_feature": "a",
                                     "kind": "binary", "weight": 2, "weight_label": "2",
+                                    "sign_label": "+", "digits_label": "2",
                                     "checked": False, "levels": None, "definition": None}
-    assert (model["value_header"], model["weight_header"], model["value_input"]) == (
-        "Points", None, None)
+    assert (model["card_layout"], model["value_header"], model["weight_header"],
+            model["value_input"], model["meter_slots"]) == ("points", "Points", None, None, None)
+    assert model["instruction"] == "Click the features that apply to see the risk."
+    # the points' digit block is as wide as the most digits any point has, its sign aside
+    assert model["points_digits"] == 1
+    wide = make_report(fitted, [0, 1, -12, 1]).data["model"]
+    assert wide["points_digits"] == 2
+    assert [(f["sign_label"], f["digits_label"]) for f in wide["features"]] == [
+        ("+", "1"), ("+", "1"), ("−", "12")]
     assert model["score_range"] == [-1, 3]
     assert model["checklist_m"] is None
 
@@ -175,9 +184,12 @@ def test_non_binary_feature_score_range_spans_points_times_value_range(fitted_wi
     assert [feature["id"] for feature in model["features"]] == ["b", "c", "a"]
     assert model["features"][-1] == {"id": "a", "name": "a", "label": "a", "raw_feature": "a",
                                      "kind": "continuous", "weight": 2, "weight_label": "2",
-                                     "value": None,
+                                     "sign_label": "+", "digits_label": "2", "value": None,
                                      "levels": [1, 2, 3, 4, 5, 6, 7, 8], "definition": None}
-    assert (model["value_header"], model["weight_header"]) == ("Value", "Weight")
+    assert (model["card_layout"], model["points_digits"], model["value_header"],
+            model["weight_header"], model["meter_slots"]) == ("mixed", None, "Value", "Weight", 8)
+    assert model["instruction"] == ("Click the features that apply and enter each value to see "
+                                    "the risk.")
     assert model["score_range"] == [1, 17]
 
 
@@ -193,6 +205,8 @@ def test_continuous_features_share_one_value_input_chosen_by_their_level_counts(
     assert [(feature["id"], feature["kind"]) for feature in model["features"]] == [
         ("c", "binary"), ("b", "continuous"), ("a", "continuous")]
     assert model["value_input"] == value_input
+    # a pip meter opens as wide as the most levels
+    assert model["meter_slots"] == (10 if value_input == "pip_meter" else None)
     # only a pip meter offers levels
     assert [feature["levels"] is not None for feature in model["features"]] == [
         False, value_input == "pip_meter", value_input == "pip_meter"]
@@ -258,19 +272,19 @@ def test_a_discrete_strip_over_max_scores_printed_narrows_its_printed_risks(
                                    "score_digits": 0}
 
 
-@pytest.mark.parametrize("weights, expected_m, check_marks, value_header", [
-    pytest.param(CHECKLIST_WEIGHTS, 2, True, None, id="positive-items"),
-    pytest.param([0, 1, 1, -1], 1, False, "Points", id="with-negative-item"),
-    pytest.param([-3, 1, 1, 0], 4, True, None, id="threshold-out-of-reach"),
+@pytest.mark.parametrize("weights, expected_m, card_layout, value_header", [
+    pytest.param(CHECKLIST_WEIGHTS, 2, "checklist", "Present?", id="positive-items"),
+    pytest.param([0, 1, 1, -1], 1, "points", "Points", id="with-negative-item"),
+    pytest.param([-3, 1, 1, 0], 4, "checklist", "Present?", id="threshold-out-of-reach"),
 ])
 def test_checklist_m_is_smallest_net_count_with_positive_prediction(fitted, weights, expected_m,
-                                                                    check_marks, value_header):
+                                                                    card_layout, value_header):
     model = make_report(fitted, weights).data["model"]
 
     assert model["type"] == "checklist"
     assert model["checklist_m"] == expected_m
-    # a checklist of +1 items marks its checked rows; one with a -1 item shows the points
-    assert (model["check_marks"], model["value_header"]) == (check_marks, value_header)
+    # a checklist of +1 items has a check box per row; one with a -1 item shows the points
+    assert (model["card_layout"], model["value_header"]) == (card_layout, value_header)
     assert (model["score_header"], model["risk_header"]) == ("Score", "Risk")
 
 
@@ -344,7 +358,7 @@ def test_data_is_strict_json(fitted, weights):
     data = make_report(fitted, weights).data
 
     assert json.loads(json.dumps(data, allow_nan=False)) == data
-    assert data["schema_version"] == 3
+    assert data["schema_version"] == 4
 
 
 @pytest.mark.parametrize("invalid, match", [
@@ -664,39 +678,42 @@ def test_report_renders_in_browser_without_errors(chromium, saved_report, width)
         assert (fit["card"], fit["page"]) == (0, 0)
         assert width < 1280 or fit["lines"] == 1
 
-        def assert_total_follows(score):
-            """The Total and the highlighted strip cell are those of ``score``: its bin by the
+        def assert_score_follows(score):
+            """The Score and the highlighted strip cell are those of ``score``: its bin by the
             shipped score edges, whose cell may be None (a continuous bin without training rows:
-            nothing highlighted). None: a value is unset, so "—" and nothing highlighted."""
-            total = page.locator(".rs-total-value").text_content()
+            nothing highlighted). None: an untouched card with values, so "–" and nothing
+            highlighted."""
+            shown = page.locator(".rs-score-value").text_content()
             highlighted = page.locator(".rs-strip-risks .rs-current")
             if score is None:
-                assert (total, highlighted.count()) == ("—", 0)
+                assert (shown, highlighted.count()) == ("–", 0)
                 return
             bins = model["score_bins"]
             cell = bins["cells"][sum(score >= edge for edge in bins["edges"])]
-            assert total == f"{score:.{bins['score_digits']}f}".replace("-", "−")
+            assert shown == f"{score:.{bins['score_digits']}f}".replace("-", "−")
             assert highlighted.count() == (cell is not None)
             assert cell is None or highlighted.get_attribute("data-cell") == str(cell)
 
-        # untouched: no Total and no highlighted cell until the reader's first click or value
-        assert page.locator(".rs-total-value").text_content() == ""
-        assert page.locator(".rs-current").count() == 0
-        # clicking a binary row counts its weight; the Total waits for every continuous value
         binary = [f for f in features if f["kind"] == "binary"]
         continuous = [f for f in features if f["kind"] == "continuous"]
+        untouched = None if continuous else 0
+        # binary rows alone: Score 0 and its cell from the first paint; with values: nothing yet
+        assert_score_follows(untouched)
+        # clicking a binary row counts its weight; the Score adds whatever is filled in
         page.locator(".rs-feature[data-kind=binary]").first.click()
         score = binary[0]["weight"]
-        assert_total_follows(None if continuous else score)
+        assert_score_follows(score)
         # each level of a continuous feature (a digit on its value box) adds weight x level
         for i, feature in enumerate(continuous):
             box = page.locator(".rs-feature[data-kind=continuous] .rs-value-box").nth(i)
             for level in feature["levels"]:
                 box.focus()
                 page.keyboard.press(str(level % 10))
-                last = i == len(continuous) - 1
-                assert_total_follows(score + feature["weight"] * level if last else None)
+                assert_score_follows(score + feature["weight"] * level)
             score += feature["weight"] * feature["levels"][-1]
+        # Clear: back to the first paint
+        page.locator(".rs-clear").click()
+        assert_score_follows(untouched)
 
         # a sample clicked in one plot's legend is hidden in both plots (a single sample has no
         # legend)
