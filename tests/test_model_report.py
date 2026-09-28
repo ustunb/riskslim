@@ -55,10 +55,11 @@ styles.css writes as `--rs-*` tokens (the page and the plots hold the palette in
 keeps them from drifting). The browser test is opt-in (`pytest -m browser`): one page per saved
 report (each model type, plus `wide_strip` -- a continuous model with a non-binary item) is
 built and saved once, then opened in headless Chromium at 1280 px and 375 px, requiring
-no console or page errors, 2 rendered Plotly charts, one model row per item, a score-to-risk
-strip that fits the card at that width on one row, and a Model card whose readout and outlined
-strip cell follow a checked item and every value typed into a non-binary item (on wide_strip, by
-the shipped bin edges, including a bin with no training rows); screenshots and the HTML go to a tmp_path or --report-dir=DIR
+no console or page errors, 2 rendered Plotly charts, one Model card row per feature, a card that
+fits its container (its strip on one line at 1280 px), and a Model card that shows no Total until
+the first click, "—" while a continuous value is unset, and then the Total and highlighted strip
+cell of every value entered (on wide_strip, by the shipped bin edges, including a bin with no
+training rows); screenshots and the HTML go to a tmp_path or --report-dir=DIR
 (write it with "=": with a space, pytest reads an existing DIR as a test path and misses the
 config).
 """
@@ -100,19 +101,18 @@ DATA_BLOCK = re.compile(r'<script type="application/json" id="report-data">(.*?)
 HOSTILE_NAMES = ["a</script><script>alert(1)</script>", "b<!-- c", "c</ScRiPt><script>alert(2)</script>"]
 BREASTCANCER_FILE = Path(__file__).parents[1] / "data" / "breastcancer_data.csv"
 COMPONENTS = ["<h3>Dataset</h3>", "<h3>Training</h3>", "<h3>Summary Statistics</h3>",
-              'class="rs-model-table"', 'data-figure="roc"', 'data-figure="calibration"']
-# How far the score-to-risk strip runs past its own box, past the card holding it, and past the
-# viewport, in px, and how many rows it takes. The three overflows are 0 at every width: the strip
-# neither scrolls sideways nor pushes the page wider than the window, and it is one row.
+              "data-model-card", 'data-figure="roc"', 'data-figure="calibration"']
+# How far the Model card runs past its container and the page past the viewport, in px (0 at
+# every width: the card follows its container and the strip wraps instead), and how many lines
+# the score-to-risk table takes.
 STRIP_FIT = """() => {
-  const strip = document.querySelector(".rs-score-grid");
-  const card = strip.closest(".rs-card");
+  const card = document.querySelector("[data-model-card]");
   const past = (edge, limit) => Math.max(0, Math.ceil(edge - limit));
+  const risks = [...card.querySelectorAll(".rs-strip-risks .rs-strip-cell")];
   return {
-    strip: past(strip.scrollWidth, strip.clientWidth),
-    card: past(strip.getBoundingClientRect().right, card.getBoundingClientRect().right),
+    card: past(card.getBoundingClientRect().right, card.parentElement.getBoundingClientRect().right),
     page: past(document.documentElement.scrollWidth, document.documentElement.clientWidth),
-    rows: new Set([...strip.children].map((cell) => cell.getBoundingClientRect().top)).size,
+    lines: new Set(risks.map((cell) => cell.offsetTop)).size,
   };
 }"""
 
@@ -147,12 +147,17 @@ def report(fitted):
     return make_report(fitted, RISK_SCORE_WEIGHTS)
 
 
-def test_risk_score_model_has_items_and_score_range(fitted):
+def test_risk_score_model_has_features_and_score_range(fitted):
     model = make_report(fitted, RISK_SCORE_WEIGHTS).data["model"]
 
     assert model["type"] == "risk_score"
-    assert [(item["name"], item["points"]) for item in model["items"]] == [
+    assert [(feature["id"], feature["weight"]) for feature in model["features"]] == [
         ("a", 2), ("b", 1), ("c", -1)]
+    assert model["features"][0] == {"id": "a", "name": "a", "label": "a", "raw_feature": "a",
+                                    "kind": "binary", "weight": 2, "weight_label": "2",
+                                    "checked": False, "levels": None, "definition": None}
+    assert (model["value_header"], model["weight_header"], model["value_input"]) == (
+        "Points", None, None)
     assert model["score_range"] == [-1, 3]
     assert model["checklist_m"] is None
 
@@ -166,10 +171,40 @@ def fitted_wide():
 def test_non_binary_feature_score_range_spans_points_times_value_range(fitted_wide):
     model = make_report(fitted_wide, RISK_SCORE_WEIGHTS, test=(None, None)).data["model"]
 
-    assert model["items"][0] == {"name": "a", "points": 2, "binary": False,
-                                 "value_range": [1, 8], "name_label": "a (1–8)",
-                                 "points_label": "2 × value"}
+    # binary features first, then the continuous one, its levels its training values
+    assert [feature["id"] for feature in model["features"]] == ["b", "c", "a"]
+    assert model["features"][-1] == {"id": "a", "name": "a", "label": "a", "raw_feature": "a",
+                                     "kind": "continuous", "weight": 2, "weight_label": "2",
+                                     "value": None,
+                                     "levels": [1, 2, 3, 4, 5, 6, 7, 8], "definition": None}
+    assert (model["value_header"], model["weight_header"]) == ("Value", "Weight")
     assert model["score_range"] == [1, 17]
+
+
+@pytest.mark.parametrize("n_levels, value_input", [(10, "pip_meter"), (11, "number")])
+def test_continuous_features_share_one_value_input_chosen_by_their_level_counts(n_levels,
+                                                                                value_input):
+    # feature a takes n_levels values, feature b 3: every continuous feature of the model gets
+    # the pip meter while none has more than 10 levels, else every one gets a number box
+    X = np.column_stack([np.arange(22) % n_levels, np.arange(22) % 3, np.arange(22) % 2])
+    y = np.where(np.arange(22) % 4 == 0, 1, 0)
+    model = make_report(fit_classifier(X, y), [-2, 0.5, 1, 1], test=(None, None)).data["model"]
+
+    assert [(feature["id"], feature["kind"]) for feature in model["features"]] == [
+        ("c", "binary"), ("b", "continuous"), ("a", "continuous")]
+    assert model["value_input"] == value_input
+    # only a pip meter offers levels
+    assert [feature["levels"] is not None for feature in model["features"]] == [
+        False, value_input == "pip_meter", value_input == "pip_meter"]
+
+
+def test_rule_name_features_keep_their_column_name_as_id(fitted):
+    dataset = BinaryClassificationDataset(X=X_TRAIN, y=Y_TRAIN, X_names=["Age_geq_30", "b", "c"],
+                                          y_name="y", n_folds=())
+    feature = make_report(fitted, RISK_SCORE_WEIGHTS, data=dataset).data["model"]["features"][0]
+
+    assert {key: feature[key] for key in ("id", "name", "label", "raw_feature")} == {
+        "id": "Age_geq_30", "name": "Age_geq_30", "label": "Age ≥\u00a030", "raw_feature": "Age"}
 
 
 @pytest.mark.parametrize("weights, expected", [
@@ -177,9 +212,9 @@ def test_non_binary_feature_score_range_spans_points_times_value_range(fitted_wi
                  [("-1", "4.7%"), ("0", "11.9%"), ("1", "26.9%"), ("2", "50.0%"), ("3", "73.1%")],
                  id="narrow-range-keeps-one-cell-per-score"),
     pytest.param([0, 5, 4, 3], [("0", "50.0%"), ("3", "95.3%"), ("4", "98.2%"),
-                                ("5 to 12", "> 99.0%")],
+                                ("≥ 5", "≥ 99.0%")],
                  id="wide-range-collapses-the-high-tail"),
-    pytest.param([-9, 2, 1, -1], [("-1 to 3", "< 1.0%")],
+    pytest.param([-9, 2, 1, -1], [("≤ 3", "≤ 1.0%")],
                  id="every-risk-below-one-percent-collapses-to-one-cell"),
 ])
 def test_score_to_risk_collapses_the_tails_of_the_strip(fitted, weights, expected):
@@ -196,13 +231,13 @@ def test_score_to_risk_collapses_the_tails_of_the_strip(fitted, weights, expecte
         # reads the risk of the nearest score still printed on its own. The calibration points
         # (the training rows hold every score) and the Model card collapse the same tails
         pytest.param([-5, 5, 4, 2], (0.001, 0.999), 5, 8,
-                     [("0 to 2", "< 26.9%"), ("4", "26.9%"), ("5", "50.0%"), ("6", "73.1%"),
-                      ("7 to 11", "> 73.1%")],
+                     [("≤ 2", "≤ 26.9%"), ("4", "26.9%"), ("5", "50.0%"), ("6", "73.1%"),
+                      ("≥ 7", "≥ 73.1%")],
                      (expit(4 - 5), expit(6 - 5)), ["≤2", "4", "5", "6", "7+"], [4, 5, 6, 7],
                      id="distinct-risks"),
         # scores 0..4 all at risk exactly 1.0: they fold by position, the highest first; the
         # points group by risk, and no risk lies beyond 100%, so none pool
-        pytest.param([40, 2, 1, 1], (0, 1), 2, 5, [("0", "100.0%"), ("1 to 4", "> 100.0%")],
+        pytest.param([40, 2, 1, 1], (0, 1), 2, 5, [("0", "100.0%"), ("≥ 1", "≥ 100.0%")],
                      (0, 1), ["0", "1", "2", "3", "4"], [1], id="saturated-risks"),
     ])
 def test_a_discrete_strip_over_max_scores_printed_narrows_its_printed_risks(
@@ -223,23 +258,20 @@ def test_a_discrete_strip_over_max_scores_printed_narrows_its_printed_risks(
                                    "score_digits": 0}
 
 
-@pytest.mark.parametrize("weights, expected_m, expected_rule", [
-    pytest.param(CHECKLIST_WEIGHTS, 2, "Predict y if at least 2 of 2 items are checked",
-                 id="positive-items"),
-    pytest.param([0, 1, 1, -1], 1,
-                 "Predict y if the number of checked (+) items minus the number of checked "
-                 "(−) items is at least 1", id="with-negative-item"),
-    pytest.param([-3, 1, 1, 0], 4,
-                 "Never predict y (no set of checked items reaches the threshold)",
-                 id="threshold-out-of-reach"),
+@pytest.mark.parametrize("weights, expected_m, check_marks, value_header", [
+    pytest.param(CHECKLIST_WEIGHTS, 2, True, None, id="positive-items"),
+    pytest.param([0, 1, 1, -1], 1, False, "Points", id="with-negative-item"),
+    pytest.param([-3, 1, 1, 0], 4, True, None, id="threshold-out-of-reach"),
 ])
 def test_checklist_m_is_smallest_net_count_with_positive_prediction(fitted, weights, expected_m,
-                                                                    expected_rule):
+                                                                    check_marks, value_header):
     model = make_report(fitted, weights).data["model"]
 
     assert model["type"] == "checklist"
     assert model["checklist_m"] == expected_m
-    assert model["rule"] == expected_rule
+    # a checklist of +1 items marks its checked rows; one with a -1 item shows the points
+    assert (model["check_marks"], model["value_header"]) == (check_marks, value_header)
+    assert (model["score_header"], model["risk_header"]) == ("Score", "Risk")
 
 
 @pytest.mark.parametrize("wide, model_type", [(False, "risk_score"), (True, None)],
@@ -312,7 +344,7 @@ def test_data_is_strict_json(fitted, weights):
     data = make_report(fitted, weights).data
 
     assert json.loads(json.dumps(data, allow_nan=False)) == data
-    assert data["schema_version"] == 2
+    assert data["schema_version"] == 3
 
 
 @pytest.mark.parametrize("invalid, match", [
@@ -396,7 +428,7 @@ def test_report_of_a_classifier_fit_on_a_dataset_holds_every_component():
     assert shared == {"d": "10", "d_raw": "9"}
     for component in COMPONENTS:
         assert component in page
-    assert data["model"]["items"]
+    assert data["model"]["features"]
     for block in ("dataset", "performance"):
         assert data[block]["columns"] == ["", *data["samples"]]
         assert data[block]["rows"]  # the rows themselves are pinned by the summary-blocks test
@@ -430,7 +462,7 @@ def test_settings_choose_the_cards_the_samples_and_where_the_tails_collapse(fitt
                                                                    SAMPLE_COLORS["training"]]
     # scores 2 and 3 are above 45%: one strip cell, and one point labelled by its lowest score
     assert [(cell["score"], cell["risk"]) for cell in data["model"]["score_to_risk"][-2:]] == [
-        ("1", "26.9%"), ("2 to 3", "> 45.0%")]
+        ("1", "26.9%"), ("≥ 2", "≥ 45.0%")]
     assert train["text"] == ["-1", "0", "1", "2+"]
 
 
@@ -444,10 +476,10 @@ def test_save_and_notebook_display_carry_the_same_html(report, tmp_path):
 
 
 @pytest.mark.parametrize("key, coordinates, legend_names", [
-    ("roc", ("fpr", "tpr"), ["Training<br>(n = 8 p = 50.0%)<br>AUC = 0.844",
-                             "Test<br>(n = 4 p = 50.0%)<br>AUC = 1.000"]),
-    ("calibration", ("predicted", "observed"), ["Training<br>(n = 8 p = 50.0%)<br>ECE = 32.7%",
-                                                "Test<br>(n = 4 p = 50.0%)<br>ECE = 23.4%"]),
+    ("roc", ("fpr", "tpr"), ["Training<br>AUC = 0.844",
+                             "Test<br>AUC = 1.000"]),
+    ("calibration", ("predicted", "observed"), ["Training<br>ECE = 32.7%",
+                                                "Test<br>ECE = 23.4%"]),
 ])
 def test_figure_plots_each_sample_section_and_names_its_trace_for_the_legend(report, key,
                                                                             coordinates,
@@ -515,7 +547,7 @@ def test_a_continuous_model_bins_its_rows_by_predicted_risk(fitted_wide):
     # 12 risk bins (max_scores_printed); the strip keeps the three holding training rows, each
     # labelled by its rows' scores and reading their mean predicted risk
     assert [(cell["score"], cell["risk"]) for cell in model["score_to_risk"]] == [
-        ("2.5", "62.2%"), ("4", "88.1%"), ("5.5 to 15.0", "99.5%")]
+        ("2.5", "62.2%"), ("4", "88.1%"), ("≥ 5.5", "99.5%")]
     # the Model card's lookup: each bin's score edge and strip cell, None where no row falls
     assert model["score_bins"]["cells"] == [None] * 7 + [0, None, None, 1, 2]
     assert model["score_bins"]["edges"] == pytest.approx(logit(np.arange(1, 12) / 12) + 2)
@@ -608,7 +640,7 @@ def test_report_renders_in_browser_without_errors(chromium, saved_report, width)
     (block,) = DATA_BLOCK.findall(saved_report.read_text(encoding="utf-8"))
     data = json.loads(block)
     model = data["model"]
-    items = model["items"]
+    features = model["features"]
     page = chromium.new_page(viewport={"width": width, "height": 900})
     errors = []
     page.on("console", lambda message: message.type == "error" and errors.append(message.text))
@@ -625,44 +657,46 @@ def test_report_renders_in_browser_without_errors(chromium, saved_report, width)
                         full_page=True)
 
         assert errors == []
-        assert page.locator(".rs-model-table .rs-item-row").count() == len(items)
+        assert page.locator(".rs-feature").count() == len(features)
         assert page.locator(".js-plotly-plot").count() == 2
-        # the strip fits the card at this width instead of running off the side of it, on one row
+        # the card fits its container at this width; the strip is one line on a wide page
         fit = page.evaluate(STRIP_FIT)
-        assert (fit["strip"], fit["card"], fit["page"]) == (0, 0, 0)
-        assert fit["rows"] == 1
+        assert (fit["card"], fit["page"]) == (0, 0)
+        assert width < 1280 or fit["lines"] == 1
 
-        def assert_readout_follows(score):
-            """The readout and the outlined strip cell are those of ``score``: its bin by the
+        def assert_total_follows(score):
+            """The Total and the highlighted strip cell are those of ``score``: its bin by the
             shipped score edges, whose cell may be None (a continuous bin without training rows:
-            risk "—", nothing outlined)."""
+            nothing highlighted). None: a value is unset, so "—" and nothing highlighted."""
+            total = page.locator(".rs-total-value").text_content()
+            highlighted = page.locator(".rs-strip-risks .rs-current")
+            if score is None:
+                assert (total, highlighted.count()) == ("—", 0)
+                return
             bins = model["score_bins"]
             cell = bins["cells"][sum(score >= edge for edge in bins["edges"])]
-            label = f"{score:.{bins['score_digits']}f}"
-            assert page.locator("#rs-score").text_content() == label
-            assert page.locator("#rs-risk").text_content() == (
-                "—" if cell is None else model["score_to_risk"][cell]["risk"])
-            outlined = page.locator(".rs-current")
-            assert outlined.count() == (cell is not None)
-            assert cell is None or outlined.get_attribute("data-cell") == str(cell)
+            assert total == f"{score:.{bins['score_digits']}f}".replace("-", "−")
+            assert highlighted.count() == (cell is not None)
+            assert cell is None or highlighted.get_attribute("data-cell") == str(cell)
 
-        # every box starts unchecked and every number at its item's smallest value
-        score = sum(item["points"] * item["value_range"][0] for item in items if not item["binary"])
-        assert_readout_follows(score)
-        # checking an item adds its points to the score
-        checkbox = page.locator(".rs-model-table input[type=checkbox]").first
-        checkbox.check()
-        score += float(checkbox.get_attribute("data-points"))
-        assert_readout_follows(score)
-
-        # typing each value of a non-binary item (integers here) adds points x (value - smallest)
-        for box in page.locator(".rs-model-table input[type=number]").all():
-            points, low, high = (float(box.get_attribute(name))
-                                 for name in ("data-points", "min", "max"))
-            for value in range(int(low), int(high) + 1):
-                box.fill(str(value))
-                assert_readout_follows(score + points * (value - low))
-            score += points * (high - low)
+        # untouched: no Total and no highlighted cell until the reader's first click or value
+        assert page.locator(".rs-total-value").text_content() == ""
+        assert page.locator(".rs-current").count() == 0
+        # clicking a binary row counts its weight; the Total waits for every continuous value
+        binary = [f for f in features if f["kind"] == "binary"]
+        continuous = [f for f in features if f["kind"] == "continuous"]
+        page.locator(".rs-feature[data-kind=binary]").first.click()
+        score = binary[0]["weight"]
+        assert_total_follows(None if continuous else score)
+        # each level of a continuous feature (a digit on its value box) adds weight x level
+        for i, feature in enumerate(continuous):
+            box = page.locator(".rs-feature[data-kind=continuous] .rs-value-box").nth(i)
+            for level in feature["levels"]:
+                box.focus()
+                page.keyboard.press(str(level % 10))
+                last = i == len(continuous) - 1
+                assert_total_follows(score + feature["weight"] * level if last else None)
+            score += feature["weight"] * feature["levels"][-1]
 
         # a sample clicked in one plot's legend is hidden in both plots (a single sample has no
         # legend)

@@ -7,18 +7,21 @@
 {#- Pinned CDN versions: change them here only. #}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.min.css" integrity="sha384-L1dWfspMTHU/ApYnFiMz2QID/PlP1xCW9visvBdbEkOLkSSWsP6ZJWhPw6apiXxU" crossorigin="anonymous">
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-basic-dist-min@4.1.1/plotly-basic.min.js" integrity="sha384-N2HZsG+IG/3J8CwhGGYz/kmzZ0sprpPWwjhor9ZI4lxuf47i9DXK2/NDGxMaJiEb" crossorigin="anonymous"></script>
+{#- the Model card's label face (--rs-font-caption); Google Fonts serves no fixed file to hash #}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400&display=swap">
 <style>
 {{ styles }}
 </style>
 </head>
 <body>
 {#- The page structure: fixed bands, top to bottom, whatever the order of components (which only
-    picks the ones shown): the dataset, training and performance (Summary Statistics) blocks,
-    one under another (no cards), then the Model card, then the ROC and calibration plots side by side. Jinja writes
-    every table here; report.js adds up the Model card from its inputs, wraps the strip when it
-    does not fit on one row, draws the figures into their [data-figure] boxes and fits each to
-    its width, hides a calibration label another covers, and mirrors a legend change onto the
-    other plot. Dict keys that share a name with a dict method (items, values) are read with [],
+    picks the ones shown): the dataset and training blocks, one under another (no cards), then
+    the Model card, then the performance block (Summary Statistics), then the ROC and
+    calibration plots side by side. Jinja writes every table and the whole Model card here; report.js runs the Model
+    card, draws the figures into their [data-figure] boxes and fits each to its width, hides a
+    calibration label another covers, and mirrors a legend change onto the other plot. Dict keys that share a name with a dict method (items, values) are read with [],
     which Jinja does not resolve to the method. #}
 <main class="container" id="report">
 <header class="rs-head"><h2>{{ title }}</h2></header>
@@ -43,7 +46,7 @@
     with a value per sample, or one value across them all, set in the first sample's column #}
 {%- macro sample_table(name, block) %}
 {%- set samples = block.columns[1:] %}
-<table style="--rs-value-columns: {{ samples | length }}">
+<table>
   {{ block_columns(samples | length) }}
   <thead>
     <tr>
@@ -66,7 +69,7 @@
   </tbody>
 </table>
 {%- endmacro %}
-{%- if "dataset" in components or "training" in components or "performance" in components %}
+{%- if "dataset" in components or "training" in components %}
 <div class="rs-summary">
 {%- if "dataset" in components %}
 <section class="rs-block">
@@ -78,7 +81,7 @@
 <section class="rs-block">
 <h3>Training</h3>
 {#- one value per row, in the column of the other blocks' first sample #}
-<table style="--rs-value-columns: 1">
+<table>
   {{ block_columns(1) }}
   <tbody>
     {%- for row in training.rows %}
@@ -91,71 +94,149 @@
 </table>
 </section>
 {%- endif %}
+</div>
+{%- endif %}
+{%- if "model" in components %}
+{#- The Model card, in a size container of its own: its layout follows the width it is given,
+    not the window's. report.js hydrates it (every [data-model-card]): it toggles rows, reads the
+    value inputs, writes the Total, marks the current strip cell, and runs editing and
+    collapsing; it changes text, classes and ARIA only, never builds markup. Ids are the card's
+    (rs-model-...); a feature's DOM ids go by position, its data-feature-id by its column name. #}
+{%- set grip %}<svg viewBox="0 0 12 16" aria-hidden="true">
+  {%- for y in [4, 8, 12] %}{% for x in [3, 9] %}<circle cx="{{ x }}" cy="{{ y }}" r="1.4"/>{% endfor %}{% endfor -%}
+</svg>{% endset %}
+<div class="rs-model-card-container">
+<article class="rs-model-card" id="rs-model" data-model-card
+         data-score-message="{{ model.score_header }} {score}, {{ model.risk_header }} {risk}"
+         data-move-message="Moved {label} to position {position} of {count}">
+<header>
+  <h3>Model</h3>
+  <div class="rs-card-tools">
+    <button type="button" class="rs-tool rs-edit" aria-pressed="false" aria-label="Edit"
+            aria-describedby="rs-model-edit-tip">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M11.3 1.9a1.5 1.5 0 0 1 2.1 0l.7.7a1.5 1.5 0 0 1 0 2.1l-8.2 8.2-3.3.8.8-3.3zM10.2 4.1l1.7 1.7 1.1-1.1-1.7-1.7z"/></svg>
+    </button>
+    <button type="button" class="rs-tool rs-collapse" aria-expanded="true" aria-controls="rs-model-body"
+            aria-label="Collapse" title="Collapse" data-collapse-label="Collapse" data-expand-label="Expand">
+      <svg class="rs-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 10l4.5-4.5 4.5 4.5"/></svg>
+    </button>
+    <span class="rs-tool-tip" role="tooltip" id="rs-model-edit-tip">Edit — reorder and rename the model's features</span>
+  </div>
+</header>
+<div class="rs-model-body" id="rs-model-body">
+  {#- the score function: the feature rows, their columns and the Total, a box of its own. One
+      grid for every row (handle | name | value | weight), each row a subgrid of it #}
+  <div class="rs-score-function">
+  <ol class="rs-features"{% if model.value_input %} data-value-input="{{ model.value_input }}"{% endif %}
+      {%- if model.weight_header %} data-weight-column{% endif %}>
+    {%- if model.value_header or model.weight_header %}
+    <li class="rs-col-head" aria-hidden="true">
+      <span class="rs-feature-name"></span>
+      <span class="rs-column-value rs-caption">
+        {%- if model.value_input %}<span class="rs-value-slot">{{ model.value_header }}</span>
+        {%- else %}{{ model.value_header }}{% endif -%}
+      </span>
+      {%- if model.weight_header %}
+      <span class="rs-column-weight rs-caption">{{ model.weight_header }}</span>
+      {%- endif %}
+    </li>
+    {%- endif %}
+    {%- for feature in model.features %}
+    {%- set dom_id = "rs-model-feature-" ~ loop.index0 %}
+    {%- set definition_id = dom_id ~ "-definition" if feature.definition else none %}
+    {%- set name_cell %}
+      <span class="rs-feature-name"><span class="rs-feature-label" id="{{ dom_id }}-label"
+        {%- if feature.kind == "continuous" and definition_id %} tabindex="0" aria-describedby="{{ definition_id }}"{% endif -%}
+        >{{ feature.label }}</span>
+        {%- if definition_id %}<span class="rs-definition" role="tooltip" id="{{ definition_id }}">{{ feature.definition }}</span>{% endif -%}
+      </span>
+    {%- endset %}
+    {%- set weight_cell %}
+      {%- if model.weight_header %}
+      <span class="rs-column-weight rs-model-number">{{ feature.weight_label }}</span>
+      {%- endif %}
+    {%- endset %}
+    <li class="rs-feature" data-kind="{{ feature.kind }}" data-feature-id="{{ feature.id }}">
+      {#- the drag handle, a sibling of the row's controls; named "Move <label>" #}
+      <button type="button" class="rs-handle" tabindex="-1" aria-labelledby="rs-model-move {{ dom_id }}-label">{{ grip | safe }}</button>
+      {%- if feature.kind == "binary" %}
+      {#- the row's toggle: no checkbox drawn; a click anywhere on the row, or Space/Enter here #}
+      <div class="rs-toggle" role="checkbox" tabindex="0" aria-checked="false" aria-labelledby="{{ dom_id }}-label"
+           {%- if definition_id %} aria-describedby="{{ definition_id }}"{% endif %}>
+        {{- name_cell }}
+        <span class="rs-column-value rs-model-number{% if model.check_marks %} rs-checkmark{% endif %}">
+          {%- if model.value_input %}<span class="rs-value-slot" data-binary-value>0</span>
+          {%- elif model.check_marks %}✓
+          {%- else %}{{ feature.weight_label }}{% endif -%}
+        </span>
+        {{- weight_cell }}
+      </div>
+      {%- else %}
+      {{- name_cell }}
+      <span class="rs-column-value">
+        {%- if model.value_input == "pip_meter" %}
+        {#- a value box ("–" until set) and its pip meter, which opens to its left (pip 1 nearest
+            the box) and whose space stays reserved while closed #}
+        <span class="rs-value-compact">
+          <span class="rs-value-tray">
+            <span class="rs-value-meter" role="radiogroup" aria-labelledby="{{ dom_id }}-label" dir="rtl">
+              {%- for level in feature.levels %}
+              <button type="button" class="rs-value-pip" role="radio" aria-checked="false"
+                      tabindex="{{ 0 if loop.first else -1 }}">{{ level }}</button>
+              {%- endfor %}
+            </span>
+          </span>
+          <span class="rs-value-box rs-model-number rs-value-unset" role="spinbutton" tabindex="0"
+                aria-labelledby="{{ dom_id }}-label" aria-valuemin="{{ feature.levels[0] }}"
+                aria-valuemax="{{ feature.levels[-1] }}" aria-valuetext="not set" aria-keyshortcuts="Enter"
+                data-unset-text="–" data-unset-valuetext="not set">–</span>
+        </span>
+        {%- else %}
+        <input type="number" step="any" class="rs-value-number rs-model-number" placeholder="–"
+               aria-labelledby="{{ dom_id }}-label">
+        {%- endif %}
+      </span>
+      {{- weight_cell }}
+      {%- endif %}
+    </li>
+    {%- endfor %}
+    {#- the Total: its number under the last column, "Total" just before it; empty until the
+        reader's first click or value #}
+    <li class="rs-total">
+      <span class="rs-total-label rs-caption">{{ model.total_header }}</span>
+      <output class="rs-total-value rs-model-number{% if model.value_input and not model.weight_header %} rs-value-slot{% endif %}"
+              data-missing-text="—"></output>
+    </li>
+  </ol>
+  </div>
+  {#- the score-to-risk table: Score over Risk, one fixed-width column per strip cell. It wraps
+      onto as many lines as the card needs; each line repeats the row labels (aria-hidden) #}
+  <table class="rs-strip" role="table">
+    <tbody role="rowgroup">
+      {%- for row, header in [("score", model.score_header), ("risk", model.risk_header)] %}
+      <tr class="rs-strip-{{ row }}s" role="row">
+        <th scope="row" role="rowheader" class="rs-visually-hidden">{{ header }}</th>
+        {%- for cell in model.score_to_risk %}
+        <td role="cell" class="rs-strip-cell rs-model-number" data-cell="{{ loop.index0 }}">
+          <span class="rs-strip-line-head rs-caption" aria-hidden="true">{{ header }}</span>{{ cell[row] }}</td>
+        {%- endfor %}
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+</div>
+<span id="rs-model-move" hidden>Move</span>
+<p class="rs-visually-hidden" aria-live="polite" data-announcer></p>
+</article>
+</div>
+{% endif %}
 {%- if "performance" in components %}
+<div class="rs-summary">
 <section class="rs-block">
 <h3>Summary Statistics</h3>
 {{- sample_table("performance", performance) }}
 </section>
-{%- endif %}
 </div>
-{%- endif %}
-{%- if "model" in components %}
-<article class="rs-card rs-model-card">
-<header><h3>Model</h3></header>
-  <table class="rs-model-table">
-    {%- if model.points_header %}
-    <thead>
-      <tr>
-        <th></th>
-        <th></th>
-        <th class="rs-points">{{ model.points_header }}</th>
-      </tr>
-    </thead>
-    {%- endif %}
-    <tbody>
-      {%- for item in model["items"] %}
-      <tr class="rs-item-row">
-        <td class="rs-box">
-          {%- if item.binary -%}
-          <input type="checkbox" id="rs-item-{{ loop.index0 }}" data-points="{{ item.points }}">
-          {%- else -%}
-          <input type="number" id="rs-item-{{ loop.index0 }}" min="{{ item.value_range[0] }}"
-                 max="{{ item.value_range[1] }}" value="{{ item.value_range[0] }}" step="any"
-                 data-points="{{ item.points }}">
-          {%- endif -%}
-        </td>
-        {#- the name labels its input: clicking it ticks the box, or focuses the number #}
-        <td class="rs-name"><label for="rs-item-{{ loop.index0 }}">{{ item.name_label }}</label></td>
-        {%- if model.points_header %}
-        <td class="rs-points">{{ item.points_label }}</td>
-        {%- endif %}
-      </tr>
-      {%- else %}
-      <tr><td colspan="3">No items: every row gets the same score.</td></tr>
-      {%- endfor %}
-    </tbody>
-  </table>
-  {#- report.js fills in the two outputs, from the inputs above #}
-  <p class="rs-readout" aria-live="polite">
-    <span class="rs-score-label">{{ model.score_header }}</span> <output id="rs-score"></output>
-    · <span class="rs-score-label">{{ model.risk_header }}</span> <output id="rs-risk"></output>
-  </p>
-  {%- if model.rule %}
-  <p class="rs-rule">{{ model.rule }}</p>
-  {%- endif %}
-  <div class="rs-score-grid">
-    <div class="rs-score-cell rs-score-head">
-      <span class="rs-score-label">{{ model.score_header }}</span>
-      <span class="rs-score-value">{{ model.risk_header }}</span>
-    </div>
-    {%- for cell in model.score_to_risk %}
-    <div class="rs-score-cell{% if cell.positive %} rs-positive{% endif %}" data-cell="{{ loop.index0 }}">
-      <span class="rs-score-label">{{ cell.score }}</span>
-      <span class="rs-score-value">{{ cell.risk }}</span>
-    </div>
-    {%- endfor %}
-  </div>
-</article>
 {%- endif %}
 {%- if "roc" in components or "calibration" in components %}
 <div class="rs-plots">

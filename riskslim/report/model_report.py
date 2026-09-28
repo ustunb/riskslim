@@ -51,9 +51,9 @@ Conventions
   ``low_risk_threshold``..``high_risk_threshold``
   (1%..99% by default); a discrete strip that would still print more than
   ``max_scores_printed`` cells narrows it for this model to the risks of the lowest and highest
-  scores it still prints on their own (``collapse_scores``). The tails read ``< {min}`` and
-  ``> {max}`` of the printed range; the strip, the calibration points and the Model card all
-  use it, and ``data["settings"]`` records it (``min_printed_risk``, ``max_printed_risk``) next
+  scores it still prints on their own (``collapse_scores``). The tails read ``≤ {min}`` and
+  ``≥ {max}`` of the printed range, and their scores ``≤ {last}`` and ``≥ {first}``; the strip,
+  the calibration points and the Model card all use it, and ``data["settings"]`` records it (``min_printed_risk``, ``max_printed_risk``) next
   to the requested thresholds; both None for a continuous model.
   Display only: every reported number is computed per score bin, before any collapsing.
 - **Calibration error:** ``|predicted - observed|`` per score bin (``local_error``), and the
@@ -68,6 +68,7 @@ import html
 import json
 import math
 import numbers
+import re
 import warnings
 from dataclasses import asdict, dataclass, replace
 from functools import cache
@@ -88,8 +89,11 @@ from ..defaults import INTERCEPT_NAME
 from ..loss_functions.log_loss import log_loss_value_from_scores
 from ..utils import data_fingerprint, is_integer
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 MODEL_TYPES = {"risk_score": "Risk Score", "checklist": "Checklist"}
+# a continuous feature's value is picked on a pip meter when every continuous feature of the
+# model has at most this many levels; otherwise every one is typed into a number box
+MAX_PIP_METER_LEVELS = 10
 
 # the page's components: the three summary blocks (the dataset, how the model was trained, its
 # performance), the Model card, then the ROC and calibration cards
@@ -181,12 +185,15 @@ OPERATOR_SYMBOLS = {"geq": "≥", "leq": "≤", "lt": "<", "gt": ">", "eq": "=",
                     "is": "=", "isnot": "≠", "in": "∈", "notin": "∉"}
 
 ASSETS = files(__package__) / "assets"
-# Inlined after the markup, which Jinja writes in full. The script adds up the Model card (the
-# score of its inputs, the risk of that score's strip cell, the cell outlined), wraps the strip
-# when it does not fit on one row, draws the figures and fits each to its width (the narrow
-# overrides), hides a calibration label another covers, and mirrors a legend change onto the
-# other plot.
+# Inlined after the markup, which Jinja writes in full. The script runs the Model card (rows
+# toggled and values entered, their Total and its strip cell, editing, collapsing), draws the
+# figures and fits each to its width (the narrow overrides), hides a calibration label another
+# covers, and mirrors a legend change onto the other plot.
 SCRIPTS = ("report.js",)
+# an operator in a feature's label ("UniformityOfCellSize ≥ 5"): the label may break before it,
+# never between it and its value (report.js keeps a renamed label the same way)
+CONDITION_OPERATOR = re.compile(
+    f" ({'|'.join(map(re.escape, dict.fromkeys(OPERATOR_SYMBOLS.values())))}) ")
 
 # ---------------------------------------------------------------------------
 # Visuals: the plots are styled with Plotly's own mechanism, the template below, which both
@@ -285,7 +292,7 @@ class ReportSettings:
         (``"cv"`` without ``fit_cv``) raises when the report is built. The Model card reads its
         value ranges from the training rows either way.
     low_risk_threshold, high_risk_threshold : float, optional
-        Risks below the first (above the second) collapse into one ``< x%`` (``> y%``) cell of
+        Risks below the first (above the second) collapse into one ``≤ x%`` (``≥ y%``) cell of
         the score-to-risk strip and one calibration point. The R's defaults, 0.01 and 0.99.
         A continuous model, whose strip has no tails, ignores them.
     max_scores_printed : int, optional
@@ -387,6 +394,14 @@ class ModelReport:
         left to None is resolved afresh."""
         settings = replace(self.settings, **changes)
         return type(self)(self.model, **self._inputs, **asdict(settings))
+
+    def __setstate__(self, state):
+        """Unpickle; a report pickled under an older data schema is rebuilt from its inputs once
+        (no solver runs), since the page reads the current schema only."""
+        self.__dict__.update(state)
+        if self.data.get("schema_version") != SCHEMA_VERSION:
+            rebuilt = self.with_settings()
+            self.data, self.components = rebuilt.data, rebuilt.components
 
     @property
     def html(self):
@@ -650,12 +665,12 @@ def checked_model_type(model_type, points, binary, names):
     if model_type not in MODEL_TYPES:
         raise ValueError(f"model_type must be one of {tuple(MODEL_TYPES)}; got {model_type!r}")
     if model_type == "checklist":
-        # a checklist counts checked boxes: an item with other values breaks M and the rule
+        # a checklist counts checked boxes: an item with other values breaks M
         non_binary = [str(names[j]) for j, is_item_binary in binary.items() if not is_item_binary]
         if non_binary:
             raise ValueError(f"model_type='checklist' needs binary items (0 or 1 on the training "
                              f"data); {non_binary} take other values")
-        # and counts each box once: other points break M and the rule the same way
+        # and counts each box once: other points break M the same way
         non_unit = [str(names[j]) for j in binary if abs(points[j]) != 1]
         if non_unit:
             raise ValueError(f"model_type='checklist' needs coefficients of +1 or -1; "
@@ -790,60 +805,81 @@ def checked_finite_scores(scored):
                              f"for some row")
 
 
-def display_name(name):
-    """``feature symbol value`` for a rule name ``feature_op_value``; else the name as it is."""
+def label_and_raw_feature(name):
+    """``(label, raw_feature)`` of a column name: for a rule name ``feature_op_value``, the label
+    ``feature symbol value`` and the raw feature ``feature``; else the name as both. The label
+    keeps each condition on one line (``condition_on_one_line``)."""
     try:
         feature, operator, value = RuleName.parse(name)
     except ValueError:
-        return name
-    return f"{feature} {OPERATOR_SYMBOLS[operator]} {value}"
+        feature, label = name, name
+    else:
+        label = f"{feature} {OPERATOR_SYMBOLS[operator]} {value}"
+    return condition_on_one_line(label), feature
 
 
-def point_label(points, binary, model_type):
-    """The item's cell under the Points header: a checklist marks +/-, a risk score counts."""
-    if model_type == "checklist":
-        return "+" if points > 0 else "−"
-    return str(points) if binary else f"{points} × value"
+def model_feature(name, weight, values, is_binary, value_input):
+    """The Model card's feature element: ``{id, name, label, raw_feature, kind, weight,
+    weight_label, checked | value, levels, definition}``.
+
+    ``id`` and ``name`` are the model's column name (unique among the columns, so a saved rename
+    or order survives a change in position); ``label`` is what the card prints
+    (``label_and_raw_feature``) and ``weight_label`` the weight as it prints, with a true minus
+    sign; ``values`` are the item's sorted distinct training values, the ``levels`` a pip meter
+    offers (None for a binary feature and when ``value_input`` is not ``"pip_meter"``). A binary
+    feature starts unchecked, a continuous one with no value; ``definition`` (shown on hover) is
+    None until one is supplied.
+    """
+    label, raw_feature = label_and_raw_feature(name)
+    weight = number(weight)
+    feature = {"id": name, "name": name, "label": label, "raw_feature": raw_feature,
+               "kind": "binary" if is_binary else "continuous", "weight": weight,
+               "weight_label": str(weight).replace("-", "−")}
+    if is_binary:
+        feature.update(checked=False, levels=None)
+    else:
+        feature.update(value=None, levels=([number(value) for value in values]
+                                           if value_input == "pip_meter" else None))
+    feature["definition"] = None
+    return feature
 
 
 def build_model_component(evaluation, settings):
-    """The Model card, a table with no figure: items, score type, score range, score-to-risk
-    strip and (for checklists) M and the rule.
+    """The Model card, a table with no figure: its features, score type, score range and
+    score-to-risk strip.
 
-    ``points_header`` is the item table's points column, and None when there is no such column
-    (a checklist whose items are all ``+1``: every box counts the same, so a column of ``+`` says
-    nothing). ``score_header`` and ``risk_header`` label the score-to-risk strip. The Model card
-    sums the points times the values of its items, finds the strip cell of that score and reads
-    the risk that cell shows. ``n_scores_printed`` counts the strip's cells.
+    ``features`` holds one feature element per nonzero item (``model_feature``), binary ones
+    first, each kind by most points first as ``print_model`` orders them. The card's column
+    headers are display strings: ``value_header`` (``"Points"``; ``"Value"`` when a feature is
+    continuous; None for a checklist of +1 items, whose rows show a check mark instead,
+    ``check_marks``), ``weight_header`` (``"Weight"`` beside a Value column unless every weight
+    is 1, else None), ``total_header``, and ``score_header`` and ``risk_header``, which label the
+    score-to-risk strip for every model type. ``value_input`` says how a continuous feature's
+    value is entered, one way for the whole card: ``"pip_meter"`` when every continuous feature
+    has at most ``MAX_PIP_METER_LEVELS`` levels, else ``"number"`` (a box taking any number);
+    None without continuous features. ``n_scores_printed`` counts the strip's cells.
 
     The ``Evaluation``'s strip (``discrete_strip``, or ``binned_strip`` off the training
     sample's calibration table) gives the cells, ``n_scores`` and the Model card's lookup
-    ``score_bins`` (``edges``, ``cells``); ``score_digits`` adds the decimals the readout prints
+    ``score_bins`` (``edges``, ``cells``); ``score_digits`` adds the decimals the Total prints
     a score with: 0 when every score the card reaches is an integer, else 1. ``settings``, a
     ``ReportSettings``, changes nothing here: the strip is built by ``evaluate``.
     """
     points, intercept, model_type = evaluation.points, evaluation.intercept, evaluation.model_type
-    items = []
-    value_sets = []
-    for j, values in evaluation.item_values.items():
-        is_item_binary = evaluation.binary[j]
-        vmin, vmax = float(values.min()), float(values.max())
-        p = float(points[j])
-        value_sets.append(p * values)
-        name, p, vmin, vmax = (display_name(str(evaluation.item_names[j])), number(p),
-                               number(vmin), number(vmax))
-        items.append({"name": name, "points": p, "binary": is_item_binary,
-                      "value_range": [vmin, vmax],
-                      "name_label": name if is_item_binary else f"{name} ({vmin}–{vmax})",
-                      "points_label": point_label(p, is_item_binary, model_type)})
-    # order items as print_model does: most positive points first
-    items.sort(key=lambda item: -item["points"])
+    continuous_values = [values for j, values in evaluation.item_values.items()
+                         if not evaluation.binary[j]]
+    value_input = None
+    if continuous_values:
+        value_input = ("pip_meter" if all(len(values) <= MAX_PIP_METER_LEVELS
+                                          for values in continuous_values) else "number")
+    features = [model_feature(str(evaluation.item_names[j]), points[j], values,
+                              evaluation.binary[j], value_input)
+                for j, values in evaluation.item_values.items()]
+    features.sort(key=lambda feature: (feature["kind"] == "continuous", -feature["weight"]))
+    value_sets = [points[j] * values for j, values in evaluation.item_values.items()]
 
-    lo = sum(float(v.min()) for v in value_sets)
-    hi = sum(float(v.max()) for v in value_sets)
-    checklist = model_type == "checklist"
-    m = evaluation.checklist_m
-    shows_points = not checklist or any(item["points"] < 0 for item in items)
+    continuous = [feature for feature in features if feature["kind"] == "continuous"]
+    check_marks = model_type == "checklist" and all(f["weight"] == 1 for f in features)
     cells = evaluation.strip_cells
     model = {
         "type": model_type,
@@ -851,32 +887,24 @@ def build_model_component(evaluation, settings):
         "n_scores": evaluation.n_scores,
         "n_scores_printed": len(cells),
         "intercept": number(intercept),
-        "items": items,
-        "points_header": "Points" if shows_points else None,
-        "score_header": "NET CHECKED" if checklist else "SCORE",
-        "risk_header": "RISK",
-        "score_range": [number(lo), number(hi)],
+        "features": features,
+        "value_input": value_input,
+        # the operators a label keeps on one line with their values: report.js keeps a renamed
+        # label the same way
+        "condition_operators": list(dict.fromkeys(OPERATOR_SYMBOLS.values())),
+        "check_marks": check_marks,
+        "value_header": "Value" if continuous else None if check_marks else "Points",
+        "weight_header": ("Weight" if continuous and any(f["weight"] != 1 for f in features)
+                          else None),
+        "total_header": "Total",
+        "score_header": "Score",
+        "risk_header": "Risk",
+        "score_range": [number(sum(float(v.min()) for v in value_sets)),
+                        number(sum(float(v.max()) for v in value_sets))],
         "score_to_risk": cells,
         "score_bins": {**evaluation.score_bins, "score_digits": score_decimals(*value_sets)},
-        "checklist_m": None,
-        "rule": None,
+        "checklist_m": evaluation.checklist_m,
     }
-    if checklist:
-        n_items = len(items)
-        n_negative = sum(item["points"] < 0 for item in items)
-        k_min, k_max = -n_negative, n_items - n_negative
-        outcome_name = evaluation.outcome_name
-        if m <= k_min:
-            rule = f"Predict {outcome_name} for every row (the intercept alone is positive)"
-        elif m > k_max:
-            rule = f"Never predict {outcome_name} (no set of checked items reaches the threshold)"
-        elif n_negative == 0:
-            rule = f"Predict {outcome_name} if at least {m} of {n_items} items are checked"
-        else:
-            rule = (f"Predict {outcome_name} if the number of checked (+) items minus the number "
-                    f"of checked (−) items is at least {m}")
-        model["checklist_m"] = m
-        model["rule"] = rule
     return ReportComponent(model)
 
 
@@ -921,7 +949,7 @@ def collapse_scores(risks, low_risk, high_risk, max_scores_printed):
     The range starts at the thresholds, ``low_risk``..``high_risk``. While the strip prints too
     many cells, the most extreme score printed on its own (risk nearest 0 or 1) folds into its
     tail, one at a time: the range then starts (ends) at the risk of the next score in, the
-    lowest (highest) still printed on its own, so a tail's label (``< 26.9%``) is the risk of the
+    lowest (highest) still printed on its own, so a tail's label (``≤ 26.9%``) is the risk of the
     score beside it. Scores fold by position, not by risk, so scores sharing a risk (saturated at
     0 or 1) fold one at a time too. A tail that ends up holding a single score is printed as its
     own cell, as at the thresholds, and keeps its threshold. When every score folds
@@ -994,18 +1022,19 @@ def score_to_risk_cells(scores, risks, groups, checklist_m, printed_risks):
     """The score-to-risk strip: ``{"score", "risk", "positive"}`` per cell, one per group of
     ``groups`` (``tail_groups``).
 
-    ``scores`` is ascending, and ``risks`` holds their risks. A collapsed cell is labelled with
-    the score range it covers (``"0 to 1"``) and with the end of ``printed_risks``,
-    ``(min_printed_risk, max_printed_risk)``, it lies beyond (``"< 1.0%"``), as in the R's
-    ``get.risk.xtable``; every other cell shows its own score and risk.
+    ``scores`` is ascending, and ``risks`` holds their risks. A collapsed cell reads as a
+    one-sided bound on both rows: the score it runs to or from (``"≤ 1"``, ``"≥ 10"``) and the end
+    of ``printed_risks``, ``(min_printed_risk, max_printed_risk)``, it lies beyond
+    (``"≤ 1.0%"``, ``"≥ 99.0%"``); every other cell shows its own score and risk.
     """
     min_printed_risk, max_printed_risk = printed_risks
-    return [{"score": score_label(scores[first], scores[last]),
-             "risk": (percent(risks[first]) if side is None
-                      else f"< {percent(min_printed_risk)}" if side == "low"
-                      else f"> {percent(max_printed_risk)}"),
-             "positive": checklist_m is not None and scores[first] >= checklist_m}
-            for first, last, side in groups]
+    cells = []
+    for first, last, side in groups:
+        risk = {"low": f"≤ {percent(min_printed_risk)}",
+                "high": f"≥ {percent(max_printed_risk)}"}.get(side, percent(risks[first]))
+        cells.append({"score": score_label(scores[first], scores[last], side), "risk": risk,
+                      "positive": checklist_m is not None and scores[first] >= checklist_m})
+    return cells
 
 
 def risk_bins(n_bins):
@@ -1029,9 +1058,15 @@ def binned_strip(training_table, edges, intercept):
     is ``positive``. The Model card's ``edges`` are ``logit(risk edge) - intercept`` (risk is
     monotone in the score), and ``cells`` holds each bin's strip cell, None for an empty bin.
     """
-    cells = [{"score": score_label(low, high), "risk": percent(risk), "positive": False}
-             for low, high, risk in zip(training_table["score_min"], training_table["score_max"],
-                                        training_table["predicted"])]
+    # the first and last bins hold every score below (above) the edge next to them: a range
+    # there reads as a one-sided bound, "≤ 14" / "≥ 20", like a discrete strip's tails
+    last = len(training_table["predicted"]) - 1
+    sides = {0: "low", last: "high"} if last > 0 else {}
+    cells = [{"score": score_label(low, high, sides.get(i)), "risk": percent(risk),
+              "positive": False}
+             for i, (low, high, risk) in enumerate(zip(
+                 training_table["score_min"], training_table["score_max"],
+                 training_table["predicted"]))]
     cell_by_bin = [None] * (len(edges) - 1)
     for cell, bin_index in enumerate(training_table["key"]):
         cell_by_bin[bin_index] = cell
@@ -1046,12 +1081,18 @@ def score_decimals(*values):
     return 0 if all(is_integer(v) for v in values) else 1
 
 
-def score_label(low, high):
-    """``"3"`` for one score, ``"3.2 to 5.1"`` for a range, with ``score_decimals``."""
+def score_label(low, high, side=None):
+    """``"3"`` for one score, ``"3.2 to 5.1"`` for a range, with ``score_decimals``. At a strip
+    end (``side``), a range reads as a one-sided bound: ``"≤ 5.1"`` at the ``"low"`` end and
+    ``"≥ 3.2"`` at the ``"high"`` end."""
     digits = score_decimals(low, high)
     low, high = low + 0.0, high + 0.0  # -0.0 prints as 0
     if low == high:
         return f"{low:.{digits}f}"
+    if side == "low":
+        return f"≤ {high:.{digits}f}"
+    if side == "high":
+        return f"≥ {low:.{digits}f}"
     return f"{low:.{digits}f} to {high:.{digits}f}"
 
 
@@ -1281,15 +1322,15 @@ def build_calibration_component(evaluation, settings):
 
 
 def sample_labels(sample_numbers, metric):
-    """``{sample: "Training<br>(n = 8,815 p = 12.4%)<br>AUC = 0.950"}``: a legend entry.
+    """``{sample: "Training<br>AUC = 0.950"}``: a legend entry, the sample's name over the
+    figure's own headline statistic (``metric``: ``auc`` or ``ece``). No n or outcome rate: the
+    Dataset block shows those.
 
-    Every number is a string of the ``Evaluation``'s ``sample_numbers``, the one the dataset
-    and performance blocks show, so the legend and a block cannot round the same number two
-    ways. ``metric`` names the figure's own headline statistic (``auc`` or ``ece``).
+    The number is a string of the ``Evaluation``'s ``sample_numbers``, the one the performance
+    block shows, so the legend and the block cannot round it two ways.
     """
     label = {"auc": "AUC", "ece": "ECE"}[metric]
-    return {name: f"{name}<br>(n = {numbers['n']} p = {numbers['outcome_rate']})<br>"
-                  f"{label} = {numbers[metric]}"
+    return {name: f"{name}<br>{label} = {numbers[metric]}"
             for name, numbers in sample_numbers.items()}
 
 
@@ -1452,10 +1493,16 @@ def attribute_strings(spec, prefix=""):
 def load_assets():
     """The compiled page template and the CSS/JS it inlines, read once per process."""
     template = (ASSETS / "template.html").read_text(encoding="utf-8")
-    shell = Environment(autoescape=True).from_string(template)
+    environment = Environment(autoescape=True)
+    shell = environment.from_string(template)
     styles = Markup((ASSETS / "styles.css").read_text(encoding="utf-8"))
     scripts = Markup("\n".join((ASSETS / name).read_text(encoding="utf-8") for name in SCRIPTS))
     return shell, styles, scripts
+
+
+def condition_on_one_line(label):
+    """``label`` with a no-break space after each operator (``CONDITION_OPERATOR``)."""
+    return CONDITION_OPERATOR.sub(" \\1\u00a0", label)
 
 
 def json_for_script(data):

@@ -9,12 +9,76 @@
   --rs-training: #000000;  /* the training sample (black) */
   --rs-test: #D2B48C;  /* the test sample (tan) */
   --rs-cv: #BEBEBE;  /* the CV sample (grey); Validation, with no colour of its own, uses --rs-muted */
-  --rs-highlight: #FFE699;
   --rs-stripe: #F2F2F2;
   --rs-bg: #FFFFFF;
   --pico-font-family: "Helvetica Neue", Helvetica, Arial, "Nimbus Sans", "Liberation Sans", sans-serif;
   --pico-font-size: 15px;
   --pico-color: var(--rs-ink);
+
+  /* The Model card's look, every value in one place: a final styling round swaps a scheme here.
+     Its palette is ink and one small gray scale; borders are --rs-grid, the page is --rs-bg. */
+  --rs-gray: #5C6773;        /* muted text: rows not counted, the card title, other scores */
+  --rs-gray-label: #616E7C;  /* guidance labels (.rs-caption) */
+  --rs-gray-faint: #BAC1C8;  /* icons and handles only, never text */
+  --rs-fill: #F4F6F8;        /* every neutral shading: the header bar, a hovered row */
+  /* the counted state (a row that counts, the current score/risk cell, a chosen pip): pale blue */
+  --rs-count-bg: hsl(207 46% 94%);
+  --rs-count-strong: hsl(207 46% 86%);  /* the chosen pip and a set value box */
+  --rs-count-edge: hsl(207 32% 60%);
+  /* elevation: the card's one soft shadow; the boxes inside it have borders only */
+  --rs-shadow-card: 0 1px 3px rgb(31 41 51 / 0.06), 0 0 6px rgb(31 41 51 / 0.05);
+  --rs-shadow-pressed: inset 0 1px 2px rgb(31 41 51 / 0.15);  /* the Edit button while editing */
+  --rs-shadow-dragging: 0 2px 8px rgb(31 41 51 / 0.18);      /* a row being dragged */
+  --rs-shadow-renaming: 0 0 0 1px var(--rs-gray-faint), 0 0 0 3px rgb(31 41 51 / 0.08);
+  /* faces: every number in IBM Plex Mono; guidance labels in the page face, one size up */
+  --rs-font-data: "IBM Plex Mono", Menlo, Consolas, monospace;
+  --rs-font-caption: var(--pico-font-family);
+  --rs-font-caption-style: normal;
+  /* a compact type scale */
+  --rs-text-caption: 11px;       /* the value box's and pips' numbers */
+  --rs-leading-caption: 16px;
+  --rs-text-label: 13px;         /* guidance labels: Points, Weight, Value, Total, Score, Risk */
+  --rs-text-small: 12px;         /* the strip on a narrow card */
+  --rs-text-body: 13px;          /* feature names, every number, the card title */
+  --rs-leading-body: 18px;
+  /* a spacing scale: a 4px step, with 2px and 6px half-steps */
+  --rs-space-0-5: 2px;
+  --rs-space-1: 4px;
+  --rs-space-1-5: 6px;
+  --rs-space-2: 8px;
+  --rs-space-3: 12px;
+  --rs-space-4: 16px;
+  --rs-space-6: 24px;
+  --rs-column-gap: calc(3 * var(--rs-space-2));  /* between a feature's name and its numbers */
+  --rs-radius-small: 4px;        /* buttons, tooltips, entries */
+  --rs-radius: 6px;              /* the score function and score/risk boxes */
+  --rs-radius-pip: 3px;
+  --rs-tip-width: 288px;
+  /* rows of the score function */
+  --rs-row: 24px;                /* a feature row */
+  --rs-row-short: 20px;          /* the header and Total rows */
+  /* the score-to-risk table: every cell one fixed width, wide enough for "≥ 99.0%" (a wider
+     one when a label needs it, report.js), the same on every card; the Score/Risk labels'
+     column; a cell's height (its borders apart); the gap between wrapped lines */
+  --rs-strip-cell-width: 61px;
+  --rs-strip-cell-width-wide: 92px;
+  --rs-strip-cell-width-narrow: 53px;       /* on a narrow card, in small type */
+  --rs-strip-cell-width-narrow-wide: 80px;
+  --rs-strip-head-width: 36px;
+  --rs-strip-cell-height: 22px;
+  --rs-strip-line-gap: 4px;
+  /* value inputs (rs-value-*): the value box and pips, their gap, their colours */
+  --rs-value-box-width: 24px;
+  --rs-value-pip-width: 24px;
+  --rs-value-pip-height: 22px;
+  --rs-value-pip-gap: 2px;
+  --rs-value-gap: 6px;            /* between the value box and its meter */
+  --rs-value-touch-size: 28px;    /* the box and pips on a narrow card */
+  --rs-value-number-width: 56px;  /* the number box */
+  --rs-value-on-bg: var(--rs-count-bg);
+  --rs-value-on-edge: var(--rs-count-edge);
+  --rs-value-current-bg: var(--rs-count-strong);
+  --rs-value-current-edge: var(--rs-count-edge);
 }
 /* Pico's primary colour (its blue) is the ink: the checked checkbox and the ring round a focused
    field are drawn in it. Pico sets these on :root:not([data-theme=dark]), which outranks :root
@@ -41,9 +105,6 @@
   gap: 1rem;
   margin-bottom: 1rem;
 }
-/* the model card is as wide as its table and an 11-cell strip need, from the page's left edge; on
-   a narrower page it shrinks with it, and a strip that no longer fits wraps (report.js) */
-.rs-model-card { width: 100%; max-width: 40rem; }
 /* the plots two to a row, filling the page; a plot alone keeps its half, under the model card,
    rather than growing into a page-wide square. On a phone each takes the row. */
 .rs-plots {
@@ -74,62 +135,6 @@
 .rs-card table { margin-bottom: 0.75rem; font-size: 0.9rem; }
 .rs-card th, .rs-card td { padding: 0.3rem 0.5rem; }
 
-/* model table: the points column on the right, like the paper */
-.rs-model-table th, .rs-model-table td { border-bottom: 1px solid var(--rs-grid); }
-.rs-model-table th { color: var(--rs-muted); font-size: 0.75rem; }
-.rs-model-table .rs-name { overflow-wrap: anywhere; }
-.rs-model-table .rs-points { text-align: right; white-space: nowrap; }
-.rs-model-table td.rs-points { font-weight: 600; }
-/* the item's input: a checkbox, or a number for an item that takes a range of values. Pico sizes
-   form fields for a form; in a table cell they sit on the row's line instead */
-.rs-model-table .rs-box { width: 2em; line-height: 1; }
-.rs-box input { margin: 0; }
-/* the item's name is the label of its input; Pico sets a label on its own line, below a gap */
-.rs-name label { display: inline; margin: 0; cursor: pointer; }
-.rs-box input[type="number"] { width: 4.5em; height: auto; padding: 0.1rem 0.3rem; font-size: inherit; }
-.rs-readout { margin-bottom: 0.75rem; font-variant-numeric: tabular-nums; }
-.rs-readout output { font-weight: 600; }
-.rs-rule { font-weight: 600; margin-bottom: 0.75rem; }
-
-/* score-to-risk strip: one row, as in the R -- a header column (SCORE over RISK), then one column
-   per cell, each as wide as its text and all stretched to fill the card. The strip is two grid rows
-   that every cell shares (subgrid), so the scores line up across and so do the risks. */
-.rs-score-grid {
-  display: grid;
-  grid-auto-flow: column;
-  grid-template-rows: auto auto;
-  grid-template-columns: max-content;  /* the header; the cells take the auto columns */
-  border-top: 1px solid var(--rs-grid); border-left: 1px solid var(--rs-grid);
-}
-/* each cell draws its own right and bottom rule */
-.rs-score-cell {
-  display: grid; grid-row: span 2; grid-template-rows: subgrid;
-  padding: 0.2rem 0.25rem; text-align: center; white-space: nowrap;
-  background: var(--rs-bg); font-variant-numeric: tabular-nums;
-  border-right: 1px solid var(--rs-grid); border-bottom: 1px solid var(--rs-grid);
-}
-.rs-score-label { font-size: 0.75rem; color: var(--rs-muted); }
-.rs-score-value { font-size: 0.8rem; }
-.rs-score-head { text-align: left; }
-.rs-score-head .rs-score-value { font-size: 0.75rem; color: var(--rs-muted); }
-.rs-score-cell.rs-positive { background: var(--rs-highlight); }
-/* on a phone, tighter type and padding keep more strips on one row */
-@media (max-width: 480px) {
-  .rs-score-cell { padding: 0.15rem 0.1rem; }
-  .rs-score-label, .rs-score-head .rs-score-value { font-size: 0.7rem; }
-  .rs-score-value { font-size: 0.75rem; }
-}
-/* a strip too long for one row at this width (report.js sets rs-wrapped): it wraps, as many cells
-   to a row as fit, until the page settles how a long strip reads on a phone */
-.rs-score-grid.rs-wrapped {
-  grid-auto-flow: row; grid-template-rows: none;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 5em), 1fr));
-}
-.rs-wrapped .rs-score-cell { grid-row: auto; grid-template-rows: auto auto; white-space: normal; }
-/* the cell holding the Model card's current score; an outline, so it leaves the background's
-   meaning (predicted positive) alone and does not change the cell's size */
-.rs-score-cell.rs-current { outline: 2px solid var(--rs-ink); outline-offset: -2px; }
-
 /* the summary band: the dataset, training and performance blocks, one under another from the
    page's left edge. Not cards: a small plain heading over a plain table. Every block has the same
    fixed columns (label, notation, then one per value; template.html's block_columns), so the
@@ -143,11 +148,8 @@
   margin: 0 0 0.25rem; font-size: 0.8rem; font-weight: 600; letter-spacing: 0.04em;
   text-transform: uppercase; color: var(--rs-axis-text);
 }
-.rs-block table {
-  table-layout: fixed; margin: 0; font-size: 0.9rem;
-  width: calc(var(--rs-label-width) + var(--rs-notation-width)
-              + var(--rs-value-columns) * var(--rs-value-width));
-}
+/* as wide as its columns: each <col> sets its column's width (template.html's block_columns) */
+.rs-block table { width: max-content; margin: 0; font-size: 0.9rem; }
 .rs-col-label { width: var(--rs-label-width); }
 .rs-col-notation { width: var(--rs-notation-width); }
 .rs-col-value { width: var(--rs-value-width); }
@@ -172,7 +174,9 @@
 .rs-label { position: relative; }
 .rs-term:focus { outline: none; }
 .rs-term:focus-visible { outline: 2px solid var(--rs-ink); outline-offset: 2px; border-radius: 2px; }
-.rs-tip {
+/* every tooltip: this rule, the Model card's (a feature's definition, the Edit button's tip)
+   too, which change only their size and placement */
+.rs-tip, .rs-model-card :is(.rs-definition, .rs-tool-tip) {
   position: absolute; top: 100%; left: 0; z-index: 10;
   width: max-content; max-width: min(18rem, calc(100vw - 2rem));
   padding: 0.4rem 0.6rem; border-radius: 4px;
@@ -191,3 +195,348 @@
 
 /* square panel, like the R's coord_fixed(): the figure is as tall as it is wide */
 .rs-plot { width: 100%; aspect-ratio: 1 / 1; }
+
+/* ======================================================================================
+   The Model card. Every rule is scoped under .rs-model-card and every size, colour, face and
+   shadow is a token of :root. It sits in a size container of its own, so it follows the width
+   it is given (a narrow column of a wide page included), never the window's.
+   ====================================================================================== */
+.rs-model-card-container { container: rs-model / inline-size; min-width: 0; }
+/* as wide as its contents (usually the score-to-risk table), up to the width available */
+.rs-model-card {
+  width: fit-content; max-width: 100%; min-width: 0; margin: 0;
+  padding: var(--rs-space-3) var(--rs-space-4);
+  background: var(--rs-bg); border: 1px solid var(--rs-grid); box-shadow: var(--rs-shadow-card);
+  font-size: var(--rs-text-body); color: var(--rs-ink);
+  /* the widths in use: report.js marks a table whose labels need the wide cell */
+  --rs-strip-cell: var(--rs-strip-cell-width);
+}
+.rs-model-card:has(.rs-strip-wide) { --rs-strip-cell: var(--rs-strip-cell-width-wide); }
+.rs-model-card > header {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--rs-space-2);
+  margin: calc(-1 * var(--rs-space-3)) calc(-1 * var(--rs-space-4)) var(--rs-space-4);
+  padding: var(--rs-space-1) var(--rs-space-1) var(--rs-space-1) var(--rs-space-4);
+  background: var(--rs-fill); border-bottom: 1px solid var(--rs-grid);
+}
+/* the title is only the component's label: muted, not bold ink */
+.rs-model-card h3 {
+  margin: 0; font-size: var(--rs-text-body); font-weight: 400; line-height: var(--rs-leading-body);
+  color: var(--rs-gray);
+}
+
+/* the header's tools, plain icon buttons: edit (a pencil) and collapse (a chevron). A few shades
+   darker than the header's fill, darker under the pointer or focus; editing shows as an ink
+   pencil in a faint inset */
+.rs-model-card .rs-card-tools { position: relative; display: flex; gap: var(--rs-space-1); }
+.rs-model-card .rs-tool {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: var(--rs-space-6); height: var(--rs-space-6); margin: 0; padding: 0;
+  background: transparent; border: 0; border-radius: var(--rs-radius-small); box-shadow: none;
+  color: var(--rs-gray-faint); cursor: pointer; transition: none;  /* Pico fades a button's colours */
+}
+.rs-model-card .rs-tool:is(:hover, :focus-visible) { color: var(--rs-gray); background: transparent; }
+.rs-model-card .rs-tool:focus { box-shadow: none; }
+.rs-model-card .rs-tool:focus-visible { outline: 2px solid var(--rs-gray-faint); outline-offset: -2px; }
+.rs-model-card .rs-tool svg { width: var(--rs-space-4); height: var(--rs-space-4); fill: currentColor; }
+.rs-model-card .rs-edit[aria-pressed="true"] {
+  color: var(--rs-ink); background: var(--rs-fill); box-shadow: var(--rs-shadow-pressed);
+}
+.rs-model-card .rs-tool .rs-chevron {
+  fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+  transition: transform 0.15s;
+}
+.rs-model-card .rs-collapse[aria-expanded="false"] .rs-chevron { transform: rotate(180deg); }
+
+/* collapsed: only the header bar. The body stays laid out but takes no height, so the card
+   keeps the width its contents give it, whatever the container's width */
+.rs-model-card.rs-collapsed { padding-bottom: 0; }
+.rs-model-card.rs-collapsed > header { margin-bottom: 0; border-bottom: 0; }
+.rs-model-card.rs-collapsed .rs-model-body { height: 0; overflow: hidden; visibility: hidden; }
+
+/* the body: the score function over the score-to-risk table. Two columns, the table's
+   Score/Risk labels, then its cells; the score function sits in the cells' column, centred
+   over them, and the table (labels and cells) is centred across both, which centres its cells
+   in that column too */
+.rs-model-card .rs-model-body {
+  display: grid; grid-template-columns: var(--rs-strip-head-width) auto; row-gap: var(--rs-space-6);
+}
+
+/* ---- the score function: the feature rows and their Total, a shape of its own ---------------- */
+/* as wide as its content, at least 60% of the cells' column (its columns then stretch) */
+.rs-model-card .rs-score-function {
+  --rs-edge: var(--rs-space-2);  /* pads a row's outer cells */
+  grid-column: 2; justify-self: center;
+  width: max-content; min-width: 60%; max-width: 100%;
+  overflow: hidden;
+  background: var(--rs-bg); border: 1px solid var(--rs-grid); border-radius: var(--rs-radius);
+}
+/* one grid for every row, so the columns line up: handle | name | third | last. The value (or
+   points) sits in the last column, or in the third beside a Weight column. A row is a subgrid
+   of it; a binary row's toggle is a subgrid again, of every column but the handle's */
+.rs-model-card .rs-features {
+  display: grid; margin: 0; padding: 0; list-style: none;
+  grid-template-columns: [handle] auto [name] minmax(min-content, 1fr) [third] auto [last] auto [end];
+  font-size: var(--rs-text-body); line-height: var(--rs-leading-body);
+}
+.rs-model-card .rs-features > li {
+  display: grid; grid-column: handle / end; grid-template-columns: subgrid; align-items: center;
+  margin: 0; list-style: none; min-height: var(--rs-row);
+}
+.rs-model-card .rs-toggle {
+  display: grid; grid-column: name / end; grid-template-columns: subgrid; align-items: center;
+  align-self: stretch;
+}
+.rs-model-card :is(.rs-features > li > :not(.rs-toggle), .rs-toggle > *) { padding-block: var(--rs-space-0-5); }
+.rs-model-card :is(.rs-features > li > :last-child, .rs-toggle > :last-child) { padding-right: var(--rs-edge); }
+/* a rule under the header row and one above the Total, none between feature rows. The header
+   and Total rows share one height, shorter than a feature row, and are painted, so their fill
+   covers the box's rounded corners */
+.rs-model-card .rs-features > :is(.rs-col-head, .rs-total) {
+  height: var(--rs-row-short); min-height: 0; background: var(--rs-bg);
+}
+.rs-model-card .rs-features > :is(.rs-col-head, .rs-total) > * { padding-block: 0; }
+.rs-model-card .rs-col-head { border-bottom: 1px solid var(--rs-grid); }
+.rs-model-card .rs-total { border-top: 1px solid var(--rs-grid); }
+
+/* every structural label (Points, Weight, Value, Total, Score, Risk): guidance, not data. A face
+   of its own, regular weight, light gray */
+.rs-model-card .rs-caption {
+  font-family: var(--rs-font-caption); font-style: var(--rs-font-caption-style); font-weight: 400;
+  font-size: var(--rs-text-label); line-height: var(--rs-leading-caption); color: var(--rs-gray-label);
+}
+/* every number (points, weights, values, the Total, the table's scores and risks): one face, size,
+   weight and figures; only colour marks state */
+.rs-model-card .rs-model-number {
+  font-family: var(--rs-font-data); font-size: var(--rs-text-body); font-weight: 400;
+  line-height: var(--rs-leading-body); font-variant-numeric: tabular-nums;
+}
+/* a name breaks at its spaces (before an operator, template.html), never inside a word */
+.rs-model-card .rs-feature-name { grid-column: name; min-width: 0; overflow-wrap: normal; position: relative; }
+.rs-model-card .rs-column-value, .rs-model-card .rs-column-weight {
+  grid-column: last; text-align: center; white-space: nowrap; padding-left: var(--rs-column-gap);
+}
+.rs-model-card [data-weight-column] .rs-column-value { grid-column: third; }
+.rs-model-card .rs-total-label { grid-column: third; text-align: right; white-space: nowrap; }
+.rs-model-card .rs-total-value { grid-column: last; text-align: center; padding-left: var(--rs-space-2); }
+
+/* every row kind: gray until it counts (checked; a value entered), then ink on the counted tint.
+   A binary row is its own toggle: no checkbox; role="checkbox" on .rs-toggle carries the state */
+.rs-model-card .rs-feature { color: var(--rs-gray); user-select: none; -webkit-tap-highlight-color: transparent; }
+.rs-model-card .rs-feature[data-kind="binary"] { cursor: pointer; }
+.rs-model-card .rs-feature.rs-active { color: var(--rs-ink); background: var(--rs-count-bg); }
+.rs-model-card .rs-feature:not(.rs-active):hover { background: var(--rs-fill); }
+.rs-model-card .rs-toggle:focus { outline: none; }
+.rs-model-card .rs-feature:has(.rs-toggle:focus-visible) { outline: 2px solid var(--rs-ink); outline-offset: -2px; }
+/* a checklist's mark shows only on a checked row; its column keeps its width */
+.rs-model-card .rs-toggle[aria-checked="false"] .rs-checkmark { visibility: hidden; }
+
+/* editing: the rows do not toggle and the values do not change (the score is frozen); a
+   double-click renames a feature */
+.rs-model-card.rs-editing .rs-feature { cursor: default; }
+.rs-model-card.rs-editing .rs-feature:not(.rs-active):hover { background: none; }
+.rs-model-card.rs-editing .rs-feature-label { cursor: text; }
+.rs-model-card .rs-feature-label[contenteditable] {
+  user-select: text; -webkit-user-select: text; cursor: text; outline: none;
+  border-radius: var(--rs-radius-small); box-shadow: var(--rs-shadow-renaming);
+  background: var(--rs-bg); color: var(--rs-ink);
+}
+
+/* ---- the drag handle: its column always reserved, so Edit moves nothing; shown while editing -- */
+.rs-model-card .rs-handle {
+  grid-column: handle; display: flex; align-self: stretch; align-items: center;
+  width: auto; margin: 0; padding: 0 var(--rs-space-1) 0 var(--rs-edge);
+  background: none; border: 0; border-radius: 0; box-shadow: none; transition: none;  /* Pico's button */
+  color: var(--rs-gray-faint); cursor: inherit; visibility: hidden;
+}
+.rs-model-card.rs-editing .rs-handle { visibility: visible; cursor: grab; touch-action: none; }
+.rs-model-card .rs-handle svg { display: block; width: var(--rs-space-3); height: var(--rs-space-4); fill: currentColor; }
+.rs-model-card.rs-editing .rs-handle:is(:hover, :active) { color: var(--rs-ink); background: none; }
+.rs-model-card .rs-handle:focus { outline: none; box-shadow: none; }
+.rs-model-card .rs-handle:focus-visible { outline: 2px solid var(--rs-ink); outline-offset: -1px; border-radius: 2px; }
+.rs-model-card .rs-feature.rs-dragging {
+  position: relative; z-index: 2; background: var(--rs-bg); box-shadow: var(--rs-shadow-dragging);
+}
+.rs-model-card .rs-feature.rs-dragging .rs-handle { cursor: grabbing; color: var(--rs-ink); }
+body.rs-drag-active, body.rs-drag-active * { cursor: grabbing !important; }
+
+/* ---- tooltips: a feature's definition under its name, the Edit button's under the button ---- */
+/* the page's tooltip (.rs-tip), a little tighter and never under the pointer */
+.rs-model-card :is(.rs-definition, .rs-tool-tip) {
+  max-width: min(var(--rs-tip-width), calc(100vw - 2 * var(--rs-space-4)));
+  padding: var(--rs-space-1) var(--rs-space-2); pointer-events: none;
+}
+.rs-model-card .rs-tool-tip { top: calc(100% + var(--rs-space-1)); left: auto; right: 0; white-space: nowrap; max-width: none; }
+/* desktop: hovering the name; keyboard: focusing the row (or a continuous row's name); a finger:
+   tapping the row, which also focuses it (report.js marks the card data-pointer="touch") */
+@media (hover: hover) { .rs-model-card .rs-feature-label:hover + .rs-definition { visibility: visible; opacity: 1; } }
+.rs-model-card :is(.rs-toggle:focus-visible .rs-definition, .rs-feature-label:focus-visible + .rs-definition,
+  .rs-edit:hover ~ .rs-tool-tip, .rs-edit:focus-visible ~ .rs-tool-tip),
+.rs-model-card[data-pointer="touch"] :is(.rs-toggle:focus .rs-definition, .rs-feature-label:focus + .rs-definition) {
+  visibility: visible; opacity: 1;
+}
+.rs-model-card :is(.rs-dragging, .rs-renaming) .rs-definition { visibility: hidden !important; }
+
+/* ---- value inputs (rs-value-*) ------------------------------------------------------------ */
+/* the value column: the box at its right end, its meter's space reserved to the left of it, so
+   an open meter moves and covers nothing. A plain number, the header and the Total sit in a
+   box-wide slot there, centred on the boxes */
+.rs-model-card [data-value-input] .rs-column-value { display: flex; justify-content: flex-end; }
+.rs-model-card [data-value-input="number"] { --rs-value-box-width: var(--rs-value-number-width); }
+.rs-model-card .rs-value-slot { display: flex; justify-content: center; width: var(--rs-value-box-width); white-space: nowrap; }
+/* no Weight column: the Total's label and number both in the value column, the number in its slot */
+.rs-model-card [data-value-input]:not([data-weight-column]) .rs-total-value {
+  grid-row: 1; justify-self: end; padding-left: 0;
+}
+.rs-model-card [data-value-input]:not([data-weight-column]) .rs-total-label {
+  grid-column: last; grid-row: 1; justify-self: end; margin-right: calc(var(--rs-value-box-width) + var(--rs-space-2));
+}
+/* the compact value: the box (the number, or "–" unset) and the pip meter it opens */
+.rs-model-card .rs-value-compact {
+  display: inline-flex; align-items: center; justify-content: flex-end; vertical-align: middle; line-height: 1;
+}
+.rs-model-card .rs-value-box {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: var(--rs-value-box-width); height: var(--rs-value-pip-height);
+  /* a set value's look; unset below */
+  border: 1px solid var(--rs-value-current-edge); border-radius: var(--rs-radius-pip);
+  background: var(--rs-value-current-bg); font-size: var(--rs-text-caption); line-height: 1;
+  color: var(--rs-ink); cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
+}
+.rs-model-card .rs-value-box.rs-value-unset { background: var(--rs-bg); border-color: var(--rs-grid); color: var(--rs-gray-label); }
+.rs-model-card .rs-value-box.rs-value-previewing {  /* the level under the pointer, not chosen yet */
+  background: var(--rs-value-on-bg); border-color: var(--rs-value-on-edge); border-style: dashed; color: var(--rs-ink);
+}
+.rs-model-card .rs-value-box:hover, .rs-model-card .rs-value-open .rs-value-box { border-color: var(--rs-value-current-edge); }
+.rs-model-card .rs-value-box:focus { outline: none; }
+.rs-model-card .rs-value-box:focus-visible { outline: 2px solid var(--rs-ink); outline-offset: 1px; }
+/* the tray (the meter and the gap to the box) stays in the layout while closed; its gap is part
+   of it, so the pointer crossing from the box to the meter never leaves the component */
+.rs-model-card .rs-value-tray {
+  flex: none; display: flex; padding-right: var(--rs-value-gap);
+  visibility: hidden; opacity: 0; clip-path: inset(-3px 0 -3px 100%);
+  transition: clip-path .16s ease-out, opacity .1s, visibility 0s linear .16s;
+}
+.rs-model-card .rs-value-open .rs-value-tray {
+  visibility: visible; opacity: 1; clip-path: inset(-3px -3px -3px -3px);
+  transition: clip-path .16s ease-out, opacity .1s;
+}
+@media (prefers-reduced-motion: reduce) { .rs-model-card .rs-value-tray { transition: none; } }
+/* the pip meter: numbered pips, one size, filled up to the value; hovering previews the fill */
+.rs-model-card .rs-value-meter { display: flex; gap: var(--rs-value-pip-gap); min-width: 0; }
+.rs-model-card .rs-value-pip {
+  flex: 0 1 var(--rs-value-pip-width); min-width: 0; width: var(--rs-value-pip-width);
+  height: var(--rs-value-pip-height); margin: 0; padding: 0; position: relative;
+  border: 1px solid var(--rs-grid); border-radius: var(--rs-radius-pip); background: var(--rs-bg);
+  box-shadow: none; transition: none; cursor: pointer;
+  font: inherit; font-size: var(--rs-text-caption); line-height: 1; font-variant-numeric: tabular-nums;
+  color: var(--rs-gray-faint);
+}
+.rs-model-card .rs-value-pip::after { content: ""; position: absolute; inset: -6px -1px; }  /* taller hit area */
+.rs-model-card .rs-value-pip.rs-value-on { background: var(--rs-value-on-bg); border-color: var(--rs-value-on-edge); color: var(--rs-ink); }
+.rs-model-card .rs-value-pip.rs-value-current { background: var(--rs-value-current-bg); border-color: var(--rs-value-current-edge); color: var(--rs-ink); }
+.rs-model-card .rs-value-previewing .rs-value-pip:not(.rs-value-preview) { background: var(--rs-bg); border-color: var(--rs-grid); color: var(--rs-gray-faint); }
+.rs-model-card .rs-value-previewing .rs-value-pip.rs-value-preview { background: var(--rs-value-on-bg); border-color: var(--rs-value-on-edge); color: var(--rs-ink); }
+.rs-model-card .rs-value-previewing .rs-value-pip.rs-value-preview:hover { background: var(--rs-value-current-bg); border-color: var(--rs-value-current-edge); }
+.rs-model-card .rs-value-pip:focus { outline: none; box-shadow: none; }
+.rs-model-card .rs-value-pip:focus-visible { outline: 2px solid var(--rs-ink); outline-offset: 1px; z-index: 1; }
+/* the number box: any number, typed */
+.rs-model-card .rs-value-number {
+  width: var(--rs-value-number-width); height: var(--rs-value-pip-height); margin: 0; padding: 0 var(--rs-space-1);
+  border: 1px solid var(--rs-grid); border-radius: var(--rs-radius-pip); background: var(--rs-bg);
+  box-shadow: none; text-align: center; color: var(--rs-ink); appearance: textfield; -moz-appearance: textfield;
+}
+.rs-model-card .rs-value-number::-webkit-inner-spin-button, .rs-model-card .rs-value-number::-webkit-outer-spin-button { appearance: none; margin: 0; }
+.rs-model-card .rs-value-number::placeholder { color: var(--rs-gray-label); opacity: 1; }
+.rs-model-card .rs-value-number:not(:placeholder-shown) { background: var(--rs-value-current-bg); border-color: var(--rs-value-current-edge); }
+.rs-model-card .rs-value-number:hover { border-color: var(--rs-value-current-edge); }
+.rs-model-card .rs-value-number:focus { outline: none; box-shadow: none; border-color: var(--rs-value-current-edge); }
+.rs-model-card .rs-value-number:focus-visible { outline: 2px solid var(--rs-ink); outline-offset: 1px; }
+.rs-model-card .rs-value-number:disabled { opacity: 1; cursor: default; }
+
+/* ---- the score-to-risk table: Score over Risk, one fixed-width column per strip cell ------- */
+/* The two rows wrap alike (every cell one width), onto as many lines as the card needs: the
+   Risk row flows, each line leaving a Score line's height above it; the Score row lies over it
+   from the top, each line leaving a Risk line's height below it. report.js marks each line's
+   first and last cells (.rs-line-start, .rs-line-end), which draw the line's box and its labels */
+.rs-model-card .rs-strip {
+  grid-column: 1 / -1; justify-self: center; position: relative; display: block;
+  width: fit-content; max-width: 100%; margin: 0; border: 0; border-collapse: separate;
+}
+.rs-model-card .rs-strip tbody { display: block; }
+.rs-model-card .rs-strip tr {
+  display: flex; flex-wrap: wrap; padding-left: var(--rs-strip-head-width); background: none; border: 0;
+}
+.rs-model-card .rs-strip .rs-strip-scores {
+  position: absolute; inset: 0 0 auto 0;
+  row-gap: calc(var(--rs-strip-cell-height) + 1px + var(--rs-strip-line-gap));
+}
+.rs-model-card .rs-strip .rs-strip-risks {
+  padding-top: calc(var(--rs-strip-cell-height) + 2px);
+  row-gap: calc(var(--rs-strip-cell-height) + 2px + var(--rs-strip-line-gap));
+}
+.rs-model-card .rs-strip-cell {
+  flex: none; position: relative; display: flex; align-items: center; justify-content: center;
+  width: var(--rs-strip-cell); padding: 0 var(--rs-space-1-5); white-space: nowrap; text-align: center;
+  color: var(--rs-gray); background: var(--rs-bg);
+  border: 0 solid var(--rs-grid); border-bottom-width: 1px;
+}
+/* the Score cells: the line box's top edge, and the rule between the rows */
+.rs-model-card .rs-strip-scores .rs-strip-cell {
+  height: calc(var(--rs-strip-cell-height) + 2px); border-top-width: 1px;
+}
+.rs-model-card .rs-strip-risks .rs-strip-cell { height: calc(var(--rs-strip-cell-height) + 1px); }
+.rs-model-card .rs-strip-cell:is(:nth-child(2), .rs-line-start) { border-left-width: 1px; }
+.rs-model-card .rs-strip-cell:is(:last-child, .rs-line-end) { border-right-width: 1px; }
+.rs-model-card .rs-strip-scores .rs-strip-cell:is(:nth-child(2), .rs-line-start) { border-top-left-radius: var(--rs-radius); }
+.rs-model-card .rs-strip-scores .rs-strip-cell:is(:last-child, .rs-line-end) { border-top-right-radius: var(--rs-radius); }
+.rs-model-card .rs-strip-risks .rs-strip-cell:is(:nth-child(2), .rs-line-start) { border-bottom-left-radius: var(--rs-radius); }
+.rs-model-card .rs-strip-risks .rs-strip-cell:is(:last-child, .rs-line-end) { border-bottom-right-radius: var(--rs-radius); }
+/* a line's Score/Risk labels: no box, right-aligned, left of its first cell */
+.rs-model-card .rs-strip-line-head {
+  display: none; position: absolute; top: 0; bottom: 0; right: calc(100% + 1px);
+  width: var(--rs-strip-head-width); padding-right: var(--rs-space-2);
+  align-items: center; justify-content: flex-end; white-space: nowrap;
+}
+.rs-model-card .rs-strip-cell:is(:nth-child(2), .rs-line-start) > .rs-strip-line-head { display: flex; }
+/* every score and risk gray; the current total's cell ink, on the counted tint */
+.rs-model-card .rs-strip-cell.rs-current { color: var(--rs-ink); background: var(--rs-count-bg); }
+
+.rs-model-card .rs-visually-hidden {
+  position: absolute; width: 1px; height: 1px; margin: 0; padding: 0; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap;
+}
+
+/* ---- a narrow card (under 450px of container, a phone) ----------------------------------- */
+@container rs-model (max-width: 450px) {
+  /* smaller score/risk cells (small type, tight padding), so more fit a line */
+  .rs-model-card { --rs-strip-cell: var(--rs-strip-cell-width-narrow); }
+  .rs-model-card:has(.rs-strip-wide) { --rs-strip-cell: var(--rs-strip-cell-width-narrow-wide); }
+  .rs-model-card .rs-strip-cell { font-size: var(--rs-text-small); padding: 0 var(--rs-space-1); }
+  /* the handle's column is given back while not editing (editing may shift the rows here) */
+  .rs-model-card:not(.rs-editing) .rs-handle { display: none; }
+  .rs-model-card:not(.rs-editing) .rs-feature-name { padding-left: var(--rs-edge); }
+  /* touch-sized value boxes and pips; the meter opens on its own line under its row (pip 1
+     under the box), so the value column holds only the box */
+  .rs-model-card .rs-features { --rs-value-pip-height: var(--rs-value-touch-size); }  /* the number box's too */
+  .rs-model-card .rs-features[data-value-input="pip_meter"] {
+    --rs-value-box-width: var(--rs-value-touch-size); --rs-value-pip-width: var(--rs-value-touch-size);
+  }
+  .rs-model-card .rs-value-pip { font-size: var(--rs-text-body); }
+  .rs-model-card .rs-feature > * { grid-row: 1; }
+  .rs-model-card .rs-column-value:has(.rs-value-compact), .rs-model-card .rs-value-compact { display: contents; }
+  .rs-model-card .rs-value-box { grid-column: last; grid-row: 1; justify-self: end; margin-left: var(--rs-column-gap); }
+  .rs-model-card [data-value-input]:not([data-weight-column]) .rs-value-box { margin-right: var(--rs-edge); }
+  .rs-model-card [data-weight-column] .rs-value-box { grid-column: third; }
+  .rs-model-card .rs-value-tray {
+    grid-column: handle / end; grid-row: 2; justify-content: flex-end; padding-right: var(--rs-edge);
+    clip-path: none; max-height: 0; margin-top: 0; overflow: hidden;
+    transition: max-height .16s ease-out, margin-top .16s ease-out, opacity .1s, visibility 0s linear .16s;
+    /* the meter takes its row's width and adds none: too many pips for the row shrink to fit */
+    contain: inline-size;
+  }
+  .rs-model-card [data-weight-column] .rs-value-tray { grid-column: handle / last; padding-right: 0; }
+  .rs-model-card .rs-value-open .rs-value-tray {
+    max-height: calc(var(--rs-value-pip-height) + var(--rs-space-2)); margin-top: var(--rs-space-1-5); overflow: visible;
+    transition: max-height .16s ease-out, margin-top .16s ease-out, opacity .1s;
+  }
+}
