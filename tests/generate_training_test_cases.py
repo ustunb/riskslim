@@ -92,7 +92,7 @@ def identity_digest(identity: dict) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def build_dataset(case_id, X, y, variable_names, **extra) -> dict:
+def build_dataset(case_id, X, y, variable_names, redundant_features=None) -> dict:
     """Bundle generated arrays with their names and digest."""
     return {
         "case_id": case_id,
@@ -101,8 +101,7 @@ def build_dataset(case_id, X, y, variable_names, **extra) -> dict:
         "variable_names": variable_names,
         "outcome_name": "y",
         "data_digest": compute_data_digest(X, y, variable_names, "y"),
-        "redundant_features": None,
-        **extra,
+        "redundant_features": redundant_features,
     }
 
 
@@ -115,9 +114,12 @@ def generate_data(case_id: str) -> dict:
     feature_distribution, truth_name = case_id.split("__")
     truth = np.asarray(TRUTHS[truth_name], dtype=np.float64)
     feature_rng = np.random.RandomState(FEATURE_SEED)
-    variable_names = tuple(
-        f"{feature_distribution}_{index}" for index in range(1, BASE_FEATURE_COUNT + 1)
-    )
+    if feature_distribution == "mixed":
+        variable_names = ("binary_1", "binary_2", "continuous_1", "continuous_2")
+    else:
+        variable_names = tuple(
+            f"{feature_distribution}_{index}" for index in range(1, BASE_FEATURE_COUNT + 1)
+        )
     if feature_distribution == "binary":
         X = feature_rng.binomial(
             1, BINARY_FEATURE_PROBABILITY, size=(N_SAMPLES, BASE_FEATURE_COUNT)
@@ -137,7 +139,6 @@ def generate_data(case_id: str) -> dict:
             CONTINUOUS_DECIMAL_PLACES,
         )
         X = np.hstack((binary, continuous)).astype(np.float64)
-        variable_names = ("binary_1", "binary_2", "continuous_1", "continuous_2")
 
     label_rng = np.random.RandomState(CASE_LABEL_SEEDS.get(case_id, LABEL_SEED))
     y = label_rng.binomial(1, expit(truth[0] + X @ truth[1:])).astype(np.int8)
@@ -153,12 +154,10 @@ def generate_redundant_data(source: dict, redundant_features: str) -> dict:
         copied_X = clean_X.copy()
     else:
         suffix = "noisy_duplicate"
-        half = BASE_FEATURE_COUNT // 2
+        n_binary = {"binary": BASE_FEATURE_COUNT, "continuous": 0, "mixed": BASE_FEATURE_COUNT // 2}
         all_columns = list(range(BASE_FEATURE_COUNT))
-        binary_columns = {"binary": all_columns, "continuous": [], "mixed": all_columns[:half]}
-        continuous_columns = {"binary": [], "continuous": all_columns, "mixed": all_columns[half:]}
-        binary_columns = binary_columns[feature_distribution]
-        continuous_columns = continuous_columns[feature_distribution]
+        binary_columns = all_columns[: n_binary[feature_distribution]]
+        continuous_columns = all_columns[n_binary[feature_distribution] :]
         noise_rng = np.random.RandomState(NOISE_SEED)
         copied_X = clean_X.astype(np.float64, copy=True)
         if binary_columns:
@@ -173,8 +172,7 @@ def generate_redundant_data(source: dict, redundant_features: str) -> dict:
             copied_X[:, continuous_columns] = np.round(
                 copied_X[:, continuous_columns], CONTINUOUS_DECIMAL_PLACES
             )
-        if feature_distribution == "binary":
-            copied_X = copied_X.astype(np.int8)
+        copied_X = copied_X.astype(clean_X.dtype)
 
     variable_names = source["variable_names"] + tuple(
         f"{name}_{suffix}" for name in source["variable_names"]
@@ -184,8 +182,7 @@ def generate_redundant_data(source: dict, redundant_features: str) -> dict:
         np.hstack((clean_X, copied_X)),
         source["y"].copy(),
         variable_names,
-        redundant_features=redundant_features,
-        source_X=clean_X,
+        redundant_features,
     )
 
 
@@ -301,7 +298,7 @@ def select_query(
     feasible_indices = np.flatnonzero(supports <= max_size)
     objectives = losses[feasible_indices] + c0_value * supports[feasible_indices]
     index = int(feasible_indices[int(np.argmin(objectives))])
-    objective = float(losses[index] + c0_value * supports[index])
+    objective = float(objectives.min())
     return {
         "query_identity": {
             "loss_identity_digest": loss_digest,
@@ -316,15 +313,12 @@ def select_query(
     }
 
 
-def choose_redundancy_penalty(coefficients, losses, supports, feature_bound, grouped) -> float:
-    """Return the first penalty whose optima are all nonempty and use one feature per pair."""
-    if grouped:
-        violating_supports = minimum_grouped_pair_violating_supports(coefficients, feature_bound)
-    else:
-        selects_both = (coefficients[:, :BASE_FEATURE_COUNT] != 0) & (
-            coefficients[:, BASE_FEATURE_COUNT:] != 0
-        )
-        violating_supports = np.where(np.any(selects_both, axis=1), supports, np.inf)
+def choose_redundancy_penalty(losses, supports, violating_supports) -> float:
+    """Return the first penalty whose optima are all nonempty and use one feature per pair.
+
+    `violating_supports` holds, per enumerated state, the smallest support of a model that selects
+    both members of some pair (infinity when no such model exists).
+    """
     empty_loss = float(np.min(losses[supports == 0]))
     for c0_value in REDUNDANCY_PENALTIES:
         best_objective = float(np.min(losses + c0_value * supports))
@@ -342,17 +336,26 @@ def enumerate_task(data: dict, model_type: str) -> dict:
     feature_bounds = MODEL_FEATURE_BOUNDS[model_type]
     lower_bounds, upper_bounds = determine_coefficient_bounds(data, feature_bounds)
     intercept_bounds = (math.ceil(lower_bounds[0]), math.floor(upper_bounds[0]))
-    grouped = data["redundant_features"] == "duplicates"
-    if grouped:
+    if data["redundant_features"] == "duplicates":
+        # exact copies: enumerate pair sums on the clean columns, one representative per sum
         score_coefficients, coefficients, supports = build_duplicate_group_coefficients(
             feature_bounds
         )
-        score_X = data["source_X"]
+        score_X = np.ascontiguousarray(data["X"][:, :BASE_FEATURE_COUNT])
+        violating_supports = minimum_grouped_pair_violating_supports(
+            coefficients, feature_bounds[1]
+        )
     else:
         coefficients = build_feature_coefficients(feature_bounds, n_features=data["X"].shape[1])
         score_coefficients = coefficients
         supports = np.count_nonzero(coefficients, axis=1).astype(np.uint8)
         score_X = data["X"]
+        violating_supports = None
+        if data["redundant_features"] == "noisy_duplicates":
+            selects_both = (coefficients[:, :BASE_FEATURE_COUNT] != 0) & (
+                coefficients[:, BASE_FEATURE_COUNT:] != 0
+            )
+            violating_supports = np.where(np.any(selects_both, axis=1), supports, np.inf)
     intercepts, losses, _ = enumerate_losses(
         score_X, data["y"], score_coefficients, intercept_bounds
     )
@@ -360,9 +363,7 @@ def enumerate_task(data: dict, model_type: str) -> dict:
     if data["redundant_features"] is None:
         query_keys = BASELINE_QUERY_KEYS
     else:
-        c0_value = choose_redundancy_penalty(
-            coefficients, losses, supports, feature_bounds[1], grouped
-        )
+        c0_value = choose_redundancy_penalty(losses, supports, violating_supports)
         query_keys = ((c0_value, REDUNDANT_FEATURE_COUNT),)
     loss_identity = {
         "data_digest": data["data_digest"],
@@ -396,6 +397,7 @@ def generate_case_record(case_id: str) -> dict:
         "variable_names": data["variable_names"],
         "outcome_name": data["outcome_name"],
         "data_digest": data["data_digest"],
+        # data_identity, loss_identity and query_identity feed test_training.py's precondition checks
         "data_identity": {"data_digest": data["data_digest"]},
         "tasks": {model_type: enumerate_task(data, model_type) for model_type in model_types},
     }
@@ -405,10 +407,6 @@ def regenerate_cases(case_ids: tuple[str, ...]) -> None:
     """Replace the selected cases in the cache, saving after each one."""
     with TEST_CASE_PATH.open("rb") as file_handle:
         store = pickle.load(file_handle)
-    store = {
-        "synthetic_oracles": store["synthetic_oracles"],
-        "known_reference_results": store["known_reference_results"],
-    }
     for case_id in case_ids:
         store["synthetic_oracles"][case_id] = generate_case_record(case_id)
         with TEST_CASE_PATH.open("wb") as file_handle:
