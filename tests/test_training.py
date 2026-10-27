@@ -61,7 +61,9 @@ def get_oracle(case, model_type, c0_value, max_size):
     )
     oracle_weights = query["representative_weights"]
     oracle_support = int(np.count_nonzero(oracle_weights[1:]))
-    oracle_signed_scores = (1.0 - 2.0 * case["y"]) * (oracle_weights[0] + case["X"] @ oracle_weights[1:])
+    oracle_signed_scores = (1.0 - 2.0 * case["y"]) * (
+        oracle_weights[0] + case["X"] @ oracle_weights[1:]
+    )
     oracle_loss = float(np.mean(np.logaddexp(0.0, oracle_signed_scores)))
     oracle_objective = oracle_loss + c0_value * oracle_support
     assert np.isfinite(oracle_weights).all()
@@ -121,8 +123,12 @@ def fit_and_assert_global_optimum(
     best_objective = solution.MIP.get_best_objective()
 
     # the oracle domain uses the full-size intercept bound; a model-size limit may only tighten it
-    np.testing.assert_array_equal(optimizer.coef_set.lb[1:], task["coefficient_set_lower_bounds"][1:])
-    np.testing.assert_array_equal(optimizer.coef_set.ub[1:], task["coefficient_set_upper_bounds"][1:])
+    np.testing.assert_array_equal(
+        optimizer.coef_set.lb[1:], task["coefficient_set_lower_bounds"][1:]
+    )
+    np.testing.assert_array_equal(
+        optimizer.coef_set.ub[1:], task["coefficient_set_upper_bounds"][1:]
+    )
     assert optimizer.coef_set.lb[0] >= task["coefficient_set_lower_bounds"][0] - 1e-12
     assert optimizer.coef_set.ub[0] <= task["coefficient_set_upper_bounds"][0] + 1e-12
     assert np.isfinite(weights).all()
